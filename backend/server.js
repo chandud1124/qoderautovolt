@@ -117,12 +117,28 @@ mqttClient.on('message', (topic, message) => {
         // Find the device and update switch state + log the manual operation
         const Device = require('./models/Device');
         const ActivityLog = require('./models/ActivityLog');
+        const ManualSwitchLog = require('./models/ManualSwitchLog');
 
-        Device.findOne({ macAddress: data.mac.toUpperCase() })
+        // Normalize MAC address: remove colons, make lowercase (same as esp32/state handler)
+        function normalizeMac(mac) {
+          return mac.replace(/[^a-fA-F0-9]/g, '').toLowerCase();
+        }
+        const normalizedMac = normalizeMac(data.mac);
+
+        Device.findOne({ $or: [
+          { macAddress: data.mac },
+          { macAddress: data.mac.toUpperCase() },
+          { macAddress: data.mac.toLowerCase() },
+          { macAddress: normalizedMac },
+          { macAddress: normalizedMac.toUpperCase() },
+          { macAddress: normalizedMac.toLowerCase() }
+        ] })
           .then(async (device) => {
             if (device) {
+              console.log(`[DEBUG] Found device: ${device.name}, switches: ${device.switches.length}`);
               // Find the switch by GPIO
               const switchInfo = device.switches.find(sw => (sw.relayGpio || sw.gpio) === data.gpio);
+              console.log(`[DEBUG] Looking for switch with GPIO ${data.gpio}, found:`, switchInfo ? switchInfo.name : 'NOT FOUND');
               if (switchInfo) {
                 // Update the switch state in database
                 const updatedDevice = await Device.findOneAndUpdate(
@@ -156,12 +172,21 @@ mqttClient.on('message', (topic, message) => {
                 console.log(`[ACTIVITY] Logged manual switch: ${device.name} - ${switchInfo.name} -> ${data.state ? 'ON' : 'OFF'}`);
 
                 // Emit real-time update to frontend
+                console.log(`[DEBUG] global.io available: ${!!global.io}, updatedDevice available: ${!!updatedDevice}`);
                 if (global.io && updatedDevice) {
+                  console.log('[DEBUG] Emitting device_state_changed for manual switch:', {
+                    deviceId: updatedDevice._id,
+                    switchId: switchInfo._id,
+                    newState: data.state,
+                    source: 'mqtt_manual_switch'
+                  });
                   emitDeviceStateChanged(updatedDevice, {
                     source: 'mqtt_manual_switch',
                     note: `Manual switch ${switchInfo.name} changed to ${data.state ? 'ON' : 'OFF'}`
                   });
                   console.log(`[MQTT] Emitted device_state_changed for manual switch: ${device.name}`);
+                } else {
+                  console.log(`[DEBUG] NOT emitting - global.io: ${!!global.io}, updatedDevice: ${!!updatedDevice}`);
                 }
               }
             }
@@ -194,6 +219,7 @@ function nextDeviceSeq(deviceId) {
 }
 
 function emitDeviceStateChanged(device, meta = {}) {
+  console.log(`[DEBUG] emitDeviceStateChanged called for device: ${device?.name || 'unknown'}`);
   if (!device) return;
   const deviceId = device.id || device._id?.toString();
   if (!deviceId) return;
@@ -206,6 +232,7 @@ function emitDeviceStateChanged(device, meta = {}) {
     source: meta.source || 'unknown',
     note: meta.note
   };
+  console.log(`[DEBUG] Emitting device_state_changed payload:`, { deviceId, seq, source: payload.source });
   io.emit('device_state_changed', payload);
   // Focused debug log (avoid dumping entire device doc unless explicitly enabled)
   if (process.env.DEVICE_SEQ_LOG === 'verbose') {

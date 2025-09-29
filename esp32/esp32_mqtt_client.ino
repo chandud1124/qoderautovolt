@@ -291,10 +291,19 @@ void handleManualSwitches() {
       pinMode(sw.relayGpio, OUTPUT);
       digitalWrite(sw.relayGpio, sw.state ? LOW : HIGH); // Active-low relay
       pinSetup[i] = true;
+      Serial.printf("[MANUAL] Setup GPIO %d (manual pin %d)\n", sw.relayGpio, sw.manualGpio);
     }
 
     int rawLevel = digitalRead(sw.manualGpio);
     bool active = sw.manualActiveLow ? (rawLevel == LOW) : (rawLevel == HIGH);
+
+    // Debug: Log pin readings periodically
+    static unsigned long lastDebug[16] = {0};
+    if (now - lastDebug[i] > 5000) { // Log every 5 seconds
+      Serial.printf("[MANUAL] GPIO %d manual pin %d: raw=%d, active=%d, state=%d\n",
+        sw.relayGpio, sw.manualGpio, rawLevel, active, sw.state);
+      lastDebug[i] = now;
+    }
 
     // Debounce logic
     if (rawLevel != sw.lastManualLevel) {

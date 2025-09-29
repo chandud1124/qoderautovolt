@@ -18,6 +18,7 @@ const useDevicesInternal = () => {
   const [bulkPending, setBulkPending] = useState<{ desiredState: boolean; startedAt: number; deviceIds: Set<string> } | null>(null);
 
   const handleDeviceStateChanged = useCallback((data: { deviceId: string; state: import('../services/socket').DeviceState; ts?: number; seq?: number; source?: string }) => {
+    console.log('[DEBUG] handleDeviceStateChanged received:', { deviceId: data.deviceId, source: data.source, seq: data.seq });
     const eventTs = data.ts || Date.now();
     setDevices(prev => prev.map(device => {
       if (device.id !== data.deviceId) return device;
@@ -52,6 +53,7 @@ const useDevicesInternal = () => {
           console.debug('[device_state_changed apply]', { deviceId: device.id, seq: data.seq, source: data.source, changed: diff });
         }
       }
+      console.log('[DEBUG] Updating device state for:', device.id, 'switches changed:', normalizedSwitches.map(sw => ({ id: sw.id, state: sw.state })));
       return { ...device, ...data.state, switches: normalizedSwitches, _lastEventTs: eventTs, _lastSeq: data.seq || lastSeq } as any;
     }));
   }, [bulkPending]);

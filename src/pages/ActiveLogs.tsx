@@ -595,7 +595,7 @@ type LogType = 'activities' | 'manual-switches' | 'device-status';
                               </div>
                             </td>
                             <td className="px-4 py-2 text-xs text-muted-foreground">
-                              {log.location || log.facility || '-'}
+                              {log.location || '-'}
                             </td>
                           </tr>
                         ))}
@@ -619,46 +619,123 @@ type LogType = 'activities' | 'manual-switches' | 'device-status';
                     No manual switch logs found.
                   </div>
                 ) : (
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full text-sm">
-                      <thead>
-                        <tr className="border-b">
-                          <th className="px-4 py-2 text-left">Time</th>
-                          <th className="px-4 py-2 text-left">Device/Switch</th>
-                          <th className="px-4 py-2 text-left">Action</th>
-                          <th className="px-4 py-2 text-left">Response Time</th>
-                          <th className="px-4 py-2 text-left">Location</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(paginatedData as ManualSwitchLog[]).map((log) => (
-                          <tr key={log.id} className="border-b hover:bg-muted/50">
-                            <td className="px-4 py-2 whitespace-nowrap">
-                              {format(new Date(log.timestamp), 'MMM dd, HH:mm:ss')}
-                            </td>
-                            <td className="px-4 py-2">
-                              <div>
-                                <div className="font-medium">{log.deviceName || '-'}</div>
-                                {log.switchName && (
-                                  <div className="text-xs text-muted-foreground">{log.switchName}</div>
-                                )}
+                  <div className="space-y-6">
+                    {/* Group manual switches by device */}
+                    {(() => {
+                      const manualLogs = paginatedData as ManualSwitchLog[];
+                      const groupedByDevice = manualLogs.reduce((acc, log) => {
+                        const deviceId = log.deviceId;
+                        if (!acc[deviceId]) {
+                          acc[deviceId] = {
+                            deviceName: log.deviceName || 'Unknown Device',
+                            location: log.location || 'Unknown Location',
+                            logs: []
+                          };
+                        }
+                        acc[deviceId].logs.push(log);
+                        return acc;
+                      }, {} as Record<string, { deviceName: string; location: string; logs: ManualSwitchLog[] }>);
+
+                      return Object.entries(groupedByDevice).map(([deviceId, deviceData]) => {
+                        const totalOperations = deviceData.logs.length;
+                        const onOperations = deviceData.logs.filter(log => log.action === 'manual_on').length;
+                        const offOperations = deviceData.logs.filter(log => log.action === 'manual_off').length;
+                        const avgResponseTime = deviceData.logs
+                          .filter(log => log.responseTime)
+                          .reduce((sum, log) => sum + (log.responseTime || 0), 0) / 
+                          deviceData.logs.filter(log => log.responseTime).length || 0;
+
+                        return (
+                          <Card key={deviceId} className="border shadow-sm">
+                            <CardHeader className="pb-3">
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <CardTitle className="text-lg flex items-center gap-2">
+                                    <Zap className="w-5 h-5 text-yellow-600" />
+                                    {deviceData.deviceName}
+                                  </CardTitle>
+                                  <p className="text-sm text-muted-foreground mt-1">
+                                    {deviceData.location}
+                                  </p>
+                                </div>
+                                <div className="text-right">
+                                  <div className="text-2xl font-bold text-yellow-600">{totalOperations}</div>
+                                  <div className="text-xs text-muted-foreground">Total Operations</div>
+                                </div>
                               </div>
-                            </td>
-                            <td className="px-4 py-2">
-                              <Badge variant="outline" className="text-xs">
-                                {(log.action || 'unknown').replace('manual_', '').toUpperCase()}
-                              </Badge>
-                            </td>
-                            <td className="px-4 py-2 text-xs">
-                              {log.responseTime ? `${log.responseTime}ms` : '-'}
-                            </td>
-                            <td className="px-4 py-2 text-xs text-muted-foreground">
-                              {log.location || '-'}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                              
+                              {/* Device Summary Stats */}
+                              <div className="grid grid-cols-3 gap-4 mt-4 pt-4 border-t">
+                                <div className="text-center">
+                                  <div className="text-lg font-semibold text-green-600">{onOperations}</div>
+                                  <div className="text-xs text-muted-foreground">ON Operations</div>
+                                </div>
+                                <div className="text-center">
+                                  <div className="text-lg font-semibold text-red-600">{offOperations}</div>
+                                  <div className="text-xs text-muted-foreground">OFF Operations</div>
+                                </div>
+                                <div className="text-center">
+                                  <div className="text-lg font-semibold text-blue-600">
+                                    {avgResponseTime ? `${Math.round(avgResponseTime)}ms` : '-'}
+                                  </div>
+                                  <div className="text-xs text-muted-foreground">Avg Response</div>
+                                </div>
+                              </div>
+                            </CardHeader>
+                            
+                            <CardContent>
+                              <div className="space-y-3">
+                                {/* Recent Operations Timeline */}
+                                <div>
+                                  <h4 className="text-sm font-medium mb-3 flex items-center gap-2">
+                                    <Clock className="w-4 h-4" />
+                                    Recent Operations
+                                  </h4>
+                                  <div className="space-y-2 max-h-64 overflow-y-auto">
+                                    {deviceData.logs
+                                      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+                                      .slice(0, 10) // Show only last 10 operations
+                                      .map((log) => (
+                                        <div key={log.id} className="flex items-center justify-between p-3 bg-muted/30 rounded-lg">
+                                          <div className="flex items-center gap-3">
+                                            <div className={`w-3 h-3 rounded-full ${
+                                              log.action === 'manual_on' ? 'bg-green-500' : 'bg-red-500'
+                                            }`} />
+                                            <div>
+                                              <div className="font-medium text-sm">{log.switchName || 'Unknown Switch'}</div>
+                                              <div className="text-xs text-muted-foreground">
+                                                {format(new Date(log.timestamp), 'MMM dd, HH:mm:ss')}
+                                              </div>
+                                            </div>
+                                          </div>
+                                          <div className="text-right">
+                                            <Badge variant="outline" className="text-xs">
+                                              {log.action ? log.action.replace('manual_', '').toUpperCase() : 'UNKNOWN'}
+                                            </Badge>
+                                            {log.responseTime && (
+                                              <div className="text-xs text-muted-foreground mt-1">
+                                                {log.responseTime}ms
+                                              </div>
+                                            )}
+                                          </div>
+                                        </div>
+                                      ))}
+                                  </div>
+                                  
+                                  {deviceData.logs.length > 10 && (
+                                    <div className="text-center mt-3">
+                                      <span className="text-xs text-muted-foreground">
+                                        Showing 10 of {deviceData.logs.length} operations
+                                      </span>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </CardContent>
+                          </Card>
+                        );
+                      });
+                    })()}
                   </div>
                 )}
               </div>

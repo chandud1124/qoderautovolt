@@ -38,6 +38,9 @@ router.get('/activities', async (req, res) => {
         { action: { $regex: search, $options: 'i' } }
       ];
     }
+    
+    // Exclude manual switch operations from activities (they appear in manual-switches tab)
+    query.triggeredBy = { $ne: 'manual_switch' };
 
     const logs = await ActivityLog.find(query)
       .populate('deviceId', 'name location')
