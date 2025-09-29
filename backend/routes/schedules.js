@@ -75,6 +75,14 @@ router.post('/',
 
     scheduleService.addSchedule(schedule);
 
+    // Notify clients about new schedule
+    if (req.app.get('io')) {
+      req.app.get('io').emit('schedule_created', {
+        scheduleId: schedule._id,
+        schedule: schedule
+      });
+    }
+
     res.status(201).json({ success: true, data: schedule });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -146,6 +154,14 @@ router.put('/:id',
     }
 
     scheduleService.updateSchedule(schedule);
+
+    // Notify clients about updated schedule
+    if (req.app.get('io')) {
+      req.app.get('io').emit('schedule_updated', {
+        scheduleId: schedule._id,
+        schedule: schedule
+      });
+    }
 
     res.json({ success: true, data: schedule });
   } catch (error) {

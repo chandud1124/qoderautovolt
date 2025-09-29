@@ -26,7 +26,7 @@ export interface SwitchResult {
 }
 
 export interface DeviceNotification {
-  type: 'device_connected' | 'device_disconnected' | 'device_updated' | 'device_deleted' | 'device_created' | 'switch_changed' | 'bulk_operation' | 'schedule_executed' | 'device_error' | 'system_alert';
+  type: 'device_connected' | 'device_disconnected' | 'device_updated' | 'device_deleted' | 'device_created' | 'switch_changed' | 'bulk_operation' | 'schedule_executed' | 'schedule_created' | 'schedule_updated' | 'device_error' | 'system_alert';
   message: string;
   deviceId?: string;
   deviceName?: string;

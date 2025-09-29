@@ -74,14 +74,18 @@ class ScheduleService {
   _dispatchToHardware(device, gpio, desiredState) {
     try {
       if (!device || !device.macAddress) return { sent: false, reason: 'no_device_mac' };
-      const ws = global.wsDevices ? global.wsDevices.get(device.macAddress.toUpperCase()) : null;
-      if (ws && ws.readyState === 1) {
-        const payload = { type: 'switch_command', mac: device.macAddress, gpio, state: desiredState, seq: this.nextCmdSeq(device.macAddress) };
-        ws.send(JSON.stringify(payload));
-        return { sent: true, reason: 'sent' };
+
+      // Use MQTT instead of WebSocket for ESP32 communication
+      if (global.sendMqttSwitchCommand) {
+        global.sendMqttSwitchCommand(gpio, desiredState);
+        console.log(`[SCHEDULE] Published MQTT switch command for device ${device.macAddress}: gpio=${gpio}, state=${desiredState}`);
+        return { sent: true, reason: 'mqtt_sent' };
+      } else {
+        console.warn('[SCHEDULE] sendMqttSwitchCommand not available');
+        return { sent: false, reason: 'mqtt_not_available' };
       }
-      return { sent: false, reason: ws ? `ws_state_${ws.readyState}` : 'ws_not_found' };
     } catch (e) {
+      console.error('[SCHEDULE] Error dispatching hardware command:', e.message);
       return { sent: false, reason: 'exception_' + e.message };
     }
   }

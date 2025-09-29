@@ -12,6 +12,7 @@ import { Calendar, Clock, Plus, Edit, Trash2 } from 'lucide-react';
 import { ScheduleDialog } from '@/components/ScheduleDialog';
 import type { ScheduleData } from '@/components/ScheduleDialog';
 import { DAY_NAMES } from '@/constants/days';
+import socketService from '@/services/socket';
 
 const dayNameToNumber = (name: string): number => {
   const idx = DAY_NAMES.findIndex(d => d.toLowerCase() === name.toLowerCase());
@@ -176,6 +177,22 @@ const Schedule: React.FC = () => {
       }
     };
     fetchSchedules();
+
+    // Listen for schedule updates
+    const handleScheduleCreated = () => {
+      fetchSchedules();
+    };
+    const handleScheduleUpdated = () => {
+      fetchSchedules();
+    };
+
+    socketService.on('schedule_created', handleScheduleCreated);
+    socketService.on('schedule_updated', handleScheduleUpdated);
+
+    return () => {
+      socketService.off('schedule_created', handleScheduleCreated);
+      socketService.off('schedule_updated', handleScheduleUpdated);
+    };
   }, [toast]);
 
   const runScheduleNow = async (scheduleId: string) => {

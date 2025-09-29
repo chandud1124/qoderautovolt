@@ -382,18 +382,54 @@ const useDevicesInternal = () => {
       throw new Error('Device is offline. Toggle queued.');
     }
     try {
-      // Mark pending locally for subtle UI hint, do not flip state
+      // Optimistically update the switch state immediately for better UX
       setDevices(prev => prev.map(d => {
         if (d.id !== deviceId) return d;
-        const updated = d.switches.map(sw => sw.id === switchId ? ({ ...sw, /* @ts-ignore */ _pending: true }) as any : sw);
+        const updated = d.switches.map(sw => {
+          if (sw.id === switchId) {
+            const newState = !sw.state; // Toggle the current state
+            return { ...sw, state: newState, /* @ts-ignore */ _pending: true } as any;
+          }
+          return sw;
+        });
         return { ...d, switches: updated } as any;
       }));
+      
       await deviceAPI.toggleSwitch(deviceId, switchId);
+      
+      // Clear pending flag on success
+      setDevices(prev => prev.map(d => {
+        if (d.id !== deviceId) return d;
+        const updated = d.switches.map(sw => {
+          const anySw: any = sw;
+          if (anySw._pending && sw.id === switchId) {
+            const { _pending, ...rest } = anySw;
+            return rest as any;
+          }
+          return sw;
+        });
+        return { ...d, switches: updated } as any;
+      }));
+      
       // Reconciliation: fetch in background in case events are delayed
       setTimeout(() => { loadDevices({ background: true, force: true }); }, 1500);
       console.log(`Switch ${switchId} toggle requested on device ${deviceId}`);
     } catch (err: any) {
       console.error('Error toggling switch:', err);
+      // Revert optimistic update on error
+      setDevices(prev => prev.map(d => {
+        if (d.id !== deviceId) return d;
+        const updated = d.switches.map(sw => {
+          if (sw.id === switchId) {
+            const revertedState = !sw.state; // Revert back to original state
+            const anySw: any = sw;
+            const { _pending, ...rest } = anySw;
+            return { ...rest, state: revertedState } as any;
+          }
+          return sw;
+        });
+        return { ...d, switches: updated } as any;
+      }));
       throw err;
     }
   };

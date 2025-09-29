@@ -10,91 +10,226 @@ const { authLimiter, apiLimiter } = require('./middleware/rateLimiter');
 const { logger } = require('./middleware/logger');
 const routeMonitor = require('./middleware/routeMonitor');
 
-// Initialize MQTT broker using Aedes (simplified)
-const aedes = require('aedes')();
-const net = require('net');
 
-const MQTT_PORT = 5200;
-const mqttServer = net.createServer(aedes.handle);
+// --- MQTT client for Mosquitto broker (for ESP32 communication) ---
+const mqtt = require('mqtt');
+const MOSQUITTO_PORT = 1883;
+const MOSQUITTO_HOST = '192.168.0.108'; // Updated to correct broker IP
 
-mqttServer.listen(MQTT_PORT, '0.0.0.0', () => {
-  console.log(`[MQTT] Aedes MQTT broker started and listening on 0.0.0.0:${MQTT_PORT}`);
-  console.log(`[MQTT] Broker accessible from network: true`);
+const mqttClient = mqtt.connect(`mqtt://${MOSQUITTO_HOST}:${MOSQUITTO_PORT}`, {
+  clientId: 'backend_server',
+  clean: true,
+  connectTimeout: 4000,
+  reconnectPeriod: 1000,
+  protocolVersion: 4
 });
 
-mqttServer.on('error', (err) => {
-  console.error('[MQTT] Aedes server error:', err.message);
-});
-
-// Aedes event handlers
-aedes.on('client', (client) => {
-  console.log(`[MQTT] Aedes client connected: ${client.id}`);
-});
-
-aedes.on('clientDisconnect', (client) => {
-  console.log(`[MQTT] Aedes client disconnected: ${client.id}`);
-});
-
-aedes.on('publish', (packet, client) => {
-  if (client) {
-    console.log(`[MQTT] Aedes message published by ${client.id} on topic: ${packet.topic}`);
-  }
-});
-
-aedes.on('subscribe', (subscriptions, client) => {
-  console.log(`[MQTT] Aedes client ${client.id} subscribed to topics: ${subscriptions.map(s => s.topic).join(', ')}`);
-});
-
-// Initialize MQTT client (connects to our own broker) - DISABLED for device communication
-// Keeping MQTT broker running for safety/fallback purposes only
-/*
-setTimeout(() => {
-  const mqtt = require('mqtt');
-  const mqttClient = mqtt.connect(`mqtt://localhost:${MQTT_PORT}`, {
-    clientId: 'backend_server',
-    clean: true,
-    connectTimeout: 4000,
-    reconnectPeriod: 1000,
-    protocolVersion: 4,
-  });
-
-  mqttClient.on('connect', () => {
-    console.log('Connected to MQTT broker');
-    mqttClient.subscribe('esp32/state', (err) => {
-      if (!err) {
-        console.log('Subscribed to esp32/state');
-      }
-    });
-  });
-
-  mqttClient.on('message', (topic, message) => {
-    console.log(`Received MQTT message on ${topic}: ${message.toString()}`);
-    // Handle ESP32 state updates here
-    if (topic === 'esp32/state') {
-      // Process state updates
-      const states = message.toString().split(',');
-      console.log('ESP32 states:', states);
+mqttClient.on('connect', () => {
+  console.log('[MQTT] Connected to Mosquitto broker on port 1883');
+  mqttClient.subscribe('esp32/state', (err) => {
+    if (!err) {
+      console.log('[MQTT] Subscribed to esp32/state');
     }
   });
-
-  mqttClient.on('error', (error) => {
-    console.error('MQTT connection error:', error);
+  mqttClient.subscribe('esp32/telemetry', (err) => {
+    if (!err) {
+      console.log('[MQTT] Subscribed to esp32/telemetry');
+    }
   });
+});
 
-  // Function to send switch commands via MQTT
-  function sendMqttSwitchCommand(relay, state) {
-    const message = `${relay}:${state}`;
-    mqttClient.publish('esp32/switches', message);
-    console.log(`Sent MQTT command: ${message}`);
+mqttClient.on('message', (topic, message) => {
+  console.log(`[MQTT] Received message on ${topic}: ${message.toString()}`);
+  // Handle ESP32 state updates
+  if (topic === 'esp32/state') {
+    try {
+      const payload = message.toString();
+      let data;
+      try {
+        data = JSON.parse(payload);
+      } catch (e) {
+        console.warn('[MQTT] esp32/state: Not JSON, skipping device update');
+        return;
+      }
+      if (!data.mac) {
+        console.warn('[MQTT] esp32/state: No mac field in payload, skipping');
+        return;
+      }
+      // Normalize MAC address: remove colons, make lowercase
+      function normalizeMac(mac) {
+        return mac.replace(/[^a-fA-F0-9]/g, '').toLowerCase();
+      }
+      const normalizedMac = normalizeMac(data.mac);
+      const Device = require('./models/Device');
+      Device.findOneAndUpdate(
+        { $or: [
+          { macAddress: data.mac },
+          { macAddress: data.mac.toUpperCase() },
+          { macAddress: data.mac.toLowerCase() },
+          { macAddress: normalizedMac },
+          { macAddress: normalizedMac.toUpperCase() },
+          { macAddress: normalizedMac.toLowerCase() }
+        ] },
+        { $set: { status: 'online', lastSeen: new Date() } },
+        { new: true }
+      ).then(device => {
+        if (device) {
+          console.log(`[MQTT] Marked device ${device.macAddress} as online`);
+          // Emit to frontend via Socket.IO if available
+          if (global.io) {
+            // 1. Legacy event for backward compatibility
+            global.io.emit('deviceStatusUpdate', {
+              macAddress: device.macAddress,
+              status: 'online',
+              lastSeen: device.lastSeen
+            });
+            // 2. device_state_changed for React UI
+            emitDeviceStateChanged(device, { source: 'mqtt_online' });
+            // 3. device_connected event for real-time UI feedback
+            global.io.emit('device_connected', {
+              deviceId: device.id || device._id?.toString(),
+              deviceName: device.name,
+              location: device.location || '',
+              macAddress: device.macAddress,
+              lastSeen: device.lastSeen
+            });
+          }
+        } else {
+          console.warn(`[MQTT] Device with MAC ${data.mac} (normalized: ${normalizedMac}) not found in DB`);
+        }
+      }).catch(err => {
+        console.error('[MQTT] Error updating device status:', err);
+      });
+    } catch (e) {
+      console.error('[MQTT] Exception in esp32/state handler:', e);
+    }
   }
+  if (topic === 'esp32/telemetry') {
+    // Parse and process telemetry
+    const telemetry = message.toString();
+    console.log('[MQTT] ESP32 telemetry:', telemetry);
 
-  // Make MQTT functions available globally
-  global.sendMqttSwitchCommand = sendMqttSwitchCommand;
-}, 2000); // Wait 2 seconds for server to fully start
-*/
+    try {
+      const data = JSON.parse(telemetry);
+      if (data.type === 'manual_switch') {
+        // Handle manual switch event for logging and state update
+        console.log('[MQTT] Manual switch event:', data);
+        // Find the device and update switch state + log the manual operation
+        const Device = require('./models/Device');
+        const ActivityLog = require('./models/ActivityLog');
 
-console.log('[MQTT] MQTT client disabled for device communication - using WebSocket only');
-console.log('[MQTT] MQTT broker kept running for safety/fallback purposes');
+        Device.findOne({ macAddress: data.mac.toUpperCase() })
+          .then(async (device) => {
+            if (device) {
+              // Find the switch by GPIO
+              const switchInfo = device.switches.find(sw => (sw.relayGpio || sw.gpio) === data.gpio);
+              if (switchInfo) {
+                // Update the switch state in database
+                const updatedDevice = await Device.findOneAndUpdate(
+                  { _id: device._id, 'switches._id': switchInfo._id },
+                  {
+                    $set: {
+                      'switches.$.state': data.state,
+                      'switches.$.lastStateChange': new Date(),
+                      lastModifiedBy: null, // Manual switch from ESP32
+                      lastSeen: new Date(),
+                      status: 'online'
+                    }
+                  },
+                  { new: true }
+                );
+
+                // Log the manual operation
+                await ActivityLog.create({
+                  deviceId: device._id,
+                  deviceName: device.name,
+                  switchId: switchInfo._id,
+                  switchName: switchInfo.name,
+                  action: data.state ? 'manual_on' : 'manual_off',
+                  triggeredBy: 'manual_switch',
+                  classroom: device.classroom,
+                  location: device.location,
+                  ip: 'ESP32',
+                  userAgent: 'ESP32 Manual Switch'
+                });
+
+                console.log(`[ACTIVITY] Logged manual switch: ${device.name} - ${switchInfo.name} -> ${data.state ? 'ON' : 'OFF'}`);
+
+                // Emit real-time update to frontend
+                if (global.io && updatedDevice) {
+                  emitDeviceStateChanged(updatedDevice, {
+                    source: 'mqtt_manual_switch',
+                    note: `Manual switch ${switchInfo.name} changed to ${data.state ? 'ON' : 'OFF'}`
+                  });
+                  console.log(`[MQTT] Emitted device_state_changed for manual switch: ${device.name}`);
+                }
+              }
+            }
+          })
+          .catch(err => console.error('[MQTT] Error processing manual switch:', err.message));
+      }
+      // TODO: store other telemetry data if needed
+    } catch (err) {
+      console.warn('[MQTT] Failed to parse telemetry JSON:', err.message);
+    }
+  }
+});
+
+mqttClient.on('error', (error) => {
+  console.error('[MQTT] Connection error:', error);
+});
+
+// -----------------------------------------------------------------------------
+// Device state sequencing & unified emit helper
+// -----------------------------------------------------------------------------
+// Adds a monotonically increasing per-device sequence number to every
+// device_state_changed event for deterministic ordering + easier debug of
+// stale/ out-of-order UI updates.
+const deviceSeqMap = new Map(); // deviceId -> last seq
+function nextDeviceSeq(deviceId) {
+  const prev = deviceSeqMap.get(deviceId) || 0;
+  const next = prev + 1;
+  deviceSeqMap.set(deviceId, next);
+  return next;
+}
+
+function emitDeviceStateChanged(device, meta = {}) {
+  if (!device) return;
+  const deviceId = device.id || device._id?.toString();
+  if (!deviceId) return;
+  const seq = nextDeviceSeq(deviceId);
+  const payload = {
+    deviceId,
+    state: device,
+    ts: Date.now(),
+    seq,
+    source: meta.source || 'unknown',
+    note: meta.note
+  };
+  io.emit('device_state_changed', payload);
+  // Focused debug log (avoid dumping entire device doc unless explicitly enabled)
+  if (process.env.DEVICE_SEQ_LOG === 'verbose') {
+    logger.info('[emitDeviceStateChanged]', { deviceId, seq, source: payload.source, note: payload.note });
+  } else if (process.env.DEVICE_SEQ_LOG === 'basic') {
+    logger.debug('[emitDeviceStateChanged]', { deviceId, seq, source: payload.source });
+  }
+}
+
+// Function to send switch commands to ESP32 via MQTT
+function sendMqttSwitchCommand(gpio, state) {
+  const command = {
+    gpio: gpio,
+    state: state
+  };
+  const message = JSON.stringify(command);
+  const result = mqttClient.publish('esp32/switches', message);
+  console.log(`[MQTT] Sent switch command:`, command, 'result:', result);
+}
+
+// Make MQTT functions available globally (if needed elsewhere)
+global.sendMqttSwitchCommand = sendMqttSwitchCommand;
+
+console.log('[MQTT] Using Mosquitto broker for all ESP32 device communication');
 
 // Load secure configuration if available
 let secureConfig = {};
@@ -152,7 +287,6 @@ if (process.env.NODE_ENV === 'production') {
 const mongoose = require('mongoose');
 const http = require('http');
 const socketIo = require('socket.io');
-const { WebSocketServer } = require('ws');
 const crypto = require('crypto');
 
 // Import routes
@@ -414,6 +548,11 @@ io.engine.on('connection_error', (err) => {
   });
 });
 
+// Make io available to routes via req.app.get('io')
+app.set('io', io);
+// Make io available globally for MQTT handlers
+global.io = io;
+
 // Log unexpected upgrade attempts that may corrupt websocket frames
 server.on('upgrade', (req, socket, head) => {
   const url = req.url || '';
@@ -656,6 +795,7 @@ io.on('connection', (socket) => {
 
   // Handle individual switch commands from frontend
   socket.on('switch_intent', async (data) => {
+    console.log('[DEBUG] switch_intent handler called with:', data);
     try {
       console.log('[SOCKET] Received switch_intent:', data);
       const { deviceId, switchId, gpio, desiredState, ts } = data;
@@ -674,26 +814,17 @@ io.on('connection', (socket) => {
         return;
       }
 
-      // Find WebSocket connection for this device
-      const macKey = device.macAddress.toUpperCase();
-      const ws = global.wsDevices ? global.wsDevices.get(macKey) : null;
-
-      if (!ws) {
-        console.warn('[SOCKET] No WebSocket connection found for device:', macKey);
-        return;
-      }
-
-      // Send command to ESP32
+      // Send MQTT command to ESP32 (JSON format)
       const command = {
-        type: 'switch_command',
         gpio: gpio,
-        state: desiredState,
-        switchId: switchId,
-        ts: ts || Date.now()
+        state: desiredState
       };
 
-      ws.send(JSON.stringify(command));
-      console.log('[SOCKET] Sent switch command to ESP32:', macKey, command);
+      const message = JSON.stringify(command);
+      console.log('[DEBUG] About to publish MQTT message:', message);
+      const result = mqttClient.publish('esp32/switches', message);
+      console.log('[DEBUG] MQTT publish result:', result);
+      console.log('[MQTT] Sent switch command to ESP32:', device.macAddress, command);
 
     } catch (error) {
       console.error('[SOCKET] Error processing switch_intent:', error.message);
@@ -720,18 +851,10 @@ io.on('connection', (socket) => {
         return;
       }
 
-      // Send commands to each device
+      // Send MQTT commands to each device
       let commandCount = 0;
       for (const device of devices) {
         if (!device.macAddress) continue;
-
-        const macKey = device.macAddress.toUpperCase();
-        const ws = global.wsDevices ? global.wsDevices.get(macKey) : null;
-
-        if (!ws) {
-          console.warn('[SOCKET] No WebSocket connection found for device:', macKey);
-          continue;
-        }
 
         // For bulk operations, we need to determine which switches to toggle
         // This depends on the filter (type, location, etc.)
@@ -748,22 +871,21 @@ io.on('connection', (socket) => {
           switchesToToggle = device.switches;
         }
 
-        // Send command for each switch
+        // Send MQTT command for each switch
         for (const switchInfo of switchesToToggle) {
           const command = {
-            type: 'switch_command',
             gpio: switchInfo.gpio,
-            state: desiredState,
-            switchId: switchInfo._id?.toString(),
-            ts: ts || Date.now()
+            state: desiredState
           };
 
-          ws.send(JSON.stringify(command));
+          const message = JSON.stringify(command);
+          mqttClient.publish('esp32/switches', message);
           commandCount++;
+          console.log('[MQTT] Sent bulk switch command to ESP32:', device.macAddress, command);
         }
       }
 
-      console.log(`[SOCKET] Sent ${commandCount} bulk switch commands to ${devices.length} devices`);
+      console.log(`[MQTT] Sent ${commandCount} bulk switch commands to ${devices.length} devices`);
 
     } catch (error) {
       console.error('[SOCKET] Error processing bulk_switch_intent:', error.message);
@@ -787,242 +909,6 @@ io.socketService = socketService;
 // Expose sequence-aware emitter to controllers
 app.set('emitDeviceStateChanged', emitDeviceStateChanged);
 
-// -----------------------------------------------------------------------------
-// Device state sequencing & unified emit helper
-// -----------------------------------------------------------------------------
-// Adds a monotonically increasing per-device sequence number to every
-// device_state_changed event for deterministic ordering + easier debug of
-// stale/ out-of-order UI updates.
-const deviceSeqMap = new Map(); // deviceId -> last seq
-function nextDeviceSeq(deviceId) {
-  const prev = deviceSeqMap.get(deviceId) || 0;
-  const next = prev + 1;
-  deviceSeqMap.set(deviceId, next);
-  return next;
-}
-
-function emitDeviceStateChanged(device, meta = {}) {
-  if (!device) return;
-  const deviceId = device.id || device._id?.toString();
-  if (!deviceId) return;
-  const seq = nextDeviceSeq(deviceId);
-  const payload = {
-    deviceId,
-    state: device,
-    ts: Date.now(),
-    seq,
-    source: meta.source || 'unknown',
-    note: meta.note
-  };
-  io.emit('device_state_changed', payload);
-  // Focused debug log (avoid dumping entire device doc unless explicitly enabled)
-  if (process.env.DEVICE_SEQ_LOG === 'verbose') {
-    logger.info('[emitDeviceStateChanged]', { deviceId, seq, source: payload.source, note: payload.note });
-  } else if (process.env.DEVICE_SEQ_LOG === 'basic') {
-    logger.debug('[emitDeviceStateChanged]', { deviceId, seq, source: payload.source });
-  }
-}
-
-// -----------------------------------------------------------------------------
-// Raw WebSocket server for ESP32 devices (simpler than Socket.IO on microcontroller)
-const wsDevices = new Map(); // mac -> ws
-global.wsDevices = wsDevices;
-
-// --- RAW WEBSOCKET SERVER FOR ESP32 DEVICES ---
-const wss = new WebSocketServer({ server, path: '/esp32-ws' });
-console.log('Raw WebSocket /esp32-ws endpoint ready');
-logger.info('Raw WebSocket /esp32-ws endpoint ready');
-
-wss.on('connection', (ws, req) => {
-  const ip = req.socket.remoteAddress;
-  console.log(`[ESP32 WS] New connection from ${ip}`);
-  logger.info(`[ESP32 WS] New connection from ${ip}`);
-
-  ws.on('message', async (msg) => {
-    try {
-      const data = JSON.parse(msg);
-      console.log(`[ESP32 WS] Received message: ${JSON.stringify(data)}`);
-      // Log identify messages and check secret key
-      if (data.type === 'identify') {
-        console.log(`[ESP32 WS] Identify from MAC: ${data.mac}, secret: ${data.secret}`);
-        try {
-          const Device = require('./models/Device');
-          let device = await Device.findOne({ macAddress: data.mac });
-
-          if (device) {
-            // Device exists - verify secret matches stored deviceSecret
-            if (device.deviceSecret && device.deviceSecret === data.secret) {
-              console.log('[ESP32 WS] >>> Device authenticated successfully!');
-            } else if (!device.deviceSecret) {
-              // Device exists but no secret stored - store this secret
-              device.deviceSecret = data.secret;
-              await device.save();
-              console.log('[ESP32 WS] >>> Device secret stored and authenticated!');
-            } else {
-              console.warn(`[ESP32 WS] Invalid secret key for existing device MAC: ${data.mac}`);
-              try {
-                ws.send(JSON.stringify({ type: 'error', message: 'Invalid secret key' }));
-              } catch (sendErr) {
-                console.error('[ESP32 WS] Error sending error response:', sendErr.message);
-              }
-              return;
-            }
-          } else {
-            // New device - register it with the provided secret
-            console.log('[ESP32 WS] >>> Registering new device with MAC:', data.mac);
-            device = new Device({
-              name: `ESP32-${data.mac.replace(/:/g, '')}`,
-              macAddress: data.mac,
-              ipAddress: req.socket.remoteAddress,
-              deviceSecret: data.secret,
-              status: 'online',
-              lastSeen: new Date(),
-              deviceType: 'esp32',
-              location: 'Unknown', // Will be updated later
-              switches: [],
-            });
-            await device.save();
-            console.log(`[ESP32 WS] Registered new device: ${data.mac}`);
-          }
-
-          // Store WebSocket connection in global map
-          const macKey = data.mac.toUpperCase();
-          wsDevices.set(macKey, ws);
-          console.log(`[ESP32 WS] Stored WebSocket connection for MAC: ${macKey}`);
-
-          // Update device status to online
-          device.status = 'online';
-          device.lastSeen = new Date();
-          device.ipAddress = req.socket.remoteAddress;
-          await device.save();
-          console.log(`[ESP32 WS] Updated device online: ${data.mac}`);
-
-          // Send identified response
-          try {
-            ws.send(JSON.stringify({ type: 'identified', mode: 'online' }));
-            console.log(`[ESP32 WS] Sent identified response to MAC: ${data.mac}`);
-          } catch (sendErr) {
-            console.error('[ESP32 WS] Error sending identified response:', sendErr.message);
-          }
-        } catch (err) {
-          console.error('[ESP32 WS] Error during device authentication:', err.message);
-          try {
-            ws.send(JSON.stringify({ type: 'error', message: 'Authentication failed' }));
-          } catch (sendErr) {
-            console.error('[ESP32 WS] Error sending error response:', sendErr.message);
-          }
-        }
-      }
-      // Handle heartbeat messages to keep devices online
-      else if (data.type === 'heartbeat') {
-        console.log(`[ESP32 WS] Heartbeat from MAC: ${data.mac}, uptime: ${data.uptime}s`);
-        try {
-          const Device = require('./models/Device');
-          const device = await Device.findOne({ macAddress: data.mac });
-
-          if (device) {
-            // Update lastSeen timestamp and IP address
-            device.lastSeen = new Date();
-            device.ipAddress = req.socket.remoteAddress;
-            // Ensure device stays online if it was marked offline by the scan
-            if (device.status === 'offline') {
-              device.status = 'online';
-              console.log(`[ESP32 WS] Device ${data.mac} back online via heartbeat`);
-            }
-            await device.save();
-            console.log(`[ESP32 WS] Updated heartbeat for device: ${data.mac}`);
-          } else {
-            console.warn(`[ESP32 WS] Heartbeat from unknown device MAC: ${data.mac}`);
-          }
-        } catch (err) {
-          console.error('[ESP32 WS] Error processing heartbeat:', err.message);
-        }
-      }
-      // Handle state_update messages (device activity)
-      else if (data.type === 'state_update') {
-        console.log(`[ESP32 WS] State update from MAC: ${data.mac}`);
-        try {
-          const Device = require('./models/Device');
-          const device = await Device.findOne({ macAddress: data.mac });
-
-          if (device) {
-            // Update lastSeen timestamp to show device is active
-            device.lastSeen = new Date();
-            device.ipAddress = req.socket.remoteAddress;
-            if (device.status === 'offline') {
-              device.status = 'online';
-              console.log(`[ESP32 WS] Device ${data.mac} back online via state update`);
-            }
-            await device.save();
-            console.log(`[ESP32 WS] Updated activity for device: ${data.mac}`);
-          }
-        } catch (err) {
-          console.error('[ESP32 WS] Error processing state_update:', err.message);
-        }
-      }
-      // Handle manual_switch messages (device activity)
-      else if (data.type === 'manual_switch') {
-        console.log(`[ESP32 WS] Manual switch event from MAC: ${data.mac}`);
-        try {
-          const Device = require('./models/Device');
-          const device = await Device.findOne({ macAddress: data.mac });
-
-          if (device) {
-            // Update lastSeen timestamp to show device is active
-            device.lastSeen = new Date();
-            device.ipAddress = req.socket.remoteAddress;
-            if (device.status === 'offline') {
-              device.status = 'online';
-              console.log(`[ESP32 WS] Device ${data.mac} back online via manual switch`);
-            }
-            await device.save();
-            console.log(`[ESP32 WS] Updated activity for device: ${data.mac}`);
-          }
-        } catch (err) {
-          console.error('[ESP32 WS] Error processing manual_switch:', err.message);
-        }
-      }
-      // Log all other messages for debugging
-      else {
-        console.log('[ESP32 WS] Message:', data);
-      }
-    } catch (e) {
-      console.warn('[ESP32 WS] Invalid message:', msg);
-    }
-  });
-
-  ws.on('close', async () => {
-    console.log(`[ESP32 WS] Connection closed from ${ip}`);
-    
-    // Remove WebSocket connection from global map
-    let disconnectedMac = null;
-    for (const [macKey, storedWs] of wsDevices.entries()) {
-      if (storedWs === ws) {
-        wsDevices.delete(macKey);
-        disconnectedMac = macKey;
-        console.log(`[ESP32 WS] Removed WebSocket connection for MAC: ${macKey}`);
-        break;
-      }
-    }
-    
-    // Mark device as offline in database when connection closes
-    if (disconnectedMac) {
-      try {
-        const Device = require('./models/Device');
-        const device = await Device.findOne({ macAddress: disconnectedMac.toLowerCase() });
-        if (device) {
-          device.status = 'offline';
-          device.lastSeen = new Date();
-          await device.save();
-          emitDeviceStateChanged(device, { source: 'websocket-disconnect' });
-          console.log(`[ESP32 WS] Marked device offline: ${disconnectedMac}`);
-        }
-      } catch (err) {
-        console.error('[ESP32 WS] Error marking device offline:', err.message);
-      }
-    }
-  });
-});
 
 
 // Offline detection every 60s (mark devices offline if stale)
@@ -1166,16 +1052,6 @@ server.on('error', (error) => {
   console.error('Server error:', error);
 });
 
-console.log(`[SERVER] server.listen called, PORT=${PORT}`);
-module.exports = { app, io, server, mqttServer };
 
-server.on('error', (error) => {
-  console.error('Server error:', error);
-});
 
-console.log('Server.js file execution completed');
-
-// Keep the process alive
-setInterval(() => {
-  // Keep-alive ping every 30 seconds
-}, 30000);
+module.exports = { app, io, server };

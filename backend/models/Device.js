@@ -101,7 +101,8 @@ const deviceSchema = new mongoose.Schema({
     type: String,
     required: [true, 'MAC address is required'],
     unique: true,
-    match: [/^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/, 'Please enter a valid MAC address']
+    // Accept both colon/dash and normalized (no separator) MACs
+    match: [/^([0-9A-Fa-f]{2}[:-]?){5}([0-9A-Fa-f]{2})$/, 'Please enter a valid MAC address']
   },
   ipAddress: {
     type: String,
@@ -218,8 +219,12 @@ deviceSchema.index({ status: 1 }); // Index for status filtering
 deviceSchema.index({ location: 1 }); // Index for location-based queries
 deviceSchema.index({ lastSeen: -1 }); // Index for recent device queries
 
-// Pre-save middleware to ensure switches have unique names
+// Pre-save middleware to ensure switches have unique names and normalize MAC address
 deviceSchema.pre('save', function(next) {
+  // Normalize MAC address: remove colons/dashes, lowercase
+  if (this.macAddress) {
+    this.macAddress = this.macAddress.replace(/[^a-fA-F0-9]/g, '').toLowerCase();
+  }
   const switchNames = new Set();
   for (const sw of this.switches) {
     if (switchNames.has(sw.name)) {

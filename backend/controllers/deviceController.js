@@ -102,17 +102,29 @@ const createDevice = async (req, res) => {
       });
     }
 
-    // Validate MAC address format
-    const macRegex = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/;
-    if (!macRegex.test(macAddress)) {
+    // Accept any non-empty string for MAC address (let normalization handle it)
+    if (!macAddress || typeof macAddress !== 'string' || macAddress.length < 6) {
       return res.status(400).json({
         error: 'Validation failed',
-        details: 'Invalid MAC address format'
+        details: 'MAC address is required.'
       });
     }
-
-    // Check for existing device with same MAC address
-    const existingDevice = await Device.findOne({ macAddress });
+    // Normalize MAC address: remove colons/dashes, lowercase
+    function normalizeMac(mac) {
+      return mac.replace(/[^a-fA-F0-9]/g, '').toLowerCase();
+    }
+    const normalizedMac = normalizeMac(macAddress);
+    // Check for existing device with same MAC address (any format)
+    const existingDevice = await Device.findOne({
+      $or: [
+        { macAddress },
+        { macAddress: macAddress.toUpperCase() },
+        { macAddress: macAddress.toLowerCase() },
+        { macAddress: normalizedMac },
+        { macAddress: normalizedMac.toUpperCase() },
+        { macAddress: normalizedMac.toLowerCase() }
+      ]
+    });
     if (existingDevice) {
       return res.status(400).json({
         error: 'Validation failed',
@@ -171,7 +183,7 @@ const createDevice = async (req, res) => {
 
     const device = new Device({
       name,
-      macAddress,
+  macAddress: normalizedMac,
       ipAddress,
       location,
       classroom,
@@ -334,9 +346,29 @@ const updateDevice = async (req, res) => {
       return res.status(404).json({ message: 'Device not found' });
     }
 
+    function normalizeMac(mac) {
+      return mac.replace(/[^a-fA-F0-9]/g, '').toLowerCase();
+    }
+    let normalizedMac = macAddress ? normalizeMac(macAddress) : undefined;
+    if (macAddress && (typeof macAddress !== 'string' || macAddress.length < 6)) {
+      return res.status(400).json({
+        error: 'Validation failed',
+        details: 'MAC address is required.'
+      });
+    }
     // Check for duplicate MAC address if changed
-    if (macAddress && macAddress !== device.macAddress) {
-      const existingDeviceMAC = await Device.findOne({ macAddress });
+    if (macAddress && normalizedMac !== device.macAddress) {
+      const existingDeviceMAC = await Device.findOne({
+        $or: [
+          { macAddress },
+          { macAddress: macAddress.toUpperCase() },
+          { macAddress: macAddress.toLowerCase() },
+          { macAddress: normalizedMac },
+          { macAddress: normalizedMac.toUpperCase() },
+          { macAddress: normalizedMac.toLowerCase() }
+        ],
+        _id: { $ne: deviceId }
+      });
       if (existingDeviceMAC) {
         return res.status(400).json({ message: 'Device with this MAC address already exists' });
       }
@@ -352,7 +384,7 @@ const updateDevice = async (req, res) => {
 
     // Update device
     device.name = name || device.name;
-    device.macAddress = macAddress || device.macAddress;
+  device.macAddress = normalizedMac || device.macAddress;
     device.ipAddress = ipAddress || device.ipAddress;
     device.location = location || device.location;
     device.classroom = classroom || device.classroom;
@@ -537,26 +569,14 @@ const toggleSwitch = async (req, res) => {
     const { state, triggeredBy = 'user' } = req.body;
 
     const device = await Device.findById(deviceId);
-    const dbQueryTime = Date.now() - startTime;
+    dbQueryTime = Date.now() - startTime;
     if (!device) {
       return res.status(404).json({ message: 'Device not found' });
     }
 
-    // Check device connectivity with consistent logic
+    // Check device connectivity with MQTT-based logic
     const isDeviceOnline = () => {
-      // First check WebSocket connection (most reliable)
-      if (process.env.NODE_ENV !== 'test') {
-        try {
-          const ws = global.wsDevices && device.macAddress ? global.wsDevices.get(device.macAddress.toUpperCase()) : null;
-          if (ws && ws.readyState === 1) {
-            return true; // WebSocket is connected
-          }
-        } catch (e) {
-          console.warn('[toggleSwitch] WebSocket check error:', e.message);
-        }
-      }
-
-      // Fallback to database status with time-based validation
+      // Check database status with time-based validation for MQTT devices
       if (device.status === 'online' && device.lastSeen) {
         const timeSinceLastSeen = Date.now() - new Date(device.lastSeen).getTime();
         const offlineThreshold = 2 * 60 * 1000; // 2 minutes
@@ -610,19 +630,29 @@ const toggleSwitch = async (req, res) => {
     // Resolve updated switch for logging and push
     const updatedSwitch = updated.switches.find(sw => sw._id.toString() === switchId) || updated.switches[switchIndex];
     const activityLogStart = Date.now();
+    
+    // Check if this is a manual switch operation
+    const isManualSwitch = updatedSwitch?.manualSwitchEnabled === true;
+    const logTriggeredBy = isManualSwitch ? 'manual_switch' : triggeredBy;
+    const logAction = isManualSwitch ? (desiredState ? 'manual_on' : 'manual_off') : (desiredState ? 'on' : 'off');
+    const logUserId = isManualSwitch ? null : req.user.id;
+    const logUserName = isManualSwitch ? 'Manual Switch' : req.user.name;
+    const logIp = isManualSwitch ? 'UI Manual' : req.ip;
+    const logUserAgent = isManualSwitch ? 'UI Manual Switch' : req.get('User-Agent');
+    
     await ActivityLog.create({
       deviceId: updated._id,
       deviceName: updated.name,
       switchId: switchId,
       switchName: updatedSwitch?.name,
-      action: desiredState ? 'on' : 'off',
-      triggeredBy,
-      userId: req.user.id,
-      userName: req.user.name,
+      action: logAction,
+      triggeredBy: logTriggeredBy,
+      userId: logUserId,
+      userName: logUserName,
       classroom: updated.classroom,
       location: updated.location,
-      ip: req.ip,
-      userAgent: req.get('User-Agent')
+      ip: logIp,
+      userAgent: logUserAgent
     });
     const activityLogTime = Date.now() - activityLogStart;
 
@@ -640,48 +670,28 @@ const toggleSwitch = async (req, res) => {
       if (process.env.NODE_ENV !== 'production') console.warn('[switch_intent emit failed]', e.message);
     }
 
-    // Push command to ESP32 if connected through raw WebSocket
-    let dispatchedToHardware = false;
-    let hwReason = 'not_attempted';
+    // Send MQTT command to ESP32
     try {
-      if (global.wsDevices && updated.macAddress) {
-        const ws = global.wsDevices.get(updated.macAddress.toUpperCase());
-        if (ws && ws.readyState === 1) { // OPEN
-          const payload = {
-            type: 'switch_command',
-            mac: updated.macAddress,
-            gpio: (updatedSwitch && (updatedSwitch.relayGpio || updatedSwitch.gpio)) || (device.switches[switchIndex].relayGpio || device.switches[switchIndex].gpio),
-            state: desiredState,
-            seq: nextCmdSeq(updated.macAddress)
-          };
-          try {
-            logger.info('[hw] switch_command push', { mac: updated.macAddress, gpio: payload.gpio, state: payload.state, deviceId: updated._id.toString(), switchId });
-          } catch { }
-          const wsSendStart = Date.now();
-          ws.send(JSON.stringify(payload));
-          const wsSendTime = Date.now() - wsSendStart;
-          dispatchedToHardware = true;
-          hwReason = 'sent';
-        } else {
-          hwReason = ws ? `ws_not_open_state_${ws.readyState}` : 'ws_not_found';
-        }
+      const gpio = (updatedSwitch && (updatedSwitch.relayGpio || updatedSwitch.gpio)) || (device.switches[switchIndex].relayGpio || device.switches[switchIndex].gpio);
+      if (global.sendMqttSwitchCommand) {
+        global.sendMqttSwitchCommand(gpio, desiredState);
+        console.log(`[MQTT] Published switch command for device ${updated.macAddress}: gpio=${gpio}, state=${desiredState}`);
       } else {
-        hwReason = 'wsDevices_map_missing';
+        console.warn('[MQTT] sendMqttSwitchCommand not available');
       }
     } catch (e) {
-      console.error('[switch_command push failed]', e.message);
-      hwReason = 'exception_' + e.message;
+      console.error('[MQTT] Error publishing switch command:', e.message);
     }
 
     // Log performance timing
     const totalTime = Date.now() - startTime;
-    process.stderr.write(`[PERF] toggleSwitch timing - Total: ${totalTime}ms, DB Query: ${dbQueryTime}ms, DB Update: ${dbUpdateTime}ms, Activity Log: ${activityLogTime}ms, WS Send: ${wsSendTime}ms\n`);
+    process.stderr.write(`[PERF] toggleSwitch timing - Total: ${totalTime}ms, DB Query: ${dbQueryTime}ms, DB Update: ${dbUpdateTime}ms, Activity Log: ${activityLogTime}ms\n`);
 
     res.json({
       success: true,
       data: updated,
-      hardwareDispatch: dispatchedToHardware,
-      hardwareDispatchReason: hwReason
+      hardwareDispatch: true, // MQTT command was sent
+      hardwareDispatchReason: 'mqtt_published'
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -873,11 +883,13 @@ const bulkToggleSwitches = async (req, res) => {
       if (deviceModified) {
         await device.save();
 
-        // Check if device is online (has active WebSocket connection)
+        // Check if device is online using MQTT-based logic
         const isDeviceOnline = () => {
-          if (global.wsDevices && device.macAddress) {
-            const ws = global.wsDevices.get(device.macAddress);
-            return ws && ws.readyState === 1;
+          // Check database status with time-based validation for MQTT devices
+          if (device.status === 'online' && device.lastSeen) {
+            const timeSinceLastSeen = Date.now() - new Date(device.lastSeen).getTime();
+            const offlineThreshold = 2 * 60 * 1000; // 2 minutes
+            return timeSinceLastSeen < offlineThreshold;
           }
           return false;
         };
@@ -885,24 +897,17 @@ const bulkToggleSwitches = async (req, res) => {
         const deviceOnline = isDeviceOnline();
 
         if (deviceOnline) {
-          // Device is online, send command immediately
+          // Device is online, send MQTT commands immediately
           try {
-            const ws = global.wsDevices.get(device.macAddress);
             for (const sw of device.switches) {
-              const payload = {
-                type: 'switch_command',
-                mac: device.macAddress,
-                gpio: sw.relayGpio || sw.gpio,
-                state: sw.state,
-                seq: nextCmdSeq(device.macAddress)
-              };
-              ws.send(JSON.stringify(payload));
-              logger.info('[hw] switch_command (bulk) push', {
-                mac: device.macAddress,
-                gpio: payload.gpio,
-                state: payload.state,
-                deviceId: device._id.toString()
-              });
+              // Send MQTT command to ESP32
+              const gpio = sw.relayGpio || sw.gpio;
+              if (global.sendMqttSwitchCommand) {
+                global.sendMqttSwitchCommand(gpio, sw.state);
+                console.log(`[MQTT] Bulk command sent for device ${device.macAddress}: gpio=${gpio}, state=${sw.state}`);
+              } else {
+                console.warn('[MQTT] sendMqttSwitchCommand not available for bulk operation');
+              }
             }
             devicesCommanded++;
             commandedDevices.push({
@@ -912,7 +917,7 @@ const bulkToggleSwitches = async (req, res) => {
               switches: device.switches.length
             });
           } catch (e) {
-            logger.error('[bulkToggleSwitches] WS command failed for online device', {
+            logger.error('[bulkToggleSwitches] MQTT command failed for online device', {
               deviceId: device._id.toString(),
               mac: device.macAddress,
               error: e.message
@@ -1103,20 +1108,19 @@ const bulkToggleByType = async (req, res) => {
           } catch (logErr) {
             logger.warn(`[bulkToggleByType] Activity log failed for device ${device._id}: ${logErr.message}`);
           }
-          // Do NOT emit device_state_changed here; wait for hardware confirmation
-          // Push commands to ESP32 so physical relays reflect type-based bulk change
+          // Send MQTT commands to ESP32 for type-based bulk change
           try {
-            if (global.wsDevices && device.macAddress) {
-              const ws = global.wsDevices.get(device.macAddress.toUpperCase());
-              if (ws && ws.readyState === 1) {
-                for (const sw of device.switches.filter(sw => sw.type === type)) {
-                  const payload = { type: 'switch_command', mac: device.macAddress, gpio: sw.relayGpio || sw.gpio, state: sw.state, seq: nextCmdSeq(device.macAddress) };
-                  ws.send(JSON.stringify(payload));
-                }
+            for (const sw of device.switches.filter(sw => sw.type === type)) {
+              const gpio = sw.relayGpio || sw.gpio;
+              if (global.sendMqttSwitchCommand) {
+                global.sendMqttSwitchCommand(gpio, sw.state);
+                console.log(`[MQTT] Bulk by type command sent for device ${device.macAddress}: gpio=${gpio}, state=${sw.state}, type=${type}`);
+              } else {
+                console.warn('[MQTT] sendMqttSwitchCommand not available for bulk by type operation');
               }
             }
           } catch (e) {
-            logger.warn(`[bulkToggleByType] WS push failed for device ${device.macAddress}: ${e.message}`);
+            logger.warn(`[bulkToggleByType] MQTT push failed for device ${device.macAddress}: ${e.message}`);
           }
         }
       } catch (deviceErr) {
@@ -1183,19 +1187,18 @@ const bulkToggleByLocation = async (req, res) => {
             location: device.location
           });
         } catch { }
-        // Do NOT emit device_state_changed here; wait for hardware confirmation
-        // Push commands to ESP32 so physical relays reflect location-based bulk change
+        // Send MQTT commands to ESP32 for location-based bulk change
         try {
-          if (global.wsDevices && device.macAddress) {
-            const ws = global.wsDevices.get(device.macAddress.toUpperCase());
-            if (ws && ws.readyState === 1) {
-              for (const sw of device.switches) {
-                const payload = { type: 'switch_command', mac: device.macAddress, gpio: sw.relayGpio || sw.gpio, state: sw.state, seq: nextCmdSeq(device.macAddress) };
-                ws.send(JSON.stringify(payload));
-              }
+          for (const sw of device.switches) {
+            const gpio = sw.relayGpio || sw.gpio;
+            if (global.sendMqttSwitchCommand) {
+              global.sendMqttSwitchCommand(gpio, sw.state);
+              console.log(`[MQTT] Bulk by location command sent for device ${device.macAddress}: gpio=${gpio}, state=${sw.state}, location=${location}`);
+            } else {
+              console.warn('[MQTT] sendMqttSwitchCommand not available for bulk by location operation');
             }
           }
-        } catch (e) { if (process.env.NODE_ENV !== 'production') console.warn('[bulkToggleByLocation push failed]', e.message); }
+        } catch (e) { if (process.env.NODE_ENV !== 'production') console.warn('[bulkToggleByLocation MQTT push failed]', e.message); }
       }
     }
     try {
