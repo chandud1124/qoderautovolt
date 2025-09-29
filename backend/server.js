@@ -1143,14 +1143,16 @@ server.listen(PORT, '0.0.0.0', () => {
 
   // Start enhanced services after successful startup
   setTimeout(() => {
-    // Initialize metrics service after database connection
-    try {
-      const metricsService = require('./metricsService');
-      (async () => {
-        await metricsService.initializeMetrics();
-      })();
-    } catch (error) {
-      console.error('Error initializing metrics service:', error);
+    // Only initialize metrics if not running tests
+    if (process.env.NODE_ENV !== 'test') {
+      try {
+        const metricsService = require('./metricsService');
+        (async () => {
+          await metricsService.initializeMetrics();
+        })();
+      } catch (error) {
+        console.error('Error initializing metrics service:', error);
+      }
     }
 
     // Start device monitoring service (5-minute checks)

@@ -28,7 +28,8 @@ describe('Authentication API', () => {
                 email: 'test@example.com',
                 password: 'password123',
                 role: 'student',
-                department: 'Computer Science'
+                department: 'Computer Science',
+                class: 'CS101'
             };
 
             const response = await request(app)
