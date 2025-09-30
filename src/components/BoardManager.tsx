@@ -333,6 +333,10 @@ const BoardManager: React.FC = () => {
                       <span className="text-gray-500">Resolution:</span>
                       <span>{board.displaySettings.resolution}</span>
                     </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-500">Board ID:</span>
+                      <span className="font-mono text-xs">{board._id}</span>
+                    </div>
                     {board.type === 'raspberry_pi' && board.macAddress && (
                       <div className="flex justify-between text-sm">
                         <span className="text-gray-500">MAC:</span>

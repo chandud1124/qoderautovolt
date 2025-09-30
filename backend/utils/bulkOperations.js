@@ -242,15 +242,61 @@ class BulkOperations {
                         timestamp: new Date()
                     };
 
-                    // Send batch command to ESP32
+                    // Send batch command to ESP32 via MQTT
                     logger.info(`Sending batch ${batchId} to ESP32 ${esp32Id} with ${batch.length} switches`);
 
                     try {
-                        const esp32Service = req.app.get('esp32Service');
-                        const esp32Response = await esp32Service.sendBatchCommand(esp32Id, batchCommand);
+                        // Get MQTT client from global context
+                        const mqttClient = global.mqttClient;
+                        if (!mqttClient || !mqttClient.connected) {
+                            throw new Error('MQTT client not available or not connected');
+                        }
 
-                        logger.info(`ESP32 ${esp32Id} processed batch ${batchId}: ${esp32Response.processed} switches`);
+                        // Send individual commands for each switch in the batch
+                        for (const switchInfo of batch) {
+                            // Get the device and switch details
+                            const device = groupDevices.find(d => d._id.toString() === switchInfo.deviceId);
+                            if (!device) continue;
 
+                            const switchObj = device.switches.find(s => s._id.toString() === switchInfo.switchId);
+                            if (!switchObj) continue;
+
+                            const gpio = switchObj.gpio || switchObj.relayGpio;
+                            if (gpio === undefined) {
+                                logger.error(`No GPIO defined for switch ${switchInfo.switchId}`);
+                                results.failed.push({
+                                    deviceId: switchInfo.deviceId,
+                                    switchId: switchInfo.switchId,
+                                    error: 'No GPIO defined for switch',
+                                    batchId
+                                });
+                                continue;
+                            }
+
+                            const command = {
+                                mac: esp32Id, // Use ESP32 ID (MAC address) as target
+                                gpio: gpio, // GPIO pin number
+                                state: switchInfo.targetState // Desired state
+                            };
+
+                            const message = JSON.stringify(command);
+                            const result = mqttClient.publish('esp32/switches', message);
+
+                            if (!result) {
+                                logger.error(`Failed to publish MQTT message for switch ${switchInfo.switchId}`);
+                                results.failed.push({
+                                    deviceId: switchInfo.deviceId,
+                                    switchId: switchInfo.switchId,
+                                    error: 'MQTT publish failed',
+                                    batchId
+                                });
+                                continue;
+                            }
+
+                            logger.info(`Published MQTT command for switch ${switchInfo.switchId}:`, command);
+                        }
+
+                        // For bulk operations, we assume success if MQTT publish succeeds
                         // Process each switch in the batch for database updates
                         for (const switchInfo of batch) {
                             try {

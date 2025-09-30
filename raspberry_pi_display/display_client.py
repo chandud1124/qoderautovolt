@@ -10,6 +10,7 @@ import time
 import json
 import requests
 import logging
+import io
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 import pygame
@@ -17,6 +18,12 @@ import pygame.freetype
 from pygame.locals import *
 import threading
 import signal
+from dotenv import load_dotenv
+import urllib.request
+import paho.mqtt.client as mqtt
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Configuration
 class Config:
@@ -39,10 +46,10 @@ class Config:
     FONT_SIZE_CONTENT = int(os.getenv('FONT_SIZE_CONTENT', '32'))
     FONT_SIZE_FOOTER = int(os.getenv('FONT_SIZE_FOOTER', '24'))
 
-    # Colors (RGB)
-    BG_COLOR = tuple(map(int, os.getenv('BG_COLOR', '0,0,0').split(',')))
-    TEXT_COLOR = tuple(map(int, os.getenv('TEXT_COLOR', '255,255,255').split(',')))
-    TITLE_COLOR = tuple(map(int, os.getenv('TITLE_COLOR', '255,255,0').split(',')))
+    # MQTT Configuration
+    MQTT_BROKER = os.getenv('MQTT_BROKER', 'localhost')
+    MQTT_PORT = int(os.getenv('MQTT_PORT', '1883'))
+    MQTT_TOPIC = os.getenv('MQTT_TOPIC', 'notices/published')
 
 class DisplayManager:
     def __init__(self):
@@ -66,6 +73,7 @@ class DisplayManager:
         self.current_content = None
         self.last_update = datetime.now()
         self.running = True
+        self.image_cache = {}  # Cache for downloaded images
 
     def clear_screen(self):
         self.screen.fill(Config.BG_COLOR)
@@ -104,11 +112,52 @@ class DisplayManager:
             self.draw_text(notice['title'], self.font_title, Config.TITLE_COLOR,
                          50, 50, Config.DISPLAY_WIDTH - 100)
 
-        # Content
-        if 'content' in notice:
+        logging.info(f"Displaying notice: {notice.get('title', 'No title')}")
+        logging.info(f"Content: {notice.get('content', 'No content')}")
+        logging.info(f"Attachments: {len(notice.get('attachments', []))} found")
+
+        # Check for image attachments
+        has_image = False
+        if 'attachments' in notice and notice['attachments']:
+            for attachment in notice['attachments']:
+                logging.info(f"Checking attachment: {attachment.get('originalName')} - {attachment.get('mimetype')}")
+                if attachment.get('mimetype', '').startswith('image/'):
+                    # Construct full URL if it's a relative path
+                    image_url = attachment['url']
+                    if image_url.startswith('/'):
+                        # It's a relative URL, prepend server URL
+                        base_url = Config.SERVER_URL.rstrip('/')
+                        image_url = f"{base_url}{image_url}"
+                    
+                    logging.info(f"Downloading image from: {image_url}")
+                    image = self.download_image(image_url)
+                    if image:
+                        # Display image in center area
+                        image_y = 150
+                        image_height = Config.DISPLAY_HEIGHT - 250  # Leave space for title and footer
+                        self.display_image(image, 50, image_y, Config.DISPLAY_WIDTH - 100, image_height)
+                        has_image = True
+                        logging.info(f"Displayed image: {attachment['originalName']}")
+                        break
+                    else:
+                        logging.error(f"Failed to load image: {attachment['originalName']}")
+        else:
+            logging.info("No attachments found in notice")
+
+        # Content (only show if no image or if content exists)
+        if not has_image and 'content' in notice:
             content_y = 150
             self.draw_text(notice['content'], self.font_content, Config.TEXT_COLOR,
                          50, content_y, Config.DISPLAY_WIDTH - 100)
+            logging.info("Displayed text content")
+        elif has_image and 'content' in notice and notice['content'].strip():
+            # Show content below image if both exist
+            content_y = Config.DISPLAY_HEIGHT - 150
+            self.draw_text(notice['content'], self.font_content, Config.TEXT_COLOR,
+                         50, content_y, Config.DISPLAY_WIDTH - 100)
+            logging.info("Displayed text content below image")
+        elif has_image:
+            logging.info("Displayed image only (no text content)")
 
         # Footer with timestamp
         footer_text = f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
@@ -116,6 +165,50 @@ class DisplayManager:
                      50, Config.DISPLAY_HEIGHT - 50)
 
         pygame.display.flip()
+
+    def download_image(self, url: str) -> Optional[pygame.Surface]:
+        """Download and load an image from URL"""
+        try:
+            logging.info(f"Attempting to download image from: {url}")
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            
+            logging.info(f"Image download successful, status: {response.status_code}, content length: {len(response.content)}")
+            
+            # Load image from bytes
+            image = pygame.image.load(io.BytesIO(response.content))
+            logging.info(f"Image loaded successfully, size: {image.get_size()}")
+            return image
+        except requests.RequestException as e:
+            logging.error(f"Failed to download image from {url}: {e}")
+            return None
+        except pygame.error as e:
+            logging.error(f"Failed to load image data: {e}")
+            return None
+        except Exception as e:
+            logging.error(f"Unexpected error downloading image: {e}")
+            return None
+
+    def display_image(self, image: pygame.Surface, x: int, y: int, max_width: int, max_height: int):
+        """Display an image scaled to fit within max dimensions"""
+        img_width, img_height = image.get_size()
+
+        # Calculate scaling factor to fit within max dimensions
+        scale_x = max_width / img_width
+        scale_y = max_height / img_height
+        scale = min(scale_x, scale_y, 1.0)  # Don't scale up, only down
+
+        if scale < 1.0:
+            new_width = int(img_width * scale)
+            new_height = int(img_height * scale)
+            image = pygame.transform.smoothscale(image, (new_width, new_height))
+
+        # Center the image
+        final_width, final_height = image.get_size()
+        center_x = x + (max_width - final_width) // 2
+        center_y = y + (max_height - final_height) // 2
+
+        self.screen.blit(image, (center_x, center_y))
 
     def display_no_content(self):
         """Display when no content is available"""
@@ -207,7 +300,7 @@ class APIManager:
     def update_board_status(self, status: str = 'active'):
         """Update board online status"""
         try:
-            url = f"{Config.SERVER_URL}/api/boards/{Config.BOARD_ID}"
+            url = f"{Config.SERVER_URL}/api/boards/{Config.BOARD_ID}/status"
             data = {
                 'status': status,
                 'lastSeen': datetime.now().isoformat(),
@@ -222,6 +315,60 @@ class APIManager:
 
         except requests.RequestException as e:
             logging.error(f"Status update failed: {e}")
+
+class MQTTManager:
+    def __init__(self, display_manager):
+        self.display_manager = display_manager
+        self.client = mqtt.Client()
+        self.client.on_connect = self.on_connect
+        self.client.on_message = self.on_message
+        self.client.on_disconnect = self.on_disconnect
+        self.connected = False
+
+    def on_connect(self, client, userdata, flags, rc):
+        if rc == 0:
+            logging.info("Connected to MQTT broker")
+            self.connected = True
+            # Subscribe to notice published topic
+            self.client.subscribe(Config.MQTT_TOPIC)
+            logging.info(f"Subscribed to topic: {Config.MQTT_TOPIC}")
+        else:
+            logging.error(f"Failed to connect to MQTT broker: {rc}")
+
+    def on_message(self, client, userdata, msg):
+        try:
+            payload = json.loads(msg.payload.decode())
+            logging.info(f"Received MQTT message on {msg.topic}: {payload}")
+
+            if msg.topic == Config.MQTT_TOPIC:
+                # New notice published, update content immediately
+                logging.info("Notice published notification received, updating content...")
+                api_manager = APIManager()
+                content = api_manager.get_board_content()
+                if content:
+                    self.display_manager.update_content(content)
+                    logging.info("Content updated via MQTT notification")
+
+        except Exception as e:
+            logging.error(f"Error processing MQTT message: {e}")
+
+    def on_disconnect(self, client, userdata, rc):
+        logging.warning(f"Disconnected from MQTT broker: {rc}")
+        self.connected = False
+
+    def connect(self):
+        try:
+            self.client.connect(Config.MQTT_BROKER, Config.MQTT_PORT, 60)
+            self.client.loop_start()
+            logging.info(f"Attempting to connect to MQTT broker at {Config.MQTT_BROKER}:{Config.MQTT_PORT}")
+        except Exception as e:
+            logging.error(f"Failed to connect to MQTT broker: {e}")
+            logging.info("Falling back to polling-only mode")
+
+    def disconnect(self):
+        if self.connected:
+            self.client.loop_stop()
+            self.client.disconnect()
 
 def setup_logging():
     """Setup logging configuration"""
@@ -260,6 +407,10 @@ def main():
     # Initialize components
     api_manager = APIManager()
     display_manager = DisplayManager()
+    mqtt_manager = MQTTManager(display_manager)
+
+    # Connect to MQTT broker for real-time updates
+    mqtt_manager.connect()
 
     # Update board status on startup
     api_manager.update_board_status('active')
@@ -296,6 +447,8 @@ def main():
     finally:
         # Update status on shutdown
         api_manager.update_board_status('offline')
+        # Disconnect from MQTT
+        mqtt_manager.disconnect()
         logging.info("Display client stopped")
 
 if __name__ == "__main__":

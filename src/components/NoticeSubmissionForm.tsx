@@ -88,8 +88,14 @@ const NoticeSubmissionForm: React.FC<NoticeSubmissionFormProps> = ({ onClose, on
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!formData.title.trim() || !formData.content.trim()) {
-      setError('Title and content are required');
+    if (!formData.title.trim()) {
+      setError('Title is required');
+      return;
+    }
+
+    // Content is required only if no attachments are provided
+    if (!formData.content.trim() && attachments.length === 0) {
+      setError('Content is required when no attachments are provided');
       return;
     }
 
@@ -151,10 +157,10 @@ const NoticeSubmissionForm: React.FC<NoticeSubmissionFormProps> = ({ onClose, on
 
   return (
     <Dialog open={true} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" aria-describedby="submit-notice-description">
         <DialogHeader>
           <DialogTitle>Submit Notice</DialogTitle>
-          <DialogDescription>
+          <DialogDescription id="submit-notice-description">
             Fill out the form below to submit a new notice. All fields marked with * are required.
           </DialogDescription>
         </DialogHeader>
@@ -178,14 +184,14 @@ const NoticeSubmissionForm: React.FC<NoticeSubmissionFormProps> = ({ onClose, on
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="content">Content *</Label>
+            <Label htmlFor="content">Content {!attachments.length ? '*' : '(Optional when attachments provided)'}</Label>
             <Textarea
               id="content"
               value={formData.content}
               onChange={(e) => handleInputChange('content', e.target.value)}
               placeholder="Enter notice content"
               rows={6}
-              required
+              required={!attachments.length}
             />
           </div>
 

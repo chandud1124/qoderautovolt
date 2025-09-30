@@ -15,8 +15,8 @@ const noticeSchema = new mongoose.Schema({
   },
   contentType: {
     type: String,
-    enum: ['announcement', 'event', 'news', 'alert', 'information', 'reminder'],
-    default: 'announcement'
+    enum: ['text', 'image', 'video', 'document', 'announcement', 'event', 'news', 'alert', 'information', 'reminder'],
+    default: 'text'
   },
   tags: [{
     type: String,

@@ -393,10 +393,40 @@ class ScheduleService {
     }
   }
 
-  updateSchedule(schedule) {
-    this.removeJob(schedule._id.toString());
-    if (schedule.enabled) {
-      this.createCronJob(schedule);
+  _dispatchToHardware(device, gpio, desiredState) {
+    try {
+      // Get MQTT client from global or app context
+      const mqttClient = global.mqttClient;
+      if (!mqttClient || !mqttClient.connected) {
+        console.error('[SCHEDULE] MQTT client not available or not connected');
+        return { sent: false, error: 'MQTT client not available' };
+      }
+
+      if (!device.macAddress) {
+        console.error('[SCHEDULE] Device has no MAC address:', device.name);
+        return { sent: false, error: 'No MAC address' };
+      }
+
+      // Send MQTT command to ESP32 (same format as socket handlers)
+      const command = {
+        mac: device.macAddress,
+        gpio: gpio,
+        state: desiredState
+      };
+
+      const message = JSON.stringify(command);
+      const result = mqttClient.publish('esp32/switches', message);
+
+      if (result) {
+        console.log('[SCHEDULE] Sent command to ESP32:', device.macAddress, command);
+        return { sent: true };
+      } else {
+        console.error('[SCHEDULE] Failed to publish MQTT message');
+        return { sent: false, error: 'Publish failed' };
+      }
+    } catch (error) {
+      console.error('[SCHEDULE] Error dispatching to hardware:', error);
+      return { sent: false, error: error.message };
     }
   }
 }

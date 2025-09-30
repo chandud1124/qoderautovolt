@@ -5,6 +5,7 @@ const {
   getBoards,
   getBoard,
   updateBoard,
+  updateBoardStatus,
   deleteBoard,
   getBoardContent,
   updateBoardContent,
@@ -136,6 +137,12 @@ router.patch('/:id',
   updateBoard
 );
 
+// Board status update (for display clients)
+router.patch('/:id/status',
+  param('id').isMongoId().withMessage('Invalid board ID'),
+  updateBoardStatus
+);
+
 router.delete('/:id',
   auth,
   authorize('admin', 'super-admin'),
@@ -145,7 +152,6 @@ router.delete('/:id',
 
 // Board content management
 router.get('/:id/content',
-  auth,
   param('id').isMongoId().withMessage('Invalid board ID'),
   getBoardContent
 );

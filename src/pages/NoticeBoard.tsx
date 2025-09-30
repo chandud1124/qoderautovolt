@@ -182,7 +182,7 @@ const NoticeBoard: React.FC = () => {
     }
 
     try {
-      await api.put(`/notices/${editingNotice._id}`, {
+      await api.patch(`/notices/${editingNotice._id}`, {
         content: editContent.trim()
       });
       setShowEditForm(false);
@@ -440,9 +440,12 @@ const NoticeBoard: React.FC = () => {
 
       {showEditForm && editingNotice && (
         <Dialog open={showEditForm} onOpenChange={setShowEditForm}>
-          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto" aria-describedby="edit-notice-description">
             <DialogHeader>
               <DialogTitle>Edit Notice</DialogTitle>
+              <p id="edit-notice-description" className="text-sm text-muted-foreground">
+                Edit the content of the selected notice. Changes will be saved immediately.
+              </p>
             </DialogHeader>
             <div className="space-y-4">
               <div className="text-sm text-muted-foreground">
