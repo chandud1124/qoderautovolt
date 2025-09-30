@@ -6,7 +6,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Loader2, Upload, X } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Loader2, Upload, X, Plus, Tag } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import api from '@/services/api';
 import { NoticeSubmissionData } from '@/types';
@@ -22,10 +23,13 @@ const NoticeSubmissionForm: React.FC<NoticeSubmissionFormProps> = ({ onClose, on
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<File[]>([]);
+  const [tagInput, setTagInput] = useState('');
 
   const [formData, setFormData] = useState<NoticeSubmissionData>({
     title: '',
     content: '',
+    contentType: 'text',
+    tags: [],
     priority: 'medium',
     category: 'general',
     targetAudience: {},
@@ -62,6 +66,25 @@ const NoticeSubmissionForm: React.FC<NoticeSubmissionFormProps> = ({ onClose, on
     setAttachments(prev => prev.filter((_, i) => i !== index));
   };
 
+  const addTag = () => {
+    const tag = tagInput.trim().toLowerCase();
+    if (tag && !formData.tags.includes(tag) && formData.tags.length < 10) {
+      handleInputChange('tags', [...formData.tags, tag]);
+      setTagInput('');
+    }
+  };
+
+  const removeTag = (tagToRemove: string) => {
+    handleInputChange('tags', formData.tags.filter(tag => tag !== tagToRemove));
+  };
+
+  const handleTagKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addTag();
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -77,6 +100,8 @@ const NoticeSubmissionForm: React.FC<NoticeSubmissionFormProps> = ({ onClose, on
       const submitData = new FormData();
       submitData.append('title', formData.title);
       submitData.append('content', formData.content);
+      submitData.append('contentType', formData.contentType);
+      submitData.append('tags', JSON.stringify(formData.tags));
       submitData.append('priority', formData.priority);
       submitData.append('category', formData.category);
 
@@ -162,6 +187,69 @@ const NoticeSubmissionForm: React.FC<NoticeSubmissionFormProps> = ({ onClose, on
               rows={6}
               required
             />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="contentType">Content Type</Label>
+            <Select
+              value={formData.contentType}
+              onValueChange={(value: 'text' | 'image' | 'video' | 'document') => handleInputChange('contentType', value)}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select content type" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="text">Text</SelectItem>
+                <SelectItem value="image">Image</SelectItem>
+                <SelectItem value="video">Video</SelectItem>
+                <SelectItem value="document">Document</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="tags">Tags (Optional)</Label>
+            <div className="flex gap-2">
+              <Input
+                id="tags"
+                value={tagInput}
+                onChange={(e) => setTagInput(e.target.value)}
+                onKeyPress={handleTagKeyPress}
+                placeholder="Add tags (press Enter)"
+                className="flex-1"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={addTag}
+                disabled={!tagInput.trim() || formData.tags.length >= 10}
+              >
+                <Plus className="h-4 w-4" />
+              </Button>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Add up to 10 tags to help categorize your content. Press Enter or click + to add.
+            </p>
+            {formData.tags.length > 0 && (
+              <div className="flex flex-wrap gap-2 mt-2">
+                {formData.tags.map((tag, index) => (
+                  <Badge key={index} variant="secondary" className="flex items-center gap-1">
+                    <Tag className="h-3 w-3" />
+                    {tag}
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-4 w-4 p-0 hover:bg-transparent"
+                      onClick={() => removeTag(tag)}
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                  </Badge>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-4">

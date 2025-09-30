@@ -67,7 +67,7 @@ const submitNotice = async (req, res) => {
       });
     }
 
-    const { title, content, priority, category, expiryDate, targetAudience, selectedBoards } = req.body;
+    const { title, content, contentType, tags, priority, category, expiryDate, targetAudience, selectedBoards } = req.body;
     const submittedBy = req.user.id;
 
     // Process file attachments
@@ -90,6 +90,21 @@ const submitNotice = async (req, res) => {
       } catch (error) {
         // If parsing fails, use default (all users)
         parsedTargetAudience = {};
+      }
+    }
+
+    // Parse tags
+    let parsedTags = [];
+    if (tags) {
+      try {
+        parsedTags = JSON.parse(tags);
+        // Ensure tags are strings and filter out empty ones
+        parsedTags = parsedTags.filter(tag => typeof tag === 'string' && tag.trim().length > 0).map(tag => tag.trim().toLowerCase());
+        // Limit to 10 tags
+        parsedTags = parsedTags.slice(0, 10);
+      } catch (error) {
+        console.warn('Failed to parse tags:', error.message);
+        parsedTags = [];
       }
     }
 
@@ -117,6 +132,8 @@ const submitNotice = async (req, res) => {
     const notice = new Notice({
       title,
       content,
+      contentType: contentType || 'text',
+      tags: parsedTags,
       priority: priority || 'medium',
       category: category || 'general',
       submittedBy,
@@ -381,6 +398,113 @@ const reviewNotice = async (req, res) => {
   }
 };
 
+// Edit notice content (admin only)
+const editNotice = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, content, contentType, tags } = req.body;
+    const editedBy = req.user.id;
+
+    const notice = await Notice.findById(id);
+    if (!notice) {
+      return res.status(404).json({
+        success: false,
+        message: 'Notice not found'
+      });
+    }
+
+    if (notice.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: 'Only pending notices can be edited'
+      });
+    }
+
+    // Store previous values before updating
+    const previousValues = {
+      title: notice.title,
+      content: notice.content,
+      contentType: notice.contentType,
+      tags: notice.tags
+    };
+
+    // Update the notice fields
+    notice.title = title;
+    notice.content = content;
+    if (contentType) notice.contentType = contentType;
+    
+    // Process tags (ensure they are strings and filter out empty ones)
+    if (tags !== undefined) {
+      let processedTags = [];
+      if (Array.isArray(tags)) {
+        processedTags = tags.filter(tag => typeof tag === 'string' && tag.trim().length > 0).map(tag => tag.trim().toLowerCase());
+      }
+      // Limit to 10 tags
+      notice.tags = processedTags.slice(0, 10);
+    }
+
+    // Add edit history
+    notice.editHistory = notice.editHistory || [];
+    notice.editHistory.push({
+      editedBy,
+      editedAt: new Date(),
+      previousTitle: previousValues.title,
+      previousContent: previousValues.content,
+      previousContentType: previousValues.contentType,
+      previousTags: previousValues.tags
+    });
+
+    await notice.save();
+    await notice.populate('submittedBy', 'name email role');
+    await notice.populate('approvedBy', 'name email role');
+
+    // Emit real-time notification via MQTT
+    if (global.mqttClient && global.mqttClient.connected) {
+      const editData = {
+        notice: {
+          _id: notice._id,
+          title: notice.title,
+          content: notice.content,
+          contentType: notice.contentType,
+          tags: notice.tags,
+          status: notice.status
+        },
+        editedBy: req.user.name,
+        message: `Notice "${notice.title}" has been edited by admin`,
+        timestamp: new Date().toISOString()
+      };
+
+      global.mqttClient.publish('notices/edited', JSON.stringify(editData), { qos: 1 });
+
+      // Notify the submitter via MQTT
+      const personalNotification = {
+        type: 'notice_edited',
+        noticeId: notice._id,
+        title: notice.title,
+        editedBy: req.user.name,
+        message: `Your notice "${notice.title}" has been edited by an admin`,
+        timestamp: new Date().toISOString()
+      };
+
+      global.mqttClient.publish(`notices/user/${notice.submittedBy._id}`, JSON.stringify(personalNotification), { qos: 1 });
+    }
+
+    res.json({
+      success: true,
+      message: 'Notice updated successfully',
+      notice
+    });
+
+  } catch (error) {
+    console.error('Error editing notice:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to edit notice',
+      error: error.message
+    });
+  }
+};
+
 // Publish approved notice
 const publishNotice = async (req, res) => {
   try {
@@ -611,6 +735,7 @@ module.exports = {
   getActiveNotices,
   getPendingNotices,
   reviewNotice,
+  editNotice,
   publishNotice,
   updateNotice,
   deleteNotice,

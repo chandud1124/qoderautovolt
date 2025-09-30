@@ -196,6 +196,8 @@ export interface Notice {
   _id: string;
   title: string;
   content: string;
+  contentType: 'text' | 'image' | 'video' | 'document';
+  tags: string[];
   priority: 'low' | 'medium' | 'high' | 'urgent';
   category: 'general' | 'academic' | 'administrative' | 'event' | 'emergency' | 'maintenance';
   status: 'pending' | 'approved' | 'rejected' | 'published' | 'archived';
@@ -251,6 +253,8 @@ export interface Notice {
 export interface NoticeSubmissionData {
   title: string;
   content: string;
+  contentType: 'text' | 'image' | 'video' | 'document';
+  tags: string[];
   priority: 'low' | 'medium' | 'high' | 'urgent';
   category: 'general' | 'academic' | 'administrative' | 'event' | 'emergency' | 'maintenance';
   expiryDate?: string;
