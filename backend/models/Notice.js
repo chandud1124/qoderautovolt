@@ -13,6 +13,16 @@ const noticeSchema = new mongoose.Schema({
     trim: true,
     maxlength: [2000, 'Content cannot exceed 2000 characters']
   },
+  contentType: {
+    type: String,
+    enum: ['announcement', 'event', 'news', 'alert', 'information', 'reminder'],
+    default: 'announcement'
+  },
+  tags: [{
+    type: String,
+    trim: true,
+    maxlength: [50, 'Tag cannot exceed 50 characters']
+  }],
   priority: {
     type: String,
     enum: ['low', 'medium', 'high', 'urgent'],
@@ -155,7 +165,15 @@ const noticeSchema = new mongoose.Schema({
   rejectionReason: {
     type: String,
     trim: true
-  }
+  },
+  editHistory: [{
+    editedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    editedAt: { type: Date, default: Date.now },
+    previousTitle: String,
+    previousContent: String,
+    previousContentType: String,
+    previousTags: [String]
+  }]
 }, {
   timestamps: true,
   toJSON: { virtuals: true },

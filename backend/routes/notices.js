@@ -6,6 +6,7 @@ const {
   getActiveNotices,
   getPendingNotices,
   reviewNotice,
+  editNotice,
   publishNotice,
   updateNotice,
   deleteNotice,
@@ -72,6 +73,21 @@ router.patch('/:id/review',
   param('id').isMongoId().withMessage('Invalid notice ID'),
   reviewValidation,
   reviewNotice
+);
+
+// Edit notice content - admin only
+router.patch('/:id/edit',
+  auth,
+  authorize('admin', 'super-admin'),
+  param('id').isMongoId().withMessage('Invalid notice ID'),
+  [
+    body('title').trim().isLength({ min: 1, max: 200 }).withMessage('Title must be 1-200 characters'),
+    body('content').trim().isLength({ min: 1, max: 2000 }).withMessage('Content must be 1-2000 characters'),
+    body('contentType').optional().isIn(['announcement', 'event', 'news', 'alert', 'information', 'reminder']).withMessage('Invalid content type'),
+    body('tags').optional().isArray().withMessage('Tags must be an array'),
+    body('tags.*').optional().isString().trim().isLength({ min: 1, max: 50 }).withMessage('Each tag must be 1-50 characters')
+  ],
+  editNotice
 );
 
 // Publish approved notice - admin only

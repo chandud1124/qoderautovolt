@@ -5,8 +5,10 @@ import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
+import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
-import { Loader2, CheckCircle, XCircle, Eye, AlertTriangle } from 'lucide-react';
+import { Loader2, CheckCircle, XCircle, Eye, AlertTriangle, Edit } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import api from '@/services/api';
 import { Notice, NoticeReviewData } from '@/types';
@@ -29,6 +31,14 @@ const NoticeApprovalPanel: React.FC<NoticeApprovalPanelProps> = ({ notices, onRe
     action: null
   });
   const [rejectionReason, setRejectionReason] = useState('');
+  const [editingNotice, setEditingNotice] = useState<Notice | null>(null);
+  const [editData, setEditData] = useState({
+    title: '',
+    content: '',
+    contentType: '',
+    tags: [] as string[]
+  });
+  const [tagInput, setTagInput] = useState('');
 
   const getPriorityColor = (priority: string) => {
     switch (priority) {
@@ -90,6 +100,61 @@ const NoticeApprovalPanel: React.FC<NoticeApprovalPanelProps> = ({ notices, onRe
     } finally {
       setLoading(null);
     }
+  };
+
+  const handleEdit = (notice: Notice) => {
+    setEditingNotice(notice);
+    setEditData({
+      title: notice.title,
+      content: notice.content,
+      contentType: notice.contentType || '',
+      tags: notice.tags || []
+    });
+    setTagInput('');
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingNotice) return;
+
+    setLoading(editingNotice._id);
+
+    try {
+      const response = await api.patch(`/notices/${editingNotice._id}/edit`, editData);
+
+      if (response.data.success) {
+        toast({
+          title: 'Notice updated successfully',
+          description: 'The notice has been updated and is ready for review.'
+        });
+        setEditingNotice(null);
+        onRefresh();
+      }
+    } catch (err: any) {
+      toast({
+        title: 'Update failed',
+        description: err.response?.data?.message || 'Failed to update notice',
+        variant: 'destructive'
+      });
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  const addTag = () => {
+    if (tagInput.trim() && !editData.tags.includes(tagInput.trim())) {
+      setEditData(prev => ({
+        ...prev,
+        tags: [...prev.tags, tagInput.trim()]
+      }));
+      setTagInput('');
+    }
+  };
+
+  const removeTag = (tagToRemove: string) => {
+    setEditData(prev => ({
+      ...prev,
+      tags: prev.tags.filter(tag => tag !== tagToRemove)
+    }));
   };
 
   const openReviewDialog = (notice: Notice, action: 'approve' | 'reject') => {
@@ -170,6 +235,15 @@ const NoticeApprovalPanel: React.FC<NoticeApprovalPanelProps> = ({ notices, onRe
                   )}
 
                   <div className="flex gap-2 pt-4">
+                    <Button
+                      onClick={() => handleEdit(notice)}
+                      disabled={loading === notice._id}
+                      variant="outline"
+                      className="flex-1"
+                    >
+                      <Edit className="h-4 w-4 mr-2" />
+                      Edit
+                    </Button>
                     <Button
                       onClick={() => openReviewDialog(notice, 'approve')}
                       disabled={loading === notice._id}
@@ -265,6 +339,112 @@ const NoticeApprovalPanel: React.FC<NoticeApprovalPanelProps> = ({ notices, onRe
             >
               {loading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               {reviewDialog.action === 'approve' ? 'Approve' : 'Reject'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={editingNotice !== null}
+        onOpenChange={(open) => !open && setEditingNotice(null)}
+      >
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Edit Notice</DialogTitle>
+            <DialogDescription>
+              Make changes to the notice content before approving it.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="editTitle">Title *</Label>
+              <Input
+                id="editTitle"
+                value={editData.title}
+                onChange={(e) => setEditData(prev => ({ ...prev, title: e.target.value }))}
+                placeholder="Enter notice title"
+                required
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="editContent">Content *</Label>
+              <Textarea
+                id="editContent"
+                value={editData.content}
+                onChange={(e) => setEditData(prev => ({ ...prev, content: e.target.value }))}
+                placeholder="Enter notice content"
+                rows={6}
+                required
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="editContentType">Content Type</Label>
+              <Select
+                value={editData.contentType}
+                onValueChange={(value) => setEditData(prev => ({ ...prev, contentType: value }))}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select content type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="announcement">Announcement</SelectItem>
+                  <SelectItem value="event">Event</SelectItem>
+                  <SelectItem value="news">News</SelectItem>
+                  <SelectItem value="alert">Alert</SelectItem>
+                  <SelectItem value="information">Information</SelectItem>
+                  <SelectItem value="reminder">Reminder</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Tags</Label>
+              <div className="flex gap-2">
+                <Input
+                  value={tagInput}
+                  onChange={(e) => setTagInput(e.target.value)}
+                  placeholder="Add a tag"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      addTag();
+                    }
+                  }}
+                />
+                <Button type="button" onClick={addTag} variant="outline">
+                  Add
+                </Button>
+              </div>
+              {editData.tags.length > 0 && (
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {editData.tags.map((tag, index) => (
+                    <Badge key={index} variant="secondary" className="cursor-pointer hover:bg-destructive hover:text-destructive-foreground transition-colors" onClick={() => removeTag(tag)}>
+                      {tag}
+                      <span className="ml-1 text-xs">×</span>
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setEditingNotice(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSaveEdit}
+              disabled={loading !== null || !editData.title.trim() || !editData.content.trim()}
+            >
+              {loading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Save Changes
             </Button>
           </DialogFooter>
         </DialogContent>

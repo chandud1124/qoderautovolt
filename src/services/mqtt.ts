@@ -47,6 +47,10 @@ class MqttService {
       if (this.reconnectAttempts === 0) {
         console.log('[MQTT] Retrying with direct MQTT connection...');
         this.connectDirect();
+      } else {
+        // If all connection attempts fail, stop trying
+        console.warn('[MQTT] All MQTT connection attempts failed. MQTT features will be disabled.');
+        this.client = null;
       }
     });
 
@@ -55,8 +59,13 @@ class MqttService {
     });
 
     this.client.on('reconnect', () => {
-      console.log('[MQTT] Reconnecting...');
       this.reconnectAttempts++;
+      if (this.reconnectAttempts <= 3) {
+        console.log('[MQTT] Reconnecting...');
+      } else if (this.reconnectAttempts === 4) {
+        console.warn('[MQTT] MQTT broker not available. Features requiring MQTT will be disabled.');
+      }
+      // Stop logging after 4 attempts to avoid console spam
     });
 
     this.client.on('message', (topic, message) => {

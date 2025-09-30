@@ -266,7 +266,13 @@ class SocketService {
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++;
       const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
-      console.log(`[Socket.IO] Reconnecting in ${delay}ms... Attempt ${this.reconnectAttempts}`);
+      
+      if (this.reconnectAttempts <= 3) {
+        console.log(`[Socket.IO] Reconnecting in ${delay}ms... Attempt ${this.reconnectAttempts}`);
+      } else if (this.reconnectAttempts === 4) {
+        console.warn('[Socket.IO] Connection issues detected. Some real-time features may not work.');
+      }
+      // Stop logging after 4 attempts to avoid console spam
 
       setTimeout(() => {
         if (this.socket && !this.socket.connected) {
