@@ -315,38 +315,66 @@ const NoticeSubmissionForm: React.FC<NoticeSubmissionFormProps> = ({ onClose, on
                 id="attachments"
                 type="file"
                 multiple
-                accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.txt"
+                accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.gif,.webp,.mp4,.avi,.mov,.wmv,.flv,.webm,.txt"
                 onChange={handleFileChange}
                 className="file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
               />
               <p className="text-sm text-muted-foreground">
-                Supported formats: PDF, DOC, DOCX, JPG, PNG, TXT. Max 10MB per file.
+                Supported formats: Images (JPG, PNG, GIF, WebP), Videos (MP4, AVI, MOV, WMV, FLV, WebM), PDFs, DOC, DOCX, TXT. Max 10MB per file.
               </p>
             </div>
 
             {attachments.length > 0 && (
               <div className="space-y-2">
                 <Label>Selected Files:</Label>
-                <div className="space-y-1">
-                  {attachments.map((file, index) => (
-                    <div key={index} className="flex items-center justify-between p-2 bg-gray-50 rounded">
-                      <div className="flex items-center gap-2">
-                        <Upload className="h-4 w-4" />
-                        <span className="text-sm">{file.name}</span>
-                        <span className="text-xs text-muted-foreground">
-                          ({(file.size / 1024 / 1024).toFixed(2)} MB)
-                        </span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {attachments.map((file, index) => {
+                    const isImage = file.type.startsWith('image/');
+                    const isVideo = file.type.startsWith('video/');
+                    const fileUrl = URL.createObjectURL(file);
+
+                    return (
+                      <div key={index} className="relative border rounded-lg p-3 bg-gray-50">
+                        {isImage && (
+                          <div className="mb-2">
+                            <img
+                              src={fileUrl}
+                              alt={file.name}
+                              className="w-full h-32 object-cover rounded"
+                              onLoad={() => URL.revokeObjectURL(fileUrl)}
+                            />
+                          </div>
+                        )}
+                        {isVideo && (
+                          <div className="mb-2">
+                            <video
+                              src={fileUrl}
+                              className="w-full h-32 object-cover rounded"
+                              controls
+                              onLoad={() => URL.revokeObjectURL(fileUrl)}
+                            />
+                          </div>
+                        )}
+                        <div className="flex items-center justify-between">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium truncate">{file.name}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {(file.size / 1024 / 1024).toFixed(2)} MB
+                            </p>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="ml-2 h-8 w-8 p-0"
+                            onClick={() => removeAttachment(index)}
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
                       </div>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => removeAttachment(index)}
-                      >
-                        <X className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}

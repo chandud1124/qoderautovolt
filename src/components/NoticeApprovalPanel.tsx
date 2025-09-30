@@ -8,7 +8,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
-import { Loader2, CheckCircle, XCircle, Eye, AlertTriangle, Edit } from 'lucide-react';
+import { Loader2, CheckCircle, XCircle, Eye, AlertTriangle, Edit, FileText } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import api from '@/services/api';
 import { Notice, NoticeReviewData } from '@/types';
@@ -218,18 +218,53 @@ const NoticeApprovalPanel: React.FC<NoticeApprovalPanelProps> = ({ notices, onRe
                   {notice.attachments && notice.attachments.length > 0 && (
                     <div>
                       <h4 className="font-medium mb-2">Attachments:</h4>
-                      <div className="flex flex-wrap gap-2">
-                        {notice.attachments.map((attachment, index) => (
-                          <Button
-                            key={index}
-                            variant="outline"
-                            size="sm"
-                            onClick={() => window.open(attachment.url, '_blank')}
-                          >
-                            <Eye className="h-4 w-4 mr-1" />
-                            {attachment.originalName}
-                          </Button>
-                        ))}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {notice.attachments.map((attachment, index) => {
+                          const isImage = attachment.mimetype?.startsWith('image/');
+                          const isVideo = attachment.mimetype?.startsWith('video/');
+
+                          return (
+                            <div key={index} className="border rounded-lg p-3 bg-gray-50">
+                              {isImage && (
+                                <div className="mb-2">
+                                  <img
+                                    src={attachment.url}
+                                    alt={attachment.originalName}
+                                    className="w-full h-32 object-cover rounded cursor-pointer"
+                                    onClick={() => window.open(attachment.url, '_blank')}
+                                  />
+                                </div>
+                              )}
+                              {isVideo && (
+                                <div className="mb-2">
+                                  <video
+                                    src={attachment.url}
+                                    className="w-full h-32 object-cover rounded cursor-pointer"
+                                    controls
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      window.open(attachment.url, '_blank');
+                                    }}
+                                  />
+                                </div>
+                              )}
+                              {!isImage && !isVideo && (
+                                <div className="mb-2 flex items-center justify-center h-32 bg-gray-200 rounded">
+                                  <FileText className="h-8 w-8 text-gray-500" />
+                                </div>
+                              )}
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="w-full"
+                                onClick={() => window.open(attachment.url, '_blank')}
+                              >
+                                <Eye className="h-4 w-4 mr-1" />
+                                {attachment.originalName}
+                              </Button>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
