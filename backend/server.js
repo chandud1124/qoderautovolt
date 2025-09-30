@@ -13,8 +13,8 @@ const routeMonitor = require('./middleware/routeMonitor');
 
 // --- MQTT client for Mosquitto broker (for ESP32 communication) ---
 const mqtt = require('mqtt');
-const MOSQUITTO_PORT = 1883;
-const MOSQUITTO_HOST = '192.168.0.108'; // Updated to correct broker IP
+const MOSQUITTO_PORT = 1884; // Use local Aedes broker port
+const MOSQUITTO_HOST = 'localhost'; // Use local MQTT broker
 
 const mqttClient = mqtt.connect(`mqtt://${MOSQUITTO_HOST}:${MOSQUITTO_PORT}`, {
   clientId: 'backend_server',
@@ -25,7 +25,7 @@ const mqttClient = mqtt.connect(`mqtt://${MOSQUITTO_HOST}:${MOSQUITTO_PORT}`, {
 });
 
 mqttClient.on('connect', () => {
-  console.log('[MQTT] Connected to Mosquitto broker on port 1883');
+  console.log(`[MQTT] Connected to Aedes broker on port ${MOSQUITTO_PORT}`);
   mqttClient.subscribe('esp32/state', (err) => {
     if (!err) {
       console.log('[MQTT] Subscribed to esp32/state');
@@ -36,6 +36,18 @@ mqttClient.on('connect', () => {
       console.log('[MQTT] Subscribed to esp32/telemetry');
     }
   });
+});
+
+mqttClient.on('error', (error) => {
+  console.error('[MQTT] Connection error:', error.message);
+});
+
+mqttClient.on('offline', () => {
+  console.log('[MQTT] Client offline');
+});
+
+mqttClient.on('reconnect', () => {
+  console.log('[MQTT] Reconnecting...');
 });
 
 mqttClient.on('message', (topic, message) => {
@@ -169,6 +181,21 @@ mqttClient.on('message', (topic, message) => {
                   userAgent: 'ESP32 Manual Switch'
                 });
 
+                // Also log to ManualSwitchLog for dedicated manual switch tracking
+                await ManualSwitchLog.create({
+                  deviceId: device._id,
+                  deviceName: device.name,
+                  deviceMac: device.macAddress,
+                  switchId: switchInfo._id.toString(),
+                  switchName: switchInfo.name,
+                  physicalPin: data.gpio,
+                  action: data.state ? 'manual_on' : 'manual_off',
+                  previousState: !data.state ? 'on' : 'off', // Assuming toggle, so previous is opposite
+                  newState: data.state ? 'on' : 'off',
+                  detectedBy: 'gpio_interrupt',
+                  location: device.location
+                });
+
                 console.log(`[ACTIVITY] Logged manual switch: ${device.name} - ${switchInfo.name} -> ${data.state ? 'ON' : 'OFF'}`);
 
                 // Emit real-time update to frontend
@@ -192,8 +219,46 @@ mqttClient.on('message', (topic, message) => {
             }
           })
           .catch(err => console.error('[MQTT] Error processing manual switch:', err.message));
+      } else if (data.status === 'heartbeat') {
+        // Handle heartbeat telemetry to keep device online
+        console.log('[MQTT] Heartbeat received from device:', data.mac);
+        const Device = require('./models/Device');
+
+        // Normalize MAC address
+        function normalizeMac(mac) {
+          return mac.replace(/[^a-fA-F0-9]/g, '').toLowerCase();
+        }
+        const normalizedMac = normalizeMac(data.mac);
+
+        Device.findOneAndUpdate(
+          { $or: [
+            { macAddress: data.mac },
+            { macAddress: data.mac.toUpperCase() },
+            { macAddress: data.mac.toLowerCase() },
+            { macAddress: normalizedMac },
+            { macAddress: normalizedMac.toUpperCase() },
+            { macAddress: normalizedMac.toLowerCase() }
+          ] },
+          {
+            $set: {
+              status: 'online',
+              lastSeen: new Date(),
+              heap: data.heap // Store heap info if available
+            }
+          },
+          { new: true }
+        ).then(device => {
+          if (device) {
+            console.log(`[MQTT] Updated heartbeat for device: ${device.name} (${device.macAddress})`);
+            // Emit real-time update if status was previously offline
+            if (global.io && device.status !== 'online') {
+              emitDeviceStateChanged(device, { source: 'mqtt_heartbeat' });
+            }
+          } else {
+            console.warn(`[MQTT] Heartbeat from unknown device: ${data.mac}`);
+          }
+        }).catch(err => console.error('[MQTT] Error processing heartbeat:', err.message));
       }
-      // TODO: store other telemetry data if needed
     } catch (err) {
       console.warn('[MQTT] Failed to parse telemetry JSON:', err.message);
     }
@@ -203,6 +268,9 @@ mqttClient.on('message', (topic, message) => {
 mqttClient.on('error', (error) => {
   console.error('[MQTT] Connection error:', error);
 });
+
+// Make MQTT client available globally (routes will access it after app init)
+global.mqttClient = mqttClient;
 
 // -----------------------------------------------------------------------------
 // Device state sequencing & unified emit helper
@@ -425,6 +493,9 @@ mongoose.connection.on('error', (err) => {
 
 const app = express();
 const server = http.createServer(app);
+
+// Make MQTT client available to routes
+app.set('mqttClient', mqttClient);
 
 // Add request logging to the HTTP server
 server.on('request', (req, res) => {
@@ -1069,7 +1140,8 @@ server.listen(PORT, '0.0.0.0', () => {
     }
 
     // Start device monitoring service (5-minute checks)
-    // deviceMonitoringService.start(); // Temporarily disabled for debugging
+    const deviceMonitoringService = require('./services/deviceMonitoringService');
+    deviceMonitoringService.start();
 
     console.log('[SERVICES] Enhanced logging and monitoring services started');
   }, 5000); // Wait 5 seconds for database connection

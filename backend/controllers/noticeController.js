@@ -131,21 +131,35 @@ const submitNotice = async (req, res) => {
     // Populate submittedBy for response
     await notice.populate('submittedBy', 'name email role');
 
-    // Emit real-time notification
-    if (req.io) {
-      req.io.emit('notice_submitted', {
-        notice: notice,
-        message: 'New notice submitted for approval'
-      });
+    // Emit real-time notification via MQTT
+    if (global.mqttClient && global.mqttClient.connected) {
+      const noticeData = {
+        notice: {
+          _id: notice._id,
+          title: notice.title,
+          content: notice.content,
+          priority: notice.priority,
+          category: notice.category,
+          submittedBy: notice.submittedBy,
+          createdAt: notice.createdAt
+        },
+        message: 'New notice submitted for approval',
+        timestamp: new Date().toISOString()
+      };
 
-      // Notify admins
-      req.io.emit('admin_notification', {
+      global.mqttClient.publish('notices/submitted', JSON.stringify(noticeData), { qos: 1 });
+
+      // Notify admins via MQTT
+      const adminNotification = {
         type: 'notice_pending_approval',
         noticeId: notice._id,
         title: notice.title,
         submittedBy: notice.submittedBy.name,
-        message: 'A new notice is pending approval'
-      });
+        message: 'A new notice is pending approval',
+        timestamp: new Date().toISOString()
+      };
+
+      global.mqttClient.publish('notices/admin', JSON.stringify(adminNotification), { qos: 1 });
     }
 
     res.status(201).json({
@@ -318,24 +332,37 @@ const reviewNotice = async (req, res) => {
     await notice.populate('submittedBy', 'name email role');
     await notice.populate('approvedBy', 'name email role');
 
-    // Emit real-time notification
-    if (req.io) {
-      req.io.emit('notice_reviewed', {
-        notice: notice,
+    // Emit real-time notification via MQTT
+    if (global.mqttClient && global.mqttClient.connected) {
+      const reviewData = {
+        notice: {
+          _id: notice._id,
+          title: notice.title,
+          status: notice.status,
+          approvedBy: notice.approvedBy,
+          approvedAt: notice.approvedAt,
+          rejectionReason: notice.rejectionReason
+        },
         action: action,
         reviewedBy: req.user.name,
-        message: `Notice "${notice.title}" has been ${action === 'approve' ? 'approved' : 'rejected'}`
-      });
+        message: `Notice "${notice.title}" has been ${action === 'approve' ? 'approved' : 'rejected'}`,
+        timestamp: new Date().toISOString()
+      };
 
-      // Notify the submitter
-      req.io.to(`user_${notice.submittedBy._id}`).emit('personal_notification', {
+      global.mqttClient.publish('notices/reviewed', JSON.stringify(reviewData), { qos: 1 });
+
+      // Notify the submitter via MQTT
+      const personalNotification = {
         type: 'notice_review_result',
         noticeId: notice._id,
         title: notice.title,
         action: action,
         reviewedBy: req.user.name,
-        message: `Your notice "${notice.title}" has been ${action === 'approve' ? 'approved' : 'rejected'}`
-      });
+        message: `Your notice "${notice.title}" has been ${action === 'approve' ? 'approved' : 'rejected'}`,
+        timestamp: new Date().toISOString()
+      };
+
+      global.mqttClient.publish(`notices/user/${notice.submittedBy._id}`, JSON.stringify(personalNotification), { qos: 1 });
     }
 
     res.json({
@@ -378,12 +405,23 @@ const publishNotice = async (req, res) => {
     notice.publishedAt = new Date();
     await notice.save();
 
-    // Emit real-time notification
-    if (req.io) {
-      req.io.emit('notice_published', {
-        notice: notice,
-        message: `Notice "${notice.title}" has been published`
-      });
+    // Emit real-time notification via MQTT
+    if (global.mqttClient && global.mqttClient.connected) {
+      const publishData = {
+        notice: {
+          _id: notice._id,
+          title: notice.title,
+          content: notice.content,
+          priority: notice.priority,
+          category: notice.category,
+          publishedAt: notice.publishedAt,
+          targetAudience: notice.targetAudience
+        },
+        message: `Notice "${notice.title}" has been published`,
+        timestamp: new Date().toISOString()
+      };
+
+      global.mqttClient.publish('notices/published', JSON.stringify(publishData), { qos: 1 });
     }
 
     res.json({

@@ -126,7 +126,7 @@ void sendQueuedOfflineEvents() {
 // --- GLOBALS AND MACROS (must be before all function usage) ---
 
 #define MQTT_BROKER "192.168.0.108" // Set to backend IP or broker IP
-#define MQTT_PORT 1883
+#define MQTT_PORT 1884
 #define MQTT_CLIENT_ID "esp32_001"
 #define MQTT_USER "d6c498bc1c92fde490d198ec65048e20cd3cdb6a5c73e794"
 #define MQTT_PASSWORD ""

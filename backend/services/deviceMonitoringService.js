@@ -10,7 +10,7 @@ class DeviceMonitoringService {
   constructor() {
     this.monitoringInterval = null;
     this.isRunning = false;
-    this.checkIntervalMs = 5 * 60 * 1000; // 5 minutes
+    this.checkIntervalMs = 30 * 1000; // 30 seconds
   }
 
   // Start the monitoring service
@@ -21,15 +21,19 @@ class DeviceMonitoringService {
     }
 
     this.isRunning = true;
-    console.log('[MONITORING] Starting device monitoring service (5-minute intervals)');
+    console.log('[MONITORING] Starting device monitoring service (30-second intervals)');
     
     // Run initial check
     this.performMonitoringCheck();
     
     // Set up recurring checks
+    console.log(`[MONITORING] Setting up interval with ${this.checkIntervalMs}ms`);
     this.monitoringInterval = setInterval(() => {
+      console.log('[MONITORING] Interval triggered - running monitoring check');
       this.performMonitoringCheck();
     }, this.checkIntervalMs);
+    
+    console.log('[MONITORING] Interval set up successfully');
   }
 
   // Stop the monitoring service
@@ -48,8 +52,10 @@ class DeviceMonitoringService {
       console.log('[MONITORING] Starting scheduled device status check...');
 
       const devices = await Device.find({}).sort({ name: 1 });
+      console.log(`[MONITORING] Found ${devices.length} devices to check`);
 
       for (const device of devices) {
+        console.log(`[STATUS-CHECK] Checking device: ${device.name} (${device.macAddress}) - Status: ${device.status}, LastSeen: ${device.lastSeen}`);
         await this.checkDeviceStatus(device);
         // Small delay between devices to prevent overwhelming
         await this.sleep(1000);
@@ -90,6 +96,8 @@ class DeviceMonitoringService {
       const deviceStatus = await this.getDeviceStatus(device);
       statusData.deviceStatus = deviceStatus;
 
+      console.log(`[STATUS-CHECK] ${device.name} - isOnline: ${deviceStatus.isOnline}, timeSinceLastSeen: ${device.lastSeen ? (new Date() - device.lastSeen) / 1000 : 'never'} seconds`);
+
       // Get network info
       const networkInfo = await this.getNetworkInfo(device);
       statusData.networkInfo = networkInfo;
@@ -105,10 +113,55 @@ class DeviceMonitoringService {
       // Log the status
       await EnhancedLoggingService.logDeviceStatus(statusData);
 
-      // Update device last checked timestamp
+      // Check if device status changed and send real-time notification
+      const previousStatus = device.status;
+      const newStatus = deviceStatus.isOnline ? 'online' : 'offline';
+      
+      if (previousStatus !== newStatus) {
+        console.log(`[MONITORING] Device ${device.name} status changed: ${previousStatus} -> ${newStatus}`);
+        
+        // Send real-time notification
+        if (global.io) {
+          global.io.emit('device_state_changed', {
+            deviceId: device._id,
+            state: {
+              id: device._id,
+              name: device.name,
+              status: newStatus,
+              switches: device.switches || [],
+              lastSeen: deviceStatus.lastSeen,
+              macAddress: device.macAddress,
+              location: device.location,
+              classroom: device.classroom
+            },
+            ts: Date.now(),
+            source: 'monitoring_check'
+          });
+          
+          // Also emit device_connected/disconnected for compatibility
+          if (newStatus === 'online') {
+            global.io.emit('device_connected', {
+              deviceId: device._id,
+              deviceName: device.name,
+              location: device.location,
+              macAddress: device.macAddress,
+              lastSeen: deviceStatus.lastSeen
+            });
+          } else {
+            global.io.emit('device_disconnected', {
+              deviceId: device._id,
+              deviceName: device.name,
+              macAddress: device.macAddress,
+              lastSeen: device.lastSeen
+            });
+          }
+        }
+      }
+
+      // Update device last checked timestamp and status
       await Device.findByIdAndUpdate(device._id, {
         lastStatusCheck: new Date(),
-        isOnline: deviceStatus.isOnline
+        status: newStatus
       });
 
     } catch (error) {
@@ -178,7 +231,7 @@ class DeviceMonitoringService {
     try {
       const now = new Date();
       const timeSinceLastSeen = device.lastSeen ? now - device.lastSeen : Infinity;
-      const isOnline = timeSinceLastSeen < (2 * 60 * 1000); // 2 minutes (consistent with server offline detection)
+      const isOnline = timeSinceLastSeen < (30 * 1000); // 30 second timeout
 
       return {
         isOnline: isOnline,

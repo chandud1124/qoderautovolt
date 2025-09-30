@@ -14,9 +14,12 @@ import ContentScheduler from '@/components/ContentScheduler';
 import { useAuth } from '@/hooks/useAuth';
 import { Notice, NoticeFilters } from '@/types';
 import api from '@/services/api';
+import mqttService from '@/services/mqtt';
+import { useToast } from '@/hooks/use-toast';
 
 const NoticeBoard: React.FC = () => {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [notices, setNotices] = useState<Notice[]>([]);
   const [activeNotices, setActiveNotices] = useState<Notice[]>([]);
   const [pendingNotices, setPendingNotices] = useState<Notice[]>([]);
@@ -89,7 +92,82 @@ const NoticeBoard: React.FC = () => {
   useEffect(() => {
     fetchNotices();
     fetchBoards();
-  }, [filters, user]);
+
+    // Set up MQTT event listeners for real-time updates
+    const handleNoticeSubmitted = (data: any) => {
+      console.log('[MQTT] Notice submitted:', data);
+      toast({
+        title: 'New Notice Submitted',
+        description: `A new notice "${data.notice.title}" has been submitted for approval.`,
+      });
+      // Refresh notices to show the new submission
+      fetchNotices();
+    };
+
+    const handleNoticeReviewed = (data: any) => {
+      console.log('[MQTT] Notice reviewed:', data);
+      toast({
+        title: `Notice ${data.action}d`,
+        description: `Notice "${data.notice.title}" has been ${data.action === 'approve' ? 'approved' : 'rejected'}.`,
+      });
+      // Refresh notices to update the status
+      fetchNotices();
+    };
+
+    const handleNoticePublished = (data: any) => {
+      console.log('[MQTT] Notice published:', data);
+      toast({
+        title: 'Notice Published',
+        description: `Notice "${data.notice.title}" is now active and visible to users.`,
+      });
+      // Refresh notices to show the published notice
+      fetchNotices();
+    };
+
+    const handleAdminNotification = (data: any) => {
+      console.log('[MQTT] Admin notification:', data);
+      if (user?.role === 'admin' || user?.role === 'super-admin') {
+        toast({
+          title: 'Admin Alert',
+          description: data.message,
+          variant: 'destructive',
+        });
+      }
+    };
+
+    const handlePersonalNotification = (data: any) => {
+      console.log('[MQTT] Personal notification:', data);
+      toast({
+        title: 'Notice Update',
+        description: data.message,
+      });
+    };
+
+    // Subscribe to MQTT topics
+    mqttService.on('notices/submitted', handleNoticeSubmitted);
+    mqttService.on('notices/reviewed', handleNoticeReviewed);
+    mqttService.on('notices/published', handleNoticePublished);
+    mqttService.on('notices/admin', handleAdminNotification);
+
+    // Subscribe to user-specific topic if user is logged in
+    if (user?.id) {
+      mqttService.subscribeToUserTopics(user.id);
+      mqttService.on(`notices/user/${user.id}`, handlePersonalNotification);
+    }
+
+    // Cleanup function
+    return () => {
+      mqttService.off('notices/submitted', handleNoticeSubmitted);
+      mqttService.off('notices/reviewed', handleNoticeReviewed);
+      mqttService.off('notices/published', handleNoticePublished);
+      mqttService.off('notices/admin', handleAdminNotification);
+
+      if (user?.id) {
+        mqttService.off(`notices/user/${user.id}`, handlePersonalNotification);
+        mqttService.unsubscribeFromUserTopics(user.id);
+      }
+    };
+  }, [filters, user, toast]);
 
   const handleEditNotice = (notice: Notice) => {
     setEditingNotice(notice);
