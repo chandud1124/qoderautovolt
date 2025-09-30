@@ -125,10 +125,10 @@ void sendQueuedOfflineEvents() {
 
 // --- GLOBALS AND MACROS (must be before all function usage) ---
 
-#define MQTT_BROKER "192.168.0.108" // Set to backend IP or broker IP
-#define MQTT_PORT 1884
+#define MQTT_BROKER "172.16.3.171" // Set to backend IP or broker IP
+#define MQTT_PORT 1883
 #define MQTT_CLIENT_ID "esp32_001"
-#define MQTT_USER "d6c498bc1c92fde490d198ec65048e20cd3cdb6a5c73e794"
+#define MQTT_USER ""
 #define MQTT_PASSWORD ""
 #define SWITCH_TOPIC "esp32/switches"
 #define STATE_TOPIC "esp32/state"
@@ -563,6 +563,8 @@ void setup() {
   Serial.begin(115200);
   Serial.println("\nESP32 Classroom Automation System (MQTT)");
   // Register main task with watchdog (10s timeout, panic on trigger)
+  // Commenting out watchdog init as it's already initialized by Arduino core
+  /*
 #if defined(ESP_IDF_VERSION)
   // ESP-IDF style (if available)
   esp_task_wdt_config_t wdt_config = {
@@ -575,12 +577,14 @@ void setup() {
   // For Arduino-ESP32 3.x, just add the task (init is done by core)
 #endif
   esp_task_wdt_add(NULL);
+  */
   // Initialize switches with relay/manual mapping
   initSwitches();
   // Load any queued offline events from previous sessions
   loadOfflineEventsFromNVS();
   // ...existing setup code for relays, NVS, offline events, etc...
   setup_wifi();
+  Serial.println("WiFi setup complete, initializing MQTT...");
   mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
   mqttClient.setBufferSize(512); // Increase buffer size for larger state messages
   mqttClient.setCallback(mqttCallback);
@@ -588,7 +592,7 @@ void setup() {
 }
 
 void loop() {
-  esp_task_wdt_reset();
+  // esp_task_wdt_reset(); // Commented out since watchdog not initialized
   // Always allow manual switches to work, even if offline
   handleManualSwitches();
   // Periodic state update to keep backend informed

@@ -4,8 +4,8 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#define WIFI_SSID "I am Not A Witch I am Your Wifi"           // Your WiFi SSID
-#define WIFI_PASSWORD "Whoareu@0000"   // Your WiFi password
+#define WIFI_SSID "AIMS-WIFI"           // Your WiFi SSID
+#define WIFI_PASSWORD "Aimswifi#2025"   // Your WiFi password
 
 #define DEVICE_SECRET "d6c498bc1c92fde490d198ec65048e20cd3cdb6a5c73e794" // Optional: Device secret/API key for authentication
 

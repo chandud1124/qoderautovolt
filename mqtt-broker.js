@@ -7,8 +7,8 @@ import http from 'http';
 import websocket from 'websocket-stream';
 
 const broker = aedes();
-const MQTT_PORT = 1884; // Use different port to avoid conflict with existing Mosquitto
-const WS_PORT = 8084; // Use different port for WebSocket
+const MQTT_PORT = 1883; // Use standard MQTT port
+const WS_PORT = 8083; // Use standard WS port
 const HOST = '0.0.0.0'; // Listen on all interfaces
 
 // MQTT over TCP (standard)
@@ -27,11 +27,6 @@ httpServer.listen(WS_PORT, HOST, function () {
 
 // Use websocket-stream for WebSocket MQTT
 websocket.createServer({ server: httpServer }, broker.handle);
-
-httpServer.listen(WS_PORT, HOST, function () {
-  const address = httpServer.address();
-  console.log(`MQTT broker (WebSocket) listening on ${address.address}:${address.port}`);
-});
 
 broker.on('client', function (client) {
   console.log(`Client Connected: ${client ? client.id : 'unknown'} to broker`);

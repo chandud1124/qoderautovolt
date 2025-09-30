@@ -13,7 +13,7 @@ const routeMonitor = require('./middleware/routeMonitor');
 
 // --- MQTT client for Mosquitto broker (for ESP32 communication) ---
 const mqtt = require('mqtt');
-const MOSQUITTO_PORT = 1884; // Use local Aedes broker port
+const MOSQUITTO_PORT = 1883; // Use standard MQTT port
 const MOSQUITTO_HOST = 'localhost'; // Use local MQTT broker
 
 const mqttClient = mqtt.connect(`mqtt://${MOSQUITTO_HOST}:${MOSQUITTO_PORT}`, {
@@ -26,14 +26,9 @@ const mqttClient = mqtt.connect(`mqtt://${MOSQUITTO_HOST}:${MOSQUITTO_PORT}`, {
 
 mqttClient.on('connect', () => {
   console.log(`[MQTT] Connected to Aedes broker on port ${MOSQUITTO_PORT}`);
-  mqttClient.subscribe('esp32/state', (err) => {
+  mqttClient.subscribe('#', (err) => {
     if (!err) {
-      console.log('[MQTT] Subscribed to esp32/state');
-    }
-  });
-  mqttClient.subscribe('esp32/telemetry', (err) => {
-    if (!err) {
-      console.log('[MQTT] Subscribed to esp32/telemetry');
+      console.log('[MQTT] Subscribed to all topics (#) to receive from all devices');
     }
   });
 });
@@ -87,6 +82,24 @@ mqttClient.on('message', (topic, message) => {
       ).then(device => {
         if (device) {
           console.log(`[MQTT] Marked device ${device.macAddress} as online`);
+          // Update switch states from ESP32 payload if switches array is present
+          if (data.switches && Array.isArray(data.switches)) {
+            let switchUpdated = false;
+            data.switches.forEach(esp32Switch => {
+              const deviceSwitch = device.switches.find(s => (s.relayGpio || s.gpio) === esp32Switch.gpio);
+              if (deviceSwitch && deviceSwitch.state !== esp32Switch.state) {
+                deviceSwitch.state = esp32Switch.state;
+                deviceSwitch.manualOverride = esp32Switch.manual_override || false;
+                deviceSwitch.lastStateChange = new Date();
+                switchUpdated = true;
+                console.log(`[MQTT] Updated switch GPIO ${esp32Switch.gpio} to state ${esp32Switch.state} for device ${device.macAddress}`);
+              }
+            });
+            if (switchUpdated) {
+              device.lastModifiedBy = null; // ESP32 update
+              device.save().catch(err => console.error('[MQTT] Error saving device switches:', err));
+            }
+          }
           // Emit to frontend via Socket.IO if available
           if (global.io) {
             // 1. Legacy event for backward compatibility

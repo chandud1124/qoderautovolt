@@ -8,8 +8,8 @@ class MqttService {
   private eventListeners: { [topic: string]: ((message: any) => void)[] } = {};
 
   constructor() {
-    // Try WebSocket MQTT first, fallback to direct MQTT if needed
-    this.connect();
+    // MQTT connection disabled - using Socket.IO for real-time features
+    // this.connect();
   }
 
   private connect() {
@@ -20,7 +20,7 @@ class MqttService {
     this.isConnecting = true;
 
     // Try WebSocket MQTT connection first (if broker supports it)
-    const wsBrokerUrl = `ws://localhost:8084/mqtt`;
+    const wsBrokerUrl = `ws://localhost:8083/mqtt`;
 
     console.log('[MQTT] Attempting WebSocket MQTT connection to:', wsBrokerUrl);
 
