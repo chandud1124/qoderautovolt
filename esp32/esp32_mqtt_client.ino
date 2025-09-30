@@ -127,7 +127,6 @@ void sendQueuedOfflineEvents() {
 
 #define MQTT_BROKER "172.16.3.171" // Set to backend IP or broker IP
 #define MQTT_PORT 1883
-#define MQTT_CLIENT_ID "esp32_001"
 #define MQTT_USER ""
 #define MQTT_PASSWORD ""
 #define SWITCH_TOPIC "esp32/switches"
@@ -136,6 +135,8 @@ void sendQueuedOfflineEvents() {
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
+
+char mqttClientId[24];
 
 // Number of switches (relays)
 #ifndef NUM_SWITCHES
@@ -363,7 +364,7 @@ void handleManualSwitches() {
 void sendHeartbeat() {
   static unsigned long lastHeartbeat = 0;
   unsigned long now = millis();
-  if (now - lastHeartbeat < 10000) return; // 10s interval
+  if (now - lastHeartbeat < 30000) return; // 30s interval (increased from 10s)
   lastHeartbeat = now;
   DynamicJsonDocument doc(128);
   doc["mac"] = WiFi.macAddress();
@@ -429,6 +430,11 @@ void setup_wifi() {
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
     connState = WIFI_ONLY;
+    // Set unique MQTT client ID based on MAC address
+    String mac = WiFi.macAddress();
+    mac.replace(":", "");
+    sprintf(mqttClientId, "ESP32_%s", mac.c_str());
+    Serial.printf("MQTT Client ID: %s\n", mqttClientId);
   } else {
     Serial.println("\nWiFi connection failed, running in offline mode");
     connState = WIFI_DISCONNECTED;
@@ -438,14 +444,10 @@ void setup_wifi() {
 void reconnect_mqtt() {
   while (!mqttClient.connected()) {
     Serial.print("Attempting MQTT connection...");
-    if (mqttClient.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASSWORD)) {
+    if (mqttClient.connect(mqttClientId, MQTT_USER, MQTT_PASSWORD)) {
       Serial.println("connected");
   mqttClient.subscribe(SWITCH_TOPIC);
-  // Publish online status to both telemetry and state topics, including MAC address
-  String mac = WiFi.macAddress();
-  String onlinePayload = String("{\"mac\":\"") + mac + String("\",\"status\":\"online\"}");
-  mqttClient.publish(TELEMETRY_TOPIC, onlinePayload.c_str());
-  mqttClient.publish(STATE_TOPIC, onlinePayload.c_str());
+  // Only send state update on reconnect, not online status (reduces spam)
   sendStateUpdate(true); // Send initial state
   sendQueuedOfflineEvents();
   connState = BACKEND_CONNECTED;
@@ -459,22 +461,45 @@ void reconnect_mqtt() {
   }
 }
 
+// Normalize MAC address: remove colons, make lowercase
+String normalizeMac(String mac) {
+  String normalized = "";
+  for (char c : mac) {
+    if (isAlphaNumeric(c)) {
+      normalized += toLowerCase(c);
+    }
+  }
+  return normalized;
+}
+
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   String message;
   for (unsigned int i = 0; i < length; i++) message += (char)payload[i];
   Serial.printf("[MQTT] Message arrived [%s]: %s\n", topic, message.c_str());
   if (String(topic) == SWITCH_TOPIC) {
-    // Parse command: expected format "relay1:on" or JSON {gpio,state}
+    // Parse command: expected format JSON with mac, gpio, state
     if (message.startsWith("{")) {
       DynamicJsonDocument doc(256);
       DeserializationError err = deserializeJson(doc, message);
-      if (!err && doc["gpio"].is<int>() && doc["state"].is<bool>()) {
-        int gpio = doc["gpio"];
-        bool state = doc["state"];
-        queueSwitchCommand(gpio, state);
-        processCommandQueue();
+      if (!err && doc["mac"].is<const char*>() && doc["gpio"].is<int>() && doc["state"].is<bool>()) {
+        String targetMac = doc["mac"];
+        String myMac = WiFi.macAddress();
+        // Normalize MAC addresses for comparison (remove colons, lowercase)
+        String normalizedTarget = normalizeMac(targetMac);
+        String normalizedMy = normalizeMac(myMac);
+        // Only process commands addressed to this device
+        if (normalizedTarget.equalsIgnoreCase(normalizedMy)) {
+          int gpio = doc["gpio"];
+          bool state = doc["state"];
+          queueSwitchCommand(gpio, state);
+          processCommandQueue();
+          Serial.printf("[MQTT] Processed command for this device: GPIO %d -> %s\n", gpio, state ? "ON" : "OFF");
+        } else {
+          Serial.printf("[MQTT] Ignored command for different device: %s (my MAC: %s)\n", targetMac.c_str(), myMac.c_str());
+        }
       }
     } else {
+      // Legacy format support (deprecated)
       int colon = message.indexOf(':');
       if (colon > 0) {
         String relay = message.substring(0, colon);
@@ -596,7 +621,7 @@ void loop() {
   // Always allow manual switches to work, even if offline
   handleManualSwitches();
   // Periodic state update to keep backend informed
-  if (millis() - lastStateSend > 5000) { // 5 seconds (reduced from 30s)
+  if (millis() - lastStateSend > 30000) { // 30 seconds (increased from 5s)
     sendStateUpdate(true);
     lastStateSend = millis();
   }

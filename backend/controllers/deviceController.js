@@ -674,7 +674,7 @@ const toggleSwitch = async (req, res) => {
     try {
       const gpio = (updatedSwitch && (updatedSwitch.relayGpio || updatedSwitch.gpio)) || (device.switches[switchIndex].relayGpio || device.switches[switchIndex].gpio);
       if (global.sendMqttSwitchCommand) {
-        global.sendMqttSwitchCommand(gpio, desiredState);
+        global.sendMqttSwitchCommand(updated.macAddress, gpio, desiredState);
         console.log(`[MQTT] Published switch command for device ${updated.macAddress}: gpio=${gpio}, state=${desiredState}`);
       } else {
         console.warn('[MQTT] sendMqttSwitchCommand not available');
@@ -903,7 +903,7 @@ const bulkToggleSwitches = async (req, res) => {
               // Send MQTT command to ESP32
               const gpio = sw.relayGpio || sw.gpio;
               if (global.sendMqttSwitchCommand) {
-                global.sendMqttSwitchCommand(gpio, sw.state);
+                global.sendMqttSwitchCommand(device.macAddress, gpio, sw.state);
                 console.log(`[MQTT] Bulk command sent for device ${device.macAddress}: gpio=${gpio}, state=${sw.state}`);
               } else {
                 console.warn('[MQTT] sendMqttSwitchCommand not available for bulk operation');
@@ -1113,7 +1113,7 @@ const bulkToggleByType = async (req, res) => {
             for (const sw of device.switches.filter(sw => sw.type === type)) {
               const gpio = sw.relayGpio || sw.gpio;
               if (global.sendMqttSwitchCommand) {
-                global.sendMqttSwitchCommand(gpio, sw.state);
+                global.sendMqttSwitchCommand(device.macAddress, gpio, sw.state);
                 console.log(`[MQTT] Bulk by type command sent for device ${device.macAddress}: gpio=${gpio}, state=${sw.state}, type=${type}`);
               } else {
                 console.warn('[MQTT] sendMqttSwitchCommand not available for bulk by type operation');
@@ -1192,7 +1192,7 @@ const bulkToggleByLocation = async (req, res) => {
           for (const sw of device.switches) {
             const gpio = sw.relayGpio || sw.gpio;
             if (global.sendMqttSwitchCommand) {
-              global.sendMqttSwitchCommand(gpio, sw.state);
+              global.sendMqttSwitchCommand(device.macAddress, gpio, sw.state);
               console.log(`[MQTT] Bulk by location command sent for device ${device.macAddress}: gpio=${gpio}, state=${sw.state}, location=${location}`);
             } else {
               console.warn('[MQTT] sendMqttSwitchCommand not available for bulk by location operation');

@@ -82,42 +82,46 @@ mqttClient.on('message', (topic, message) => {
       ).then(device => {
         if (device) {
           console.log(`[MQTT] Marked device ${device.macAddress} as online`);
+          let stateChanged = false;
+
           // Update switch states from ESP32 payload if switches array is present
           if (data.switches && Array.isArray(data.switches)) {
-            let switchUpdated = false;
             data.switches.forEach(esp32Switch => {
               const deviceSwitch = device.switches.find(s => (s.relayGpio || s.gpio) === esp32Switch.gpio);
               if (deviceSwitch && deviceSwitch.state !== esp32Switch.state) {
                 deviceSwitch.state = esp32Switch.state;
                 deviceSwitch.manualOverride = esp32Switch.manual_override || false;
                 deviceSwitch.lastStateChange = new Date();
-                switchUpdated = true;
+                stateChanged = true;
                 console.log(`[MQTT] Updated switch GPIO ${esp32Switch.gpio} to state ${esp32Switch.state} for device ${device.macAddress}`);
               }
             });
-            if (switchUpdated) {
-              device.lastModifiedBy = null; // ESP32 update
-              device.save().catch(err => console.error('[MQTT] Error saving device switches:', err));
-            }
           }
-          // Emit to frontend via Socket.IO if available
-          if (global.io) {
-            // 1. Legacy event for backward compatibility
-            global.io.emit('deviceStatusUpdate', {
-              macAddress: device.macAddress,
-              status: 'online',
-              lastSeen: device.lastSeen
-            });
-            // 2. device_state_changed for React UI
-            emitDeviceStateChanged(device, { source: 'mqtt_online' });
-            // 3. device_connected event for real-time UI feedback
-            global.io.emit('device_connected', {
-              deviceId: device.id || device._id?.toString(),
-              deviceName: device.name,
-              location: device.location || '',
-              macAddress: device.macAddress,
-              lastSeen: device.lastSeen
-            });
+
+          // Only emit events if state actually changed or this is the first time we're seeing the device online
+          if (stateChanged || device.status !== 'online') {
+            device.lastModifiedBy = null; // ESP32 update
+            device.save().catch(err => console.error('[MQTT] Error saving device switches:', err));
+
+            // Emit to frontend via Socket.IO if available
+            if (global.io) {
+              // 1. Legacy event for backward compatibility
+              global.io.emit('deviceStatusUpdate', {
+                macAddress: device.macAddress,
+                status: 'online',
+                lastSeen: device.lastSeen
+              });
+              // 2. device_state_changed for React UI (with debouncing)
+              emitDeviceStateChanged(device, { source: 'mqtt_online' });
+              // 3. device_connected event for real-time UI feedback
+              global.io.emit('device_connected', {
+                deviceId: device.id || device._id?.toString(),
+                deviceName: device.name,
+                location: device.location || '',
+                macAddress: device.macAddress,
+                lastSeen: device.lastSeen
+              });
+            }
           }
         } else {
           console.warn(`[MQTT] Device with MAC ${data.mac} (normalized: ${normalizedMac}) not found in DB`);
@@ -299,11 +303,51 @@ function nextDeviceSeq(deviceId) {
   return next;
 }
 
+// Debouncing for MQTT state messages to prevent spam
+const deviceStateDebounce = new Map(); // deviceId -> {timeoutId, lastStateHash}
+const DEBOUNCE_MS = 2000; // 2 second debounce window
+
 function emitDeviceStateChanged(device, meta = {}) {
   console.log(`[DEBUG] emitDeviceStateChanged called for device: ${device?.name || 'unknown'}`);
   if (!device) return;
   const deviceId = device.id || device._id?.toString();
   if (!deviceId) return;
+
+  // Create a simple hash of the device state for debouncing
+  const stateHash = JSON.stringify({
+    status: device.status,
+    switches: device.switches?.map(s => ({ id: s.id, state: s.state })) || []
+  });
+
+  // Check if we have a pending debounce for this device
+  const existing = deviceStateDebounce.get(deviceId);
+  if (existing) {
+    // If state hasn't changed, extend the debounce
+    if (existing.lastStateHash === stateHash) {
+      clearTimeout(existing.timeoutId);
+      existing.timeoutId = setTimeout(() => {
+        deviceStateDebounce.delete(deviceId);
+        emitDeviceStateChangedNow(device, meta);
+      }, DEBOUNCE_MS);
+      return;
+    }
+    // If state changed, clear the old timeout
+    clearTimeout(existing.timeoutId);
+  }
+
+  // Set up new debounce
+  const timeoutId = setTimeout(() => {
+    deviceStateDebounce.delete(deviceId);
+    emitDeviceStateChangedNow(device, meta);
+  }, DEBOUNCE_MS);
+
+  deviceStateDebounce.set(deviceId, { timeoutId, lastStateHash: stateHash });
+}
+
+function emitDeviceStateChangedNow(device, meta = {}) {
+  const deviceId = device.id || device._id?.toString();
+  if (!deviceId) return;
+
   const seq = nextDeviceSeq(deviceId);
   const payload = {
     deviceId,
@@ -324,8 +368,9 @@ function emitDeviceStateChanged(device, meta = {}) {
 }
 
 // Function to send switch commands to ESP32 via MQTT
-function sendMqttSwitchCommand(gpio, state) {
+function sendMqttSwitchCommand(macAddress, gpio, state) {
   const command = {
+    mac: macAddress, // Include MAC address to target specific device
     gpio: gpio,
     state: state
   };
@@ -689,24 +734,30 @@ server.on('upgrade', (req, socket, head) => {
 
 // Additional low-level Engine.IO diagnostics to help trace "Invalid frame header" issues
 // These logs are lightweight and only emit on meta events (not every packet) unless NODE_ENV=development
-io.engine.on('initial_headers', (headers, req) => {
-  logger.info('[engine] initial_headers', {
-    ua: req.headers['user-agent'],
-    url: req.url,
-    transport: req._query && req._query.transport,
-    sid: req._query && req._query.sid
-  });
-});
-io.engine.on('headers', (headers, req) => {
-  // This fires on each HTTP long-polling request; keep it quiet in production
-  if (process.env.NODE_ENV === 'development') {
-    logger.debug('[engine] headers', {
+if (process.env.NODE_ENV === 'development') {
+  io.engine.on('initial_headers', (headers, req) => {
+    logger.info('[engine] initial_headers', {
+      ua: req.headers['user-agent'],
+      url: req.url,
       transport: req._query && req._query.transport,
-      sid: req._query && req._query.sid,
-      upgrade: req._query && req._query.upgrade
+      sid: req._query && req._query.sid
     });
-  }
-});
+  });
+  io.engine.on('headers', (headers, req) => {
+    // This fires on each HTTP long-polling request; keep it quiet in production
+    if (process.env.NODE_ENV === 'development') {
+      logger.debug('[engine] headers', {
+        transport: req._query && req._query.transport,
+        sid: req._query && req._query.sid,
+        upgrade: req._query && req._query.upgrade
+      });
+    }
+  });
+} else {
+  // In production, only log connection events, not every polling request
+  io.engine.on('initial_headers', () => {});
+  io.engine.on('headers', () => {});
+}
 io.engine.on('connection', (rawSocket) => {
   logger.info('[engine] connection', {
     id: rawSocket.id,
@@ -927,6 +978,7 @@ io.on('connection', (socket) => {
 
       // Send MQTT command to ESP32 (JSON format)
       const command = {
+        mac: device.macAddress, // Include MAC address
         gpio: gpio,
         state: desiredState
       };
@@ -985,6 +1037,7 @@ io.on('connection', (socket) => {
         // Send MQTT command for each switch
         for (const switchInfo of switchesToToggle) {
           const command = {
+            mac: device.macAddress, // Include MAC address
             gpio: switchInfo.gpio,
             state: desiredState
           };

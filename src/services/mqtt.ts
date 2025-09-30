@@ -160,10 +160,10 @@ class MqttService {
 
   // Unsubscribe from user-specific topics (called on logout)
   unsubscribeFromUserTopics(userId: string) {
-    if (!this.client && this.client!.connected) return;
+    if (!this.client || !this.client.connected) return;
 
     const userTopic = `notices/user/${userId}`;
-    this.client!.unsubscribe(userTopic, (err) => {
+    this.client.unsubscribe(userTopic, (err) => {
       if (!err) {
         console.log(`[MQTT] Unsubscribed from user topic: ${userTopic}`);
       } else {
