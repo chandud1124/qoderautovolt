@@ -15,4 +15,8 @@
 const int relayPins[6] = {16, 17, 18, 19, 21, 22};
 const int manualSwitchPins[6] = {23, 25, 26, 27, 32, 33};
 
+// Relay configuration
+#define RELAY_ACTIVE_HIGH true  // Set to true if relays are active HIGH, false if active LOW
+#define MANUAL_ACTIVE_LOW true  // Set to true if manual switches are active LOW (pulled up), false if active HIGH
+
 #endif // CONFIG_H

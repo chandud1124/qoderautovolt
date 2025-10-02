@@ -8,7 +8,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
-import { Loader2, CheckCircle, XCircle, Eye, AlertTriangle, Edit } from 'lucide-react';
+import { Loader2, CheckCircle, XCircle, Eye, AlertTriangle, Edit, FileText } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import api from '@/services/api';
 import { Notice, NoticeReviewData } from '@/types';

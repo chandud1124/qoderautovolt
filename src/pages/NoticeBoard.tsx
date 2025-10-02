@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Loader2, Plus, Eye, Clock, CheckCircle, XCircle, AlertTriangle, Monitor, Edit, Trash2 } from 'lucide-react';
+import { Loader2, Plus, Eye, Clock, CheckCircle, XCircle, AlertTriangle, Monitor, Edit, Trash2, FileText } from 'lucide-react';
 import { NoticeSubmissionForm } from '@/components/NoticeSubmissionForm';
 import { NoticeApprovalPanel } from '@/components/NoticeApprovalPanel';
 import BoardManager from '@/components/BoardManager';
@@ -230,7 +230,7 @@ const NoticeBoard: React.FC = () => {
     }
 
     try {
-      await api.put(`/notices/${editingNotice._id}`, {
+      await api.patch(`/notices/${editingNotice._id}`, {
         content: editContent.trim()
       });
       setShowEditForm(false);
@@ -520,7 +520,7 @@ const NoticeBoard: React.FC = () => {
 
       {showEditForm && editingNotice && (
         <Dialog open={showEditForm} onOpenChange={setShowEditForm}>
-          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto" aria-describedby="edit-notice-description">
             <DialogHeader>
               <DialogTitle>Edit Notice</DialogTitle>
               <DialogDescription>

@@ -712,10 +712,8 @@ io.engine.on('connection_error', (err) => {
   });
 });
 
-// Make io available to routes via req.app.get('io')
-app.set('io', io);
-// Make io available globally for MQTT handlers
-global.io = io;
+// Make MQTT client available globally for services
+global.mqttClient = mqttClient;
 
 // Log unexpected upgrade attempts that may corrupt websocket frames
 server.on('upgrade', (req, socket, head) => {

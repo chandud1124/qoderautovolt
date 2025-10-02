@@ -565,11 +565,61 @@ const getBoardStats = async (req, res) => {
   }
 };
 
+// Update board status (for display clients)
+const updateBoardStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, lastSeen, isOnline } = req.body;
+
+    const board = await Board.findById(id);
+    if (!board) {
+      return res.status(404).json({
+        success: false,
+        message: 'Board not found'
+      });
+    }
+
+    // Only allow status-related updates for display clients
+    if (status !== undefined) {
+      board.status = status;
+    }
+    if (lastSeen !== undefined) {
+      board.lastSeen = new Date(lastSeen);
+    }
+    if (isOnline !== undefined) {
+      board.isOnline = isOnline;
+    }
+
+    await board.save();
+
+    res.json({
+      success: true,
+      message: 'Board status updated successfully',
+      board: {
+        id: board._id,
+        name: board.name,
+        status: board.status,
+        isOnline: board.isOnline,
+        lastSeen: board.lastSeen
+      }
+    });
+
+  } catch (error) {
+    console.error('Error updating board status:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update board status',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   createBoard,
   getBoards,
   getBoard,
   updateBoard,
+  updateBoardStatus,
   deleteBoard,
   getBoardContent,
   updateBoardContent,

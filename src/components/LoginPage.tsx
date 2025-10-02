@@ -74,7 +74,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
           <div className="flex justify-center mb-4">
-            <Shield className="w-12 h-12 text-primary" />
+            <img src="/logo.png" alt="AutoVolt Logo" className="h-12 w-auto" />
           </div>
           <CardTitle className="text-2xl font-bold">Classroom Automation</CardTitle>
           <p className="text-muted-foreground">Sign in to access the control panel</p>

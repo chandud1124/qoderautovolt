@@ -207,8 +207,9 @@ void processCommandQueue() {
       if (switchesLocal[i].relayGpio == cmd.gpio) {
         switchesLocal[i].state = cmd.state;
         switchesLocal[i].manualOverride = false;
-        digitalWrite(switchesLocal[i].relayGpio, cmd.state ? LOW : HIGH);
+        digitalWrite(switchesLocal[i].relayGpio, cmd.state ? (RELAY_ACTIVE_HIGH ? HIGH : LOW) : (RELAY_ACTIVE_HIGH ? LOW : HIGH));
         switchesLocal[i].gpio = switchesLocal[i].relayGpio; // for publishState
+        saveSwitchConfigToNVS();  // Save state change
         Serial.printf("[CMD] Relay GPIO %d set to %s (from queue)\n", cmd.gpio, cmd.state ? "ON" : "OFF");
         break;
       }
@@ -229,15 +230,18 @@ void loadSwitchConfigFromNVS() {
     String keyRelay = "relay" + String(i);
     String keyManual = "manual" + String(i);
     String keyDefault = "def" + String(i);
+    String keyState = "state" + String(i);
     int relay = prefs.getInt(keyRelay.c_str(), relayPins[i]);
     int manual = prefs.getInt(keyManual.c_str(), manualSwitchPins[i]);
     bool defState = prefs.getBool(keyDefault.c_str(), false);
+    bool savedState = prefs.getBool(keyState.c_str(), false);
     switchesLocal[i].relayGpio = relay;
     switchesLocal[i].manualGpio = manual;
     switchesLocal[i].defaultState = defState;
+    switchesLocal[i].state = savedState;  // Load saved state
   }
   prefs.end();
-  Serial.println("[NVS] Loaded switch config from NVS");
+  Serial.println("[NVS] Loaded switch config and state from NVS");
 }
 
 void saveSwitchConfigToNVS() {
@@ -246,12 +250,14 @@ void saveSwitchConfigToNVS() {
     String keyRelay = "relay" + String(i);
     String keyManual = "manual" + String(i);
     String keyDefault = "def" + String(i);
+    String keyState = "state" + String(i);
     prefs.putInt(keyRelay.c_str(), switchesLocal[i].relayGpio);
     prefs.putInt(keyManual.c_str(), switchesLocal[i].manualGpio);
     prefs.putBool(keyDefault.c_str(), switchesLocal[i].defaultState);
+    prefs.putBool(keyState.c_str(), switchesLocal[i].state);  // Save current state
   }
   prefs.end();
-  Serial.println("[NVS] Saved switch config to NVS");
+  Serial.println("[NVS] Saved switch config and state to NVS");
 }
 
 // Initialize switch state array with mapping, loading from NVS if available
@@ -262,7 +268,7 @@ void initSwitches() {
     switchesLocal[i].state = false;
     switchesLocal[i].manualOverride = false;
     switchesLocal[i].manualEnabled = true;
-    switchesLocal[i].manualActiveLow = true;
+    switchesLocal[i].manualActiveLow = MANUAL_ACTIVE_LOW;
     switchesLocal[i].manualMomentary = false;
     switchesLocal[i].lastManualLevel = -1;
     switchesLocal[i].lastManualChangeMs = 0;
@@ -271,6 +277,11 @@ void initSwitches() {
     switchesLocal[i].defaultState = false;
   }
   loadSwitchConfigFromNVS();
+  // Apply loaded states to relays
+  for (int i = 0; i < NUM_SWITCHES; i++) {
+    pinMode(switchesLocal[i].relayGpio, OUTPUT);
+    digitalWrite(switchesLocal[i].relayGpio, switchesLocal[i].state ? (RELAY_ACTIVE_HIGH ? HIGH : LOW) : (RELAY_ACTIVE_HIGH ? LOW : HIGH));
+  }
 }
 
 
@@ -290,7 +301,7 @@ void handleManualSwitches() {
     if (!pinSetup[i]) {
       pinMode(sw.manualGpio, INPUT_PULLUP);
       pinMode(sw.relayGpio, OUTPUT);
-      digitalWrite(sw.relayGpio, sw.state ? LOW : HIGH); // Active-low relay
+      digitalWrite(sw.relayGpio, sw.state ? (RELAY_ACTIVE_HIGH ? HIGH : LOW) : (RELAY_ACTIVE_HIGH ? LOW : HIGH)); // Apply current state
       pinSetup[i] = true;
       Serial.printf("[MANUAL] Setup GPIO %d (manual pin %d)\n", sw.relayGpio, sw.manualGpio);
     }
@@ -320,7 +331,8 @@ void handleManualSwitches() {
           bool prevState = sw.state;
           sw.state = !sw.state;
           sw.manualOverride = true;
-          digitalWrite(sw.relayGpio, sw.state ? LOW : HIGH);
+          digitalWrite(sw.relayGpio, sw.state ? (RELAY_ACTIVE_HIGH ? HIGH : LOW) : (RELAY_ACTIVE_HIGH ? LOW : HIGH));
+          saveSwitchConfigToNVS();  // Save state change
           Serial.printf("[MANUAL] Momentary: Relay GPIO %d toggled to %s\n", sw.relayGpio, sw.state ? "ON" : "OFF");
           // Send manual switch event for logging
           if (mqttClient.connected()) {
@@ -340,7 +352,8 @@ void handleManualSwitches() {
           bool prevState = sw.state;
           sw.state = newState;
           sw.manualOverride = true;
-          digitalWrite(sw.relayGpio, sw.state ? LOW : HIGH);
+          digitalWrite(sw.relayGpio, sw.state ? (RELAY_ACTIVE_HIGH ? HIGH : LOW) : (RELAY_ACTIVE_HIGH ? LOW : HIGH));
+          saveSwitchConfigToNVS();  // Save state change
           Serial.printf("[MANUAL] Maintained: Relay GPIO %d set to %s\n", sw.relayGpio, sw.state ? "ON" : "OFF");
           // Send manual switch event for logging
           if (mqttClient.connected()) {
@@ -493,6 +506,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
           bool state = doc["state"];
           queueSwitchCommand(gpio, state);
           processCommandQueue();
+          sendStateUpdate(true);  // Send immediate state update after command
           Serial.printf("[MQTT] Processed command for this device: GPIO %d -> %s\n", gpio, state ? "ON" : "OFF");
         } else {
           Serial.printf("[MQTT] Ignored command for different device: %s (my MAC: %s)\n", targetMac.c_str(), myMac.c_str());
@@ -582,6 +596,17 @@ int relayNameToGpio(const char* relay) {
   if (strcmp(relay, "relay5") == 0) return 21;
   if (strcmp(relay, "relay6") == 0) return 22;
   return -1;
+}
+
+// Normalize MAC address: remove colons and make lowercase
+String normalizeMac(String mac) {
+  String normalized = "";
+  for (char c : mac) {
+    if (isHexadecimalDigit(c) || isAlpha(c)) {
+      normalized += tolower(c);
+    }
+  }
+  return normalized;
 }
 
 void setup() {

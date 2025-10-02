@@ -33,7 +33,29 @@ const noticeValidation = [
   body('priority').optional().isIn(['low', 'medium', 'high', 'urgent']).withMessage('Invalid priority'),
   body('category').optional().isIn(['general', 'academic', 'administrative', 'event', 'emergency', 'maintenance']).withMessage('Invalid category'),
   body('expiryDate').optional().isISO8601().withMessage('Invalid expiry date'),
-  body('targetAudience').optional().isJSON().withMessage('Invalid target audience format')
+  body('targetAudience').optional().isJSON().withMessage('Invalid target audience format'),
+  body('selectedBoards').optional().custom((value) => {
+    if (!value) return true; // Optional field
+    try {
+      // Handle both JSON string and array formats
+      const boards = typeof value === 'string' ? JSON.parse(value) : value;
+      if (!Array.isArray(boards)) {
+        throw new Error('Selected boards must be an array');
+      }
+      if (boards.length > 5) {
+        throw new Error('Selected boards must be an array with max 5 boards');
+      }
+      // Validate each board ID is a valid MongoDB ObjectId
+      boards.forEach(boardId => {
+        if (!/^[0-9a-fA-F]{24}$/.test(boardId)) {
+          throw new Error('Each selected board must be a valid ID');
+        }
+      });
+      return true;
+    } catch (error) {
+      throw new Error(error.message);
+    }
+  })
 ];
 
 const reviewValidation = [
