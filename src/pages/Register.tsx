@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Checkbox } from '@/components/ui/checkbox';
 import { Progress } from '@/components/ui/progress';
 import { Textarea } from '@/components/ui/textarea';
-import { Eye, EyeOff, ArrowLeft, Upload, CheckCircle, AlertCircle, Info } from 'lucide-react';
+import { Eye, EyeOff, ArrowLeft, Upload, CheckCircle, AlertCircle, Info, Home } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
 import { authAPI } from '@/services/api';
@@ -468,6 +468,16 @@ const Register: React.FC = () => {
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen p-4 bg-gradient-to-br from-background to-muted/20">
+      <Button
+        variant="ghost"
+        size="sm"
+        className="absolute top-4 left-4 gap-2"
+        onClick={() => navigate('/landing')}
+      >
+        <Home className="h-4 w-4" />
+        Back to Home
+      </Button>
+      
       <div className="text-center mb-8">
         <div className="flex justify-center mb-4">
           <img

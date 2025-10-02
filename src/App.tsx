@@ -6,6 +6,7 @@ import { BrowserRouter, Routes, Route, Outlet, Navigate } from "react-router-dom
 import { Suspense, lazy } from "react";
 import { Layout } from "@/components/Layout";
 import { PrivateRoute } from "./components/PrivateRoute";
+import { RootRedirect } from "./components/RootRedirect";
 import { AuthProvider } from '@/context/AuthContext';
 import { GlobalLoadingProvider } from '@/hooks/useGlobalLoading';
 import { GlobalLoadingOverlay } from '@/components/GlobalLoadingOverlay';
@@ -14,6 +15,7 @@ import { SocketProvider } from '@/context/SocketContext';
 
 // Lazy load components for better performance
 const Index = lazy(() => import("./pages/Index"));
+const Landing = lazy(() => import("./pages/Landing"));
 const Devices = lazy(() => import("./pages/Devices"));
 const Switches = lazy(() => import("./pages/Switches"));
 const Master = lazy(() => import("./pages/Master"));
@@ -88,6 +90,13 @@ const App = () => {
               }}>
                 <Suspense fallback={<PageLoader />}>
                   <Routes>
+                    {/* Root redirect - smart routing based on auth */}
+                    <Route index element={<RootRedirect />} />
+                    
+                    {/* Public Landing Page */}
+                    <Route path="/landing" element={<Landing />} />
+                    
+                    {/* Auth Routes */}
                     <Route path="/register" element={<Register />} />
                     <Route path="/login" element={<Login />} />
                     <Route path="/forgot-password" element={<ForgotPassword />} />
@@ -95,7 +104,7 @@ const App = () => {
 
                     {/* Protected Routes */}
                     <Route
-                      path="/"
+                      path="/dashboard"
                       element={
                         <PrivateRoute>
                           <DevicesProvider>

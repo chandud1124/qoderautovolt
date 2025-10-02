@@ -1,5 +1,6 @@
 const Notice = require('../models/Notice');
 const User = require('../models/User');
+const ScheduledContent = require('../models/ScheduledContent');
 const { validationResult } = require('express-validator');
 const path = require('path');
 const fs = require('fs').promises;
@@ -67,7 +68,7 @@ const submitNotice = async (req, res) => {
       });
     }
 
-    const { title, content, contentType, tags, priority, category, expiryDate, targetAudience, selectedBoards } = req.body;
+    const { title, content, contentType, tags, priority, category, expiryDate, targetAudience, driveLink } = req.body;
     const submittedBy = req.user.id;
 
     // Process file attachments
@@ -108,27 +109,6 @@ const submitNotice = async (req, res) => {
       }
     }
 
-    // Process selected boards
-    let targetBoards = [];
-    if (selectedBoards) {
-      try {
-        // selectedBoards might be a JSON string from form data
-        const parsedBoards = typeof selectedBoards === 'string' ? JSON.parse(selectedBoards) : selectedBoards;
-        if (Array.isArray(parsedBoards)) {
-          targetBoards = parsedBoards.map(boardId => ({
-            boardId: boardId,
-            assignedAt: new Date(),
-            assignedBy: submittedBy,
-            priority: 0,
-            displayOrder: 0
-          }));
-        }
-      } catch (error) {
-        console.warn('Failed to parse selectedBoards:', error.message);
-        targetBoards = [];
-      }
-    }
-
     const notice = new Notice({
       title,
       content,
@@ -140,7 +120,8 @@ const submitNotice = async (req, res) => {
       expiryDate: expiryDate ? new Date(expiryDate) : null,
       attachments,
       targetAudience: parsedTargetAudience,
-      targetBoards
+      targetBoards: [],
+      driveLink: driveLink || null
     });
 
     await notice.save();
@@ -203,19 +184,42 @@ const getNotices = async (req, res) => {
       category,
       priority,
       submittedBy,
+      search,
+      dateFrom,
+      dateTo,
       page = 1,
-      limit = 10,
+      limit = 25,
       sortBy = 'createdAt',
       sortOrder = 'desc'
     } = req.query;
 
     const query = {};
 
+    // Text search
+    if (search) {
+      query.$or = [
+        { title: { $regex: search, $options: 'i' } },
+        { content: { $regex: search, $options: 'i' } },
+        { tags: { $in: [new RegExp(search, 'i')] } }
+      ];
+    }
+
     // Add filters
     if (status) query.status = status;
     if (category) query.category = category;
     if (priority) query.priority = priority;
     if (submittedBy) query.submittedBy = submittedBy;
+
+    // Date range filter
+    if (dateFrom || dateTo) {
+      query.createdAt = {};
+      if (dateFrom) query.createdAt.$gte = new Date(dateFrom);
+      if (dateTo) {
+        const endDate = new Date(dateTo);
+        endDate.setHours(23, 59, 59, 999);
+        query.createdAt.$lte = endDate;
+      }
+    }
 
     // Role-based access control
     if (req.user.role !== 'super-admin' && req.user.role !== 'admin') {
@@ -245,12 +249,10 @@ const getNotices = async (req, res) => {
     res.json({
       success: true,
       notices,
-      pagination: {
-        page: options.page,
-        limit: options.limit,
-        total,
-        pages: Math.ceil(total / options.limit)
-      }
+      page: options.page,
+      limit: options.limit,
+      totalItems: total,
+      totalPages: Math.ceil(total / options.limit)
     });
 
   } catch (error) {
@@ -329,10 +331,78 @@ const reviewNotice = async (req, res) => {
       });
     }
 
+    let scheduledContentId = null;
+
     if (action === 'approve') {
       notice.status = 'approved';
       notice.approvedBy = reviewedBy;
       notice.approvedAt = new Date();
+
+      // Create a ScheduledContent entry from the approved notice
+      const scheduledContent = new ScheduledContent({
+        title: notice.title,
+        content: notice.content,
+        type: notice.priority === 'high' ? 'emergency' : 'user',
+        priority: notice.priority === 'high' ? 8 : notice.priority === 'medium' ? 5 : 3,
+        duration: 60, // Default 60 seconds
+        schedule: {
+          type: 'always', // Default to always available
+          startTime: '00:00',
+          endTime: '23:59',
+          daysOfWeek: [0, 1, 2, 3, 4, 5, 6],
+          frequency: 'daily'
+        },
+        assignedBoards: [], // Will be assigned in Content Scheduler
+        createdBy: notice.submittedBy,
+        isActive: false, // Inactive until boards are assigned
+        attachments: (notice.attachments || []).map(attachment => ({
+          type: attachment.mimetype?.startsWith('image/') ? 'image' :
+                attachment.mimetype?.startsWith('video/') ? 'video' :
+                attachment.mimetype?.startsWith('audio/') ? 'audio' : 'document',
+          filename: attachment.filename,
+          originalName: attachment.originalName,
+          mimeType: attachment.mimetype,
+          size: attachment.size,
+          url: attachment.url
+        })),
+        display: {
+          template: 'default'
+        }
+      });
+
+      try {
+        console.log('[NOTICE-APPROVAL] Attempting to create ScheduledContent for notice:', notice._id);
+        console.log('[NOTICE-APPROVAL] ScheduledContent data:', {
+          title: notice.title,
+          type: notice.priority === 'high' ? 'emergency' : 'user',
+          priority: notice.priority === 'high' ? 8 : notice.priority === 'medium' ? 5 : 3,
+          createdBy: notice.submittedBy,
+          attachmentsCount: (notice.attachments || []).length
+        });
+        
+        await scheduledContent.save();
+        scheduledContentId = scheduledContent._id.toString();
+        console.log(`[NOTICE-APPROVAL] Successfully created ScheduledContent: ${scheduledContentId} from notice: ${notice._id}`);
+      } catch (saveError) {
+        console.error('[NOTICE-APPROVAL] Error creating ScheduledContent:', saveError);
+        console.error('[NOTICE-APPROVAL] Error details:', {
+          message: saveError.message,
+          name: saveError.name,
+          errors: saveError.errors
+        });
+        console.error('[NOTICE-APPROVAL] ScheduledContent data that failed:', JSON.stringify({
+          title: notice.title,
+          content: notice.content.substring(0, 100) + '...',
+          type: notice.priority === 'high' ? 'emergency' : 'user',
+          priority: notice.priority === 'high' ? 8 : notice.priority === 'medium' ? 5 : 3,
+          createdBy: notice.submittedBy,
+          attachments: (notice.attachments || []).map(att => ({
+            filename: att.filename,
+            mimetype: att.mimetype
+          }))
+        }, null, 2));
+        // Continue with notice approval even if ScheduledContent creation fails
+      }
     } else if (action === 'reject') {
       notice.status = 'rejected';
       notice.approvedBy = reviewedBy;
@@ -385,7 +455,8 @@ const reviewNotice = async (req, res) => {
     res.json({
       success: true,
       message: `Notice ${action === 'approve' ? 'approved' : 'rejected'} successfully`,
-      notice
+      notice,
+      scheduledContentId // Include the ID of created scheduled content
     });
 
   } catch (error) {
@@ -564,6 +635,101 @@ const publishNotice = async (req, res) => {
   }
 };
 
+// Schedule and publish notice (admin only)
+const scheduleAndPublishNotice = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      duration,
+      scheduleType,
+      selectedDays,
+      startTime,
+      endTime,
+      assignedBoards,
+      skipScheduling
+    } = req.body;
+
+    const notice = await Notice.findById(id);
+    if (!notice) {
+      return res.status(404).json({
+        success: false,
+        message: 'Notice not found'
+      });
+    }
+
+    if (notice.status !== 'approved') {
+      return res.status(400).json({
+        success: false,
+        message: 'Only approved notices can be scheduled and published'
+      });
+    }
+
+    // Find the associated ScheduledContent
+    const scheduledContent = await ScheduledContent.findOne({ title: notice.title, createdBy: notice.submittedBy });
+    if (!scheduledContent) {
+      return res.status(404).json({
+        success: false,
+        message: 'Associated scheduled content not found'
+      });
+    }
+
+    if (!skipScheduling) {
+      // Update the scheduled content with user preferences
+      scheduledContent.duration = duration || 60;
+      scheduledContent.schedule = {
+        type: scheduleType || 'always',
+        startTime: startTime || '00:00',
+        endTime: endTime || '23:59',
+        daysOfWeek: selectedDays || [0, 1, 2, 3, 4, 5, 6],
+        frequency: 'daily'
+      };
+      scheduledContent.assignedBoards = assignedBoards || [];
+      scheduledContent.isActive = true;
+
+      await scheduledContent.save();
+    }
+
+    // Publish the notice
+    notice.status = 'published';
+    notice.publishedAt = new Date();
+    await notice.save();
+
+    // Emit real-time notification via MQTT
+    if (global.mqttClient && global.mqttClient.connected) {
+      const publishData = {
+        notice: {
+          _id: notice._id,
+          title: notice.title,
+          content: notice.content,
+          priority: notice.priority,
+          category: notice.category,
+          publishedAt: notice.publishedAt,
+          targetAudience: notice.targetAudience
+        },
+        message: `Notice "${notice.title}" has been published`,
+        timestamp: new Date().toISOString()
+      };
+
+      global.mqttClient.publish('notices/published', JSON.stringify(publishData), { qos: 1 });
+    }
+
+    res.json({
+      success: true,
+      message: skipScheduling ? 'Notice published successfully' : 'Notice scheduled and published successfully',
+      notice,
+      scheduledContent: skipScheduling ? null : scheduledContent
+    });
+
+  } catch (error) {
+    console.error('Error scheduling and publishing notice:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to schedule and publish notice',
+      error: error.message
+    });
+  }
+};
+
 // Update notice
 const updateNotice = async (req, res) => {
   try {
@@ -729,6 +895,411 @@ const getNoticeStats = async (req, res) => {
   }
 };
 
+// Enhanced search with filters
+const searchNotices = async (req, res) => {
+  try {
+    const {
+      search,
+      status,
+      category,
+      priority,
+      dateFrom,
+      dateTo,
+      page = 1,
+      limit = 25,
+      sortBy = 'createdAt',
+      sortOrder = 'desc'
+    } = req.query;
+
+    const query = {};
+
+    // Text search across title, content, and tags
+    if (search) {
+      query.$or = [
+        { title: { $regex: search, $options: 'i' } },
+        { content: { $regex: search, $options: 'i' } },
+        { tags: { $in: [new RegExp(search, 'i')] } }
+      ];
+    }
+
+    // Filters
+    if (status) query.status = status;
+    if (category) query.category = category;
+    if (priority) query.priority = priority;
+
+    // Date range filter
+    if (dateFrom || dateTo) {
+      query.createdAt = {};
+      if (dateFrom) query.createdAt.$gte = new Date(dateFrom);
+      if (dateTo) {
+        const endDate = new Date(dateTo);
+        endDate.setHours(23, 59, 59, 999);
+        query.createdAt.$lte = endDate;
+      }
+    }
+
+    // Role-based access
+    if (req.user.role !== 'super-admin' && req.user.role !== 'admin') {
+      query.submittedBy = req.user.id;
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const sortObj = { [sortBy]: sortOrder === 'desc' ? -1 : 1 };
+
+    const [notices, totalItems] = await Promise.all([
+      Notice.find(query)
+        .sort(sortObj)
+        .skip(skip)
+        .limit(parseInt(limit))
+        .populate('submittedBy', 'name email role')
+        .populate('approvedBy', 'name email role'),
+      Notice.countDocuments(query)
+    ]);
+
+    res.json({
+      success: true,
+      notices,
+      page: parseInt(page),
+      limit: parseInt(limit),
+      totalItems,
+      totalPages: Math.ceil(totalItems / parseInt(limit))
+    });
+  } catch (error) {
+    console.error('Error searching notices:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to search notices',
+      error: error.message
+    });
+  }
+};
+
+// Bulk approve notices
+const bulkApprove = async (req, res) => {
+  try {
+    const { noticeIds } = req.body;
+
+    if (!noticeIds || !Array.isArray(noticeIds) || noticeIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Notice IDs are required'
+      });
+    }
+
+    const results = await Promise.allSettled(
+      noticeIds.map(async (noticeId) => {
+        const notice = await Notice.findById(noticeId);
+        if (!notice) throw new Error(`Notice ${noticeId} not found`);
+        
+        notice.status = 'approved';
+        notice.approvedBy = req.user.id;
+        notice.approvedAt = new Date();
+        await notice.save();
+
+        // Create scheduled content
+        const ScheduledContent = require('../models/ScheduledContent');
+        await ScheduledContent.create({
+          title: notice.title,
+          content: notice.content,
+          type: notice.priority === 'urgent' || notice.priority === 'high' ? 'emergency' : 'user',
+          priority: notice.priority === 'urgent' ? 10 : notice.priority === 'high' ? 7 : notice.priority === 'medium' ? 5 : 3,
+          duration: 60,
+          schedule: {
+            type: 'recurring',
+            startTime: '09:00',
+            endTime: '17:00',
+            daysOfWeek: [1, 2, 3, 4, 5],
+            frequency: 'daily'
+          },
+          isActive: false,
+          assignedBoards: []
+        });
+
+        return noticeId;
+      })
+    );
+
+    const successful = results.filter(r => r.status === 'fulfilled').length;
+    const failed = results.filter(r => r.status === 'rejected').length;
+
+    res.json({
+      success: true,
+      message: `Approved ${successful} notice(s)${failed > 0 ? `, ${failed} failed` : ''}`,
+      successful,
+      failed
+    });
+  } catch (error) {
+    console.error('Error bulk approving notices:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to bulk approve notices',
+      error: error.message
+    });
+  }
+};
+
+// Bulk reject notices
+const bulkReject = async (req, res) => {
+  try {
+    const { noticeIds, rejectionReason } = req.body;
+
+    if (!noticeIds || !Array.isArray(noticeIds) || noticeIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Notice IDs are required'
+      });
+    }
+
+    if (!rejectionReason || !rejectionReason.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Rejection reason is required'
+      });
+    }
+
+    const results = await Promise.allSettled(
+      noticeIds.map(async (noticeId) => {
+        const notice = await Notice.findById(noticeId);
+        if (!notice) throw new Error(`Notice ${noticeId} not found`);
+        
+        notice.status = 'rejected';
+        notice.rejectionReason = rejectionReason;
+        notice.approvedBy = req.user.id;
+        notice.approvedAt = new Date();
+        await notice.save();
+
+        return noticeId;
+      })
+    );
+
+    const successful = results.filter(r => r.status === 'fulfilled').length;
+    const failed = results.filter(r => r.status === 'rejected').length;
+
+    res.json({
+      success: true,
+      message: `Rejected ${successful} notice(s)${failed > 0 ? `, ${failed} failed` : ''}`,
+      successful,
+      failed
+    });
+  } catch (error) {
+    console.error('Error bulk rejecting notices:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to bulk reject notices',
+      error: error.message
+    });
+  }
+};
+
+// Bulk archive notices
+const bulkArchive = async (req, res) => {
+  try {
+    const { noticeIds } = req.body;
+
+    if (!noticeIds || !Array.isArray(noticeIds) || noticeIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Notice IDs are required'
+      });
+    }
+
+    const result = await Notice.updateMany(
+      { _id: { $in: noticeIds } },
+      { $set: { status: 'archived', isActive: false } }
+    );
+
+    res.json({
+      success: true,
+      message: `Archived ${result.modifiedCount} notice(s)`,
+      modifiedCount: result.modifiedCount
+    });
+  } catch (error) {
+    console.error('Error bulk archiving notices:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to bulk archive notices',
+      error: error.message
+    });
+  }
+};
+
+// Bulk delete notices
+const bulkDelete = async (req, res) => {
+  try {
+    const { noticeIds } = req.body;
+
+    if (!noticeIds || !Array.isArray(noticeIds) || noticeIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Notice IDs are required'
+      });
+    }
+
+    // Delete associated files
+    const notices = await Notice.find({ _id: { $in: noticeIds } });
+    for (const notice of notices) {
+      if (notice.attachments && notice.attachments.length > 0) {
+        for (const attachment of notice.attachments) {
+          try {
+            const filePath = path.join(__dirname, '../', attachment.url);
+            await fs.unlink(filePath);
+          } catch (err) {
+            console.error('Error deleting file:', err);
+          }
+        }
+      }
+    }
+
+    const result = await Notice.deleteMany({ _id: { $in: noticeIds } });
+
+    res.json({
+      success: true,
+      message: `Deleted ${result.deletedCount} notice(s)`,
+      deletedCount: result.deletedCount
+    });
+  } catch (error) {
+    console.error('Error bulk deleting notices:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to bulk delete notices',
+      error: error.message
+    });
+  }
+};
+
+// Get user's drafts
+const getDrafts = async (req, res) => {
+  try {
+    const drafts = await Notice.find({
+      submittedBy: req.user.id,
+      isDraft: true
+    })
+      .sort({ updatedAt: -1 })
+      .populate('submittedBy', 'name email role');
+
+    res.json({
+      success: true,
+      drafts
+    });
+  } catch (error) {
+    console.error('Error fetching drafts:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch drafts',
+      error: error.message
+    });
+  }
+};
+
+// Save draft
+const saveDraft = async (req, res) => {
+  try {
+    const {
+      title,
+      content,
+      contentType,
+      tags,
+      priority,
+      category
+    } = req.body;
+
+    const draft = new Notice({
+      title,
+      content,
+      contentType: contentType || 'text',
+      tags: tags || [],
+      priority: priority || 'medium',
+      category: category || 'general',
+      submittedBy: req.user.id,
+      isDraft: true,
+      status: 'pending'
+    });
+
+    await draft.save();
+    await draft.populate('submittedBy', 'name email role');
+
+    res.status(201).json({
+      success: true,
+      message: 'Draft saved successfully',
+      draft
+    });
+  } catch (error) {
+    console.error('Error saving draft:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to save draft',
+      error: error.message
+    });
+  }
+};
+
+// Update draft
+const updateDraft = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const draft = await Notice.findOne({
+      _id: id,
+      submittedBy: req.user.id,
+      isDraft: true
+    });
+
+    if (!draft) {
+      return res.status(404).json({
+        success: false,
+        message: 'Draft not found'
+      });
+    }
+
+    Object.assign(draft, req.body);
+    await draft.save();
+    await draft.populate('submittedBy', 'name email role');
+
+    res.json({
+      success: true,
+      message: 'Draft updated successfully',
+      draft
+    });
+  } catch (error) {
+    console.error('Error updating draft:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update draft',
+      error: error.message
+    });
+  }
+};
+
+// Delete draft
+const deleteDraft = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const draft = await Notice.findOneAndDelete({
+      _id: id,
+      submittedBy: req.user.id,
+      isDraft: true
+    });
+
+    if (!draft) {
+      return res.status(404).json({
+        success: false,
+        message: 'Draft not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Draft deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting draft:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete draft',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   submitNotice,
   getNotices,
@@ -737,8 +1308,18 @@ module.exports = {
   reviewNotice,
   editNotice,
   publishNotice,
+  scheduleAndPublishNotice,
   updateNotice,
   deleteNotice,
   getNoticeStats,
+  searchNotices,
+  bulkApprove,
+  bulkReject,
+  bulkArchive,
+  bulkDelete,
+  getDrafts,
+  saveDraft,
+  updateDraft,
+  deleteDraft,
   upload
 };

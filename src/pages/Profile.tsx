@@ -29,7 +29,7 @@ export const Profile = () => {
     delete: false
   });
 
-  const goHome = () => navigate('/');
+  const goHome = () => navigate('/dashboard');
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showPassword, setShowPassword] = useState({
     current: false,

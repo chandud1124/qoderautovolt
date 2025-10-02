@@ -74,8 +74,8 @@ const scheduledContentSchema = new mongoose.Schema({
   },
   assignedBoards: [{
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Board',
-    required: true
+    ref: 'Board'
+    // Note: Not required to allow empty array for newly approved notices
   }],
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,

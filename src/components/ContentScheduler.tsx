@@ -4,13 +4,14 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Textarea } from '@/components/ui/textarea';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Progress } from '@/components/ui/progress';
+import { config } from '@/config/env';
 import {
   Clock,
   Play,
@@ -26,7 +27,8 @@ import {
   FileText,
   AlertTriangle,
   Edit,
-  Trash2
+  Trash2,
+  Eye
 } from 'lucide-react';
 import { toast } from 'sonner';
 import api from '@/services/api';
@@ -66,11 +68,17 @@ interface ScheduledContent {
 interface ContentSchedulerProps {
   boards: Array<{ _id: string; name: string; location: string; }>;
   onScheduleUpdate: () => void;
+  autoEditContentId?: string | null;
+  onAutoEditComplete?: () => void;
+  refreshTrigger?: number;
 }
 
 const ContentScheduler: React.FC<ContentSchedulerProps> = ({
   boards,
-  onScheduleUpdate
+  onScheduleUpdate,
+  autoEditContentId,
+  onAutoEditComplete,
+  refreshTrigger = 0
 }) => {
   const [scheduledContent, setScheduledContent] = useState<ScheduledContent[]>([]);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -79,6 +87,8 @@ const ContentScheduler: React.FC<ContentSchedulerProps> = ({
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
   const [isMediaUploadDialogOpen, setIsMediaUploadDialogOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [isPreviewDialogOpen, setIsPreviewDialogOpen] = useState(false);
+  const [previewContent, setPreviewContent] = useState<ScheduledContent | null>(null);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [mediaFiles, setMediaFiles] = useState<FileList | null>(null);
   const [uploadedMedia, setUploadedMedia] = useState<Array<{
@@ -115,7 +125,77 @@ const ContentScheduler: React.FC<ContentSchedulerProps> = ({
   useEffect(() => {
     fetchScheduledContent();
     fetchUploadedMedia();
-  }, []);
+  }, [refreshTrigger]);
+
+  // Auto-open edit dialog when a notice is approved
+  useEffect(() => {
+    if (!autoEditContentId) return;
+
+    console.log('[ContentScheduler] Auto-opening edit dialog for content ID:', autoEditContentId);
+
+    const fetchAndOpenContent = async () => {
+      try {
+        // Find content in the existing list first
+        let content = scheduledContent.find(c => c._id === autoEditContentId);
+        
+        // If not found, fetch from API
+        if (!content) {
+          console.log('[ContentScheduler] Content not in current list, fetching from API...');
+          const response = await api.get(`/content/${autoEditContentId}`);
+          content = response.data.content;
+          
+          // Refresh the content list to include the new content
+          await fetchScheduledContent();
+        }
+
+        if (content) {
+          console.log('[ContentScheduler] Found content, opening edit dialog:', content);
+          setEditingContent(content);
+          setNewContent({
+            title: content.title,
+            content: content.content,
+            type: content.type,
+            priority: content.priority,
+            duration: content.duration,
+            schedule: {
+              type: content.schedule.type,
+              startTime: content.schedule.startTime || '09:00',
+              endTime: content.schedule.endTime || '17:00',
+              daysOfWeek: content.schedule.daysOfWeek || [1, 2, 3, 4, 5],
+              frequency: content.schedule.frequency || 'daily',
+              startDate: content.schedule.startDate || '',
+              endDate: content.schedule.endDate || '',
+              exceptions: content.schedule.exceptions || [],
+              timeSlots: content.schedule.timeSlots || [{ start: '09:00', end: '17:00' }],
+              playlist: content.schedule.playlist || []
+            },
+            assignedBoards: content.assignedBoards || [],
+            selectedAttachments: content.attachments?.map(a => a.filename) || []
+          });
+          setIsEditDialogOpen(true);
+          
+          // Call completion callback after opening
+          if (onAutoEditComplete) {
+            onAutoEditComplete();
+          }
+        } else {
+          console.error('[ContentScheduler] Content not found:', autoEditContentId);
+          toast.error('Failed to load approved content');
+          if (onAutoEditComplete) {
+            onAutoEditComplete();
+          }
+        }
+      } catch (error) {
+        console.error('[ContentScheduler] Error fetching content for auto-edit:', error);
+        toast.error('Failed to open content for editing');
+        if (onAutoEditComplete) {
+          onAutoEditComplete();
+        }
+      }
+    };
+
+    fetchAndOpenContent();
+  }, [autoEditContentId]);
 
   const fetchScheduledContent = async () => {
     try {
@@ -316,6 +396,11 @@ const ContentScheduler: React.FC<ContentSchedulerProps> = ({
       selectedAttachments: content.attachments?.map(a => a.filename) || []
     });
     setIsEditDialogOpen(true);
+  };
+
+  const handlePreviewContent = (content: ScheduledContent) => {
+    setPreviewContent(content);
+    setIsPreviewDialogOpen(true);
   };
 
   const handleUpdateContent = async () => {
@@ -1047,6 +1132,122 @@ const ContentScheduler: React.FC<ContentSchedulerProps> = ({
                 </div>
               )}
 
+              {/* Advanced Scheduling Options */}
+              <div className="space-y-4 border-t pt-4">
+                <h4 className="font-medium text-sm flex items-center gap-2">
+                  <Settings className="w-4 h-4" />
+                  Advanced Scheduling Options
+                </h4>
+                
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-startDate">Start Date</Label>
+                    <Input
+                      id="edit-startDate"
+                      type="date"
+                      value={newContent.schedule.startDate}
+                      onChange={(e) => setNewContent(prev => ({
+                        ...prev,
+                        schedule: { ...prev.schedule, startDate: e.target.value }
+                      }))}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-endDate">End Date</Label>
+                    <Input
+                      id="edit-endDate"
+                      type="date"
+                      value={newContent.schedule.endDate}
+                      onChange={(e) => setNewContent(prev => ({
+                        ...prev,
+                        schedule: { ...prev.schedule, endDate: e.target.value }
+                      }))}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="edit-exceptions">Exception Dates (comma-separated)</Label>
+                  <Input
+                    id="edit-exceptions"
+                    value={newContent.schedule.exceptions.join(', ')}
+                    onChange={(e) => setNewContent(prev => ({
+                      ...prev,
+                      schedule: { 
+                        ...prev.schedule, 
+                        exceptions: e.target.value.split(',').map(d => d.trim()).filter(d => d)
+                      }
+                    }))}
+                    placeholder="2024-01-01, 2024-12-25"
+                  />
+                  <p className="text-xs text-muted-foreground">Dates when this content should not play</p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Time Slots</Label>
+                  {newContent.schedule.timeSlots.map((slot, index) => (
+                    <div key={index} className="flex items-center gap-2">
+                      <Input
+                        type="time"
+                        value={slot.start}
+                        onChange={(e) => {
+                          const newSlots = [...newContent.schedule.timeSlots];
+                          newSlots[index].start = e.target.value;
+                          setNewContent(prev => ({
+                            ...prev,
+                            schedule: { ...prev.schedule, timeSlots: newSlots }
+                          }));
+                        }}
+                        className="w-32"
+                      />
+                      <span>to</span>
+                      <Input
+                        type="time"
+                        value={slot.end}
+                        onChange={(e) => {
+                          const newSlots = [...newContent.schedule.timeSlots];
+                          newSlots[index].end = e.target.value;
+                          setNewContent(prev => ({
+                            ...prev,
+                            schedule: { ...prev.schedule, timeSlots: newSlots }
+                          }));
+                        }}
+                        className="w-32"
+                      />
+                      {newContent.schedule.timeSlots.length > 1 && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            const newSlots = newContent.schedule.timeSlots.filter((_, i) => i !== index);
+                            setNewContent(prev => ({
+                              ...prev,
+                              schedule: { ...prev.schedule, timeSlots: newSlots }
+                            }));
+                          }}
+                        >
+                          Remove
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      const newSlots = [...newContent.schedule.timeSlots, { start: '09:00', end: '17:00' }];
+                      setNewContent(prev => ({
+                        ...prev,
+                        schedule: { ...prev.schedule, timeSlots: newSlots }
+                      }));
+                    }}
+                  >
+                    <Plus className="w-4 h-4 mr-1" />
+                    Add Time Slot
+                  </Button>
+                </div>
+              </div>
+
               <div className="space-y-2">
                 <Label>Assign to Boards *</Label>
                 <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto border rounded p-3">
@@ -1079,6 +1280,117 @@ const ContentScheduler: React.FC<ContentSchedulerProps> = ({
                   {loading ? 'Updating...' : 'Update Content'}
                 </Button>
               </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+        <Dialog open={isPreviewDialogOpen} onOpenChange={setIsPreviewDialogOpen}>
+          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Eye className="w-5 h-5" />
+                Content Preview: {previewContent?.title}
+              </DialogTitle>
+              <DialogDescription>
+                Preview how this content will appear on the display screens
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              {previewContent && (
+                <div className="space-y-4">
+                  {/* Simulated Screen Display */}
+                  <div className="border-2 border-gray-300 rounded-lg p-4 bg-black text-white min-h-[400px] flex items-center justify-center">
+                    <div className="text-center space-y-4 max-w-2xl">
+                      <div className="flex items-center justify-center gap-2 mb-4">
+                        <Monitor className="w-6 h-6 text-gray-400" />
+                        <span className="text-sm text-gray-400">Screen Preview</span>
+                      </div>
+                      
+                      {/* Content Title */}
+                      <h2 className="text-2xl font-bold text-white mb-4">
+                        {previewContent.title}
+                      </h2>
+                      
+                      {/* Content Body */}
+                      <div className="text-lg leading-relaxed whitespace-pre-wrap text-center">
+                        {previewContent.content}
+                      </div>
+                      
+                      {/* Attachments Preview */}
+                      {previewContent.attachments && previewContent.attachments.length > 0 && (
+                        <div className="mt-6 space-y-2">
+                          <p className="text-sm text-gray-400 mb-2">Attachments:</p>
+                          <div className="flex flex-wrap gap-2 justify-center">
+                            {previewContent.attachments.map((attachment, index) => (
+                              <div key={index} className="bg-gray-800 rounded p-2">
+                                {attachment.type === 'image' ? (
+                                  <img
+                                    src={`${config.staticBaseUrl}${attachment.url}`}
+                                    alt={attachment.originalName}
+                                    className="max-w-32 max-h-32 object-cover rounded"
+                                    onError={(e) => {
+                                      e.currentTarget.style.display = 'none';
+                                      (e.currentTarget.nextElementSibling as HTMLElement).style.display = 'block';
+                                    }}
+                                  />
+                                ) : attachment.type === 'video' ? (
+                                  <video
+                                    src={`${config.staticBaseUrl}${attachment.url}`}
+                                    className="max-w-32 max-h-32 object-cover rounded"
+                                    controls={false}
+                                    muted
+                                    onError={(e) => {
+                                      e.currentTarget.style.display = 'none';
+                                      (e.currentTarget.nextElementSibling as HTMLElement).style.display = 'block';
+                                    }}
+                                  />
+                                ) : null}
+                                <div className="text-xs text-gray-300 mt-1 text-center hidden">
+                                  {attachment.originalName}
+                                </div>
+                                <div className="text-xs text-gray-300 mt-1 text-center">
+                                  {attachment.originalName}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Content Info */}
+                      <div className="mt-6 text-xs text-gray-500 space-y-1">
+                        <p>Duration: {previewContent.duration} seconds</p>
+                        <p>Priority: {previewContent.priority}</p>
+                        <p>Type: {previewContent.type}</p>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Content Details */}
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <h4 className="font-medium mb-2">Schedule Information</h4>
+                      <p><strong>Type:</strong> {previewContent.schedule.type}</p>
+                      {previewContent.schedule.startTime && (
+                        <p><strong>Start Time:</strong> {previewContent.schedule.startTime}</p>
+                      )}
+                      {previewContent.schedule.endTime && (
+                        <p><strong>End Time:</strong> {previewContent.schedule.endTime}</p>
+                      )}
+                      {previewContent.schedule.daysOfWeek && previewContent.schedule.daysOfWeek.length > 0 && (
+                        <p><strong>Days:</strong> {previewContent.schedule.daysOfWeek.map(d => daysOfWeek.find(day => day.value === d)?.label.slice(0, 3)).join(', ')}</p>
+                      )}
+                    </div>
+                    <div>
+                      <h4 className="font-medium mb-2">Display Information</h4>
+                      <p><strong>Boards Assigned:</strong> {previewContent.assignedBoards.length}</p>
+                      <p><strong>Times Played:</strong> {previewContent.playCount}</p>
+                      {previewContent.lastPlayed && (
+                        <p><strong>Last Played:</strong> {new Date(previewContent.lastPlayed).toLocaleString()}</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </DialogContent>
         </Dialog>
@@ -1132,6 +1444,14 @@ const ContentScheduler: React.FC<ContentSchedulerProps> = ({
                       <Button
                         variant="outline"
                         size="sm"
+                        onClick={() => handlePreviewContent(content)}
+                        title="Preview this content"
+                      >
+                        <Eye className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
                         onClick={() => handleEditContent(content)}
                         title="Edit this notice"
                       >
@@ -1163,34 +1483,92 @@ const ContentScheduler: React.FC<ContentSchedulerProps> = ({
         </TabsContent>
 
         <TabsContent value="inactive" className="space-y-4">
-          {scheduledContent.filter(c => !c.isActive).map((content) => (
-            <Card key={content._id} className="opacity-60">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-2">
-                      <h4 className="font-medium">{content.title}</h4>
-                      <Badge className={getTypeColor(content.type)}>
-                        {content.type}
-                      </Badge>
+          {scheduledContent.filter(c => !c.isActive).length === 0 ? (
+            <div className="text-center py-8 text-gray-500">
+              <Pause className="w-12 h-12 mx-auto mb-4 opacity-50" />
+              <p className="text-lg font-medium mb-2">No Inactive Content</p>
+              <p className="text-sm">Inactive or scheduled content will appear here. You can edit and configure them before publishing.</p>
+            </div>
+          ) : (
+            scheduledContent.filter(c => !c.isActive).map((content) => (
+              <Card key={content._id} className="glass border-muted/50 hover:border-primary/50 transition-colors">
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-2">
+                        <h4 className="font-medium text-foreground">{content.title}</h4>
+                        <Badge className={getTypeColor(content.type)}>
+                          {content.type}
+                        </Badge>
+                        <Badge variant="outline" className="bg-primary/10 text-primary border-primary/30">
+                          Priority: {content.priority}
+                        </Badge>
+                        <Badge variant="secondary" className="bg-muted/50">
+                          Inactive
+                        </Badge>
+                      </div>
+                      <p className="text-sm text-muted-foreground mb-2 line-clamp-2">
+                        {content.content}
+                      </p>
+                      <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                        <span className="flex items-center gap-1">
+                          <Clock className="w-3 h-3" />
+                          {content.duration}s
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <Calendar className="w-3 h-3" />
+                          {getScheduleDescription(content.schedule)}
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <Monitor className="w-3 h-3" />
+                          {content.assignedBoards.length} board(s)
+                        </span>
+                      </div>
                     </div>
-                    <p className="text-sm text-gray-600 mb-2 line-clamp-2">
-                      {content.content}
-                    </p>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handlePreviewContent(content)}
+                        title="Preview this content"
+                        className="hover:bg-primary/10 hover:text-primary hover:border-primary"
+                      >
+                        <Eye className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleEditContent(content)}
+                        title="Edit and configure schedule"
+                        className="hover:bg-secondary/10 hover:text-secondary hover:border-secondary"
+                      >
+                        <Edit className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleDeleteContent(content._id)}
+                        className="text-danger hover:text-danger hover:bg-danger/10 hover:border-danger"
+                        title="Delete this content"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="default"
+                        size="sm"
+                        onClick={() => toggleContentStatus(content._id, true)}
+                        title="Activate and publish this content"
+                        className="bg-secondary hover:bg-secondary/90"
+                      >
+                        <Play className="w-4 h-4 mr-1" />
+                        Publish
+                      </Button>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => toggleContentStatus(content._id, true)}
-                    >
-                      <Play className="w-4 h-4" />
-                    </Button>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                </CardContent>
+              </Card>
+            ))
+          )}
         </TabsContent>
 
         <TabsContent value="all" className="space-y-4">

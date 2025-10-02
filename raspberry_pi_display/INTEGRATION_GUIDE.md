@@ -11,6 +11,20 @@ Raspberry Pi devices can be configured as display boards that show notices and c
 - **ESP32 Devices**: IoT control (GPIO switches, sensors) - *Removed from this setup*
 - **Raspberry Pi Boards**: Display devices (notice boards, digital signage)
 
+## Content Management
+
+The Raspberry Pi display client includes intelligent content management for offline operation:
+
+### Content Types
+- **Recurring Content**: Always-playing content (no end date) kept for 7 days after last access
+- **Limited-Time Content**: Content with schedule end dates, deleted immediately after expiration
+- **Server Preservation**: All content remains on server, never deleted locally
+
+### Offline Operation
+- Displays cached content when server is unavailable
+- Automatic cleanup based on content type and access patterns
+- SQLite database tracks content metadata and access times
+
 ## Quick Setup
 
 ### 1. Create a Raspberry Pi Board

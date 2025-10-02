@@ -77,7 +77,7 @@ class ScheduleService {
 
       // Use MQTT instead of WebSocket for ESP32 communication
       if (global.sendMqttSwitchCommand) {
-        global.sendMqttSwitchCommand(gpio, desiredState);
+        global.sendMqttSwitchCommand(device.macAddress, gpio, desiredState);
         console.log(`[SCHEDULE] Published MQTT switch command for device ${device.macAddress}: gpio=${gpio}, state=${desiredState}`);
         return { sent: true, reason: 'mqtt_sent' };
       } else {

@@ -12,6 +12,31 @@ A Python-based display client for Raspberry Pi devices that connects to the AIMS
 - **Systemd Integration**: Runs as a system service with automatic restart
 - **Multi-notice Support**: Cycles through multiple notices if available
 
+## Content Management
+
+The Raspberry Pi display client implements intelligent content management with different retention policies:
+
+### Content Types & Retention
+
+- **Recurring Content**: Content that should always play (no end date, recurring schedules, permanent content)
+  - **Retention**: Kept until not accessed for 7 days
+  - **Cleanup**: Removed only if not displayed for a week
+  
+- **Limited-Time Content**: Content with specific end dates
+  - **Retention**: Removed immediately after end date passes
+  - **Cleanup**: Automatic deletion when schedule expires
+
+- **Server Content**: All content remains available on the main server
+  - **Never Deleted**: Server maintains complete content history
+  - **Always Accessible**: Content available for re-download if needed
+
+### Storage Management
+
+- **Local Storage**: SQLite database + downloaded files
+- **Space Limits**: Configurable maximum storage (default 1GB)
+- **Automatic Cleanup**: Regular removal of expired/old content
+- **Offline Operation**: Continues displaying cached content when server unavailable
+
 ## Requirements
 
 - Raspberry Pi (any model with HDMI output)

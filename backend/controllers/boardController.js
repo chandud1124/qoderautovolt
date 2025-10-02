@@ -321,12 +321,88 @@ const getBoardContent = async (req, res) => {
       });
     }
 
-    // Get notices assigned to this board
+    // Get scheduled content assigned to this board that is active
+    const ScheduledContent = require('../models/ScheduledContent');
+    const now = new Date();
+    const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
+    const currentTime = now.toTimeString().slice(0, 5); // HH:MM format
+
+    const scheduledContent = await ScheduledContent.find({
+      assignedBoards: board._id,
+      isActive: true
+    })
+    .sort({ priority: -1, createdAt: -1 })
+    .populate('createdBy', 'name email');
+
+    // Filter content based on schedule
+    const activeContent = scheduledContent.filter(content => {
+      const schedule = content.schedule;
+      
+      // Always show 'always' type
+      if (schedule.type === 'always') return true;
+      
+      // Check if current day is in schedule
+      if (schedule.daysOfWeek && !schedule.daysOfWeek.includes(currentDay)) {
+        return false;
+      }
+      
+      // Check time range
+      if (schedule.startTime && schedule.endTime) {
+        if (currentTime < schedule.startTime || currentTime > schedule.endTime) {
+          return false;
+        }
+      }
+      
+      return true;
+    });
+
+    // Get SERVER_URL from environment or construct it
+    const SERVER_URL = process.env.SERVER_URL || `http://localhost:${process.env.PORT || 3001}`;
+
+    // Transform content to include full URLs for attachments
+    const contentWithFullUrls = activeContent.map(content => {
+      const contentObj = content.toObject();
+      
+      // Ensure attachments have full URLs
+      if (contentObj.attachments && contentObj.attachments.length > 0) {
+        contentObj.attachments = contentObj.attachments.map(attachment => ({
+          ...attachment,
+          url: attachment.url?.startsWith('http') 
+            ? attachment.url 
+            : `${SERVER_URL}${attachment.url}`,
+          thumbnail: attachment.thumbnail 
+            ? (attachment.thumbnail.startsWith('http')
+                ? attachment.thumbnail
+                : `${SERVER_URL}${attachment.thumbnail}`)
+            : null
+        }));
+      }
+      
+      return contentObj;
+    });
+
+    // Also get notices for backward compatibility (if any old system still uses it)
     const boardNotices = await Notice.find({
       'targetBoards.boardId': board._id,
       status: 'published',
       isActive: true
     }).sort({ 'targetBoards.displayOrder': 1, priority: -1 });
+
+    // Transform notice attachments to include full URLs too
+    const noticesWithFullUrls = boardNotices.map(notice => {
+      const noticeObj = notice.toObject();
+      
+      if (noticeObj.attachments && noticeObj.attachments.length > 0) {
+        noticeObj.attachments = noticeObj.attachments.map(attachment => ({
+          ...attachment,
+          url: attachment.url?.startsWith('http')
+            ? attachment.url
+            : `${SERVER_URL}${attachment.url || `/uploads/notices/${attachment.filename}`}`
+        }));
+      }
+      
+      return noticeObj;
+    });
 
     // Get group content if applicable
     let groupContent = [];
@@ -342,14 +418,17 @@ const getBoardContent = async (req, res) => {
       success: true,
       content: {
         current: board.currentContent,
-        boardNotices,
+        scheduledContent: contentWithFullUrls, // NEW: Priority content from scheduler
+        boardNotices: noticesWithFullUrls, // Legacy notices with full URLs
         groupContent,
         board: {
           id: board._id,
           name: board.name,
-          isOperating: board.isOperating
+          isOperating: board.isOperating,
+          location: board.location
         }
-      }
+      },
+      serverUrl: SERVER_URL // Include server URL for client reference
     });
 
   } catch (error) {

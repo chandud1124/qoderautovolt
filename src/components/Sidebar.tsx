@@ -36,59 +36,59 @@ const navigationSections = [
   {
     title: 'Dashboard',
     items: [
-      { name: 'Power Dashboard', icon: Home, href: '/', current: false },
+      { name: 'Power Dashboard', icon: Home, href: '/dashboard', current: false },
     ]
   },
   {
     title: 'Core Operations',
     items: [
-      { name: 'Devices', icon: Cpu, href: '/devices', current: false, requiresPermission: 'canManageDevices' },
-      { name: 'Switches', icon: ToggleLeft, href: '/switches', current: false, requiresPermission: 'canManageDevices' },
-      { name: 'Master Control', icon: Power, href: '/master', current: false, requiresPermission: 'canManageDevices' },
+      { name: 'Devices', icon: Cpu, href: '/dashboard/devices', current: false, requiresPermission: 'canManageDevices' },
+      { name: 'Switches', icon: ToggleLeft, href: '/dashboard/switches', current: false, requiresPermission: 'canManageDevices' },
+      { name: 'Master Control', icon: Power, href: '/dashboard/master', current: false, requiresPermission: 'canManageDevices' },
     ]
   },
   {
     title: 'Scheduling',
     items: [
-      { name: 'Schedule', icon: Calendar, href: '/schedule', current: false, requiresPermission: 'canManageSchedule' },
+      { name: 'Schedule', icon: Calendar, href: '/dashboard/schedule', current: false, requiresPermission: 'canManageSchedule' },
     ]
   },
   {
     title: 'User Management',
     items: [
-      { name: 'Users', icon: Users, href: '/users', current: false, requiresPermission: 'canManageUsers' },
-      { name: 'Role Management', icon: Shield, href: '/roles', current: false, requiresPermission: 'canManageUsers' },
-      { name: 'Permissions', icon: UserCheck, href: '/permissions', current: false, requiresPermission: 'canApproveUsers' },
+      { name: 'Users', icon: Users, href: '/dashboard/users', current: false, requiresPermission: 'canManageUsers' },
+      { name: 'Role Management', icon: Shield, href: '/dashboard/roles', current: false, requiresPermission: 'canManageUsers' },
+      { name: 'Permissions', icon: UserCheck, href: '/dashboard/permissions', current: false, requiresPermission: 'canApproveUsers' },
     ]
   },
   {
     title: 'Analytics & Monitoring',
     items: [
-      { name: 'Analytics & Monitoring', icon: BarChart3, href: '/analytics', current: false, adminOnly: true },
-      { name: 'AI/ML Insights', icon: Brain, href: '/aiml', current: false, adminOnly: true },
-      { name: 'Grafana Analytics', icon: BarChart3, href: '/grafana', current: false, adminOnly: true },
-      { name: 'Prometheus Metrics', icon: Monitor, href: '/prometheus', current: false, adminOnly: true },
+      { name: 'Analytics & Monitoring', icon: BarChart3, href: '/dashboard/analytics', current: false, adminOnly: true },
+      { name: 'AI/ML Insights', icon: Brain, href: '/dashboard/aiml', current: false, adminOnly: true },
+      { name: 'Grafana Analytics', icon: BarChart3, href: '/dashboard/grafana', current: false, adminOnly: true },
+      { name: 'Prometheus Metrics', icon: Monitor, href: '/dashboard/prometheus', current: false, adminOnly: true },
     ]
   },
   {
     title: 'Operations & Maintenance',
     items: [
-      { name: 'Notice Board', icon: FileText, href: '/notices', current: false },
-      { name: 'System Health', icon: Server, href: '/system-health', current: false, adminOnly: true },
+      { name: 'Notice Board', icon: FileText, href: '/dashboard/notices', current: false },
+      { name: 'System Health', icon: Server, href: '/dashboard/system-health', current: false, adminOnly: true },
     ]
   },
   {
     title: 'Support & Logs',
     items: [
-      { name: 'Support Tickets', icon: Ticket, href: '/tickets', current: false },
-      { name: 'Active Logs', icon: FileText, href: '/logs', current: false, adminOnly: true },
+      { name: 'Support Tickets', icon: Ticket, href: '/dashboard/tickets', current: false },
+      { name: 'Active Logs', icon: FileText, href: '/dashboard/logs', current: false, adminOnly: true },
     ]
   },
   {
     title: 'Account & Settings',
     items: [
-      { name: 'Profile', icon: User, href: '/profile', current: false },
-      { name: 'Settings', icon: Settings, href: '/settings', current: false },
+      { name: 'Profile', icon: User, href: '/dashboard/profile', current: false },
+      { name: 'Settings', icon: Settings, href: '/dashboard/settings', current: false },
     ]
   },
 ];
@@ -115,7 +115,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ className, onNavigateClose }) 
     }
   }, [isAuthenticated, navigate]);
 
-  const deviceRelated = new Set(['/', '/devices', '/switches', '/master']);
+  const deviceRelated = new Set(['/dashboard', '/dashboard/devices', '/dashboard/switches', '/dashboard/master']);
   // Future: add schedule/users background prefetch similarly without blocking
 
   const handleNavigation = (href: string) => {

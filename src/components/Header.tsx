@@ -222,14 +222,14 @@ export function Header() {
               <CardContent className="p-0">
                 <button
                   className="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-accent"
-                  onClick={() => { closeAll(); navigate('/'); }}
+                  onClick={() => { closeAll(); navigate('/dashboard'); }}
                 >
                   <Home className="w-4 h-4" />
                   <span>Home</span>
                 </button>
                 <button
                   className="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-accent"
-                  onClick={() => { closeAll(); navigate('/settings'); }}
+                  onClick={() => { closeAll(); navigate('/dashboard/settings'); }}
                 >
                   <Settings className="w-4 h-4" />
                   <span>Settings</span>

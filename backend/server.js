@@ -305,7 +305,7 @@ function nextDeviceSeq(deviceId) {
 
 // Debouncing for MQTT state messages to prevent spam
 const deviceStateDebounce = new Map(); // deviceId -> {timeoutId, lastStateHash}
-const DEBOUNCE_MS = 2000; // 2 second debounce window
+const DEBOUNCE_MS = 500; // 500ms debounce window for faster UI updates
 
 function emitDeviceStateChanged(device, meta = {}) {
   console.log(`[DEBUG] emitDeviceStateChanged called for device: ${device?.name || 'unknown'}`);
@@ -466,6 +466,7 @@ const { auth, authorize } = require('./middleware/auth');
 
 // Import services (only those actively used)
 const scheduleService = require('./services/scheduleService');
+const contentSchedulerService = require('./services/contentSchedulerService');
 const deviceMonitoringService = require('./services/deviceMonitoringService');
 const EnhancedLoggingService = require('./services/enhancedLoggingService');
 const ESP32CrashMonitor = require('./services/esp32CrashMonitor'); // Import ESP32 crash monitor service
@@ -643,8 +644,15 @@ app.use((req, res, next) => {
   next();
 });
 
-// Serve static files for uploads
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// Serve static files for uploads with CORS headers
+app.use('/uploads', (req, res, next) => {
+  // Set CORS headers for static files
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  res.header('Cross-Origin-Resource-Policy', 'cross-origin');
+  next();
+}, express.static(path.join(__dirname, 'uploads')));
 
 // Initialize main Socket.IO instance
 
@@ -1208,6 +1216,16 @@ server.listen(PORT, '0.0.0.0', () => {
     // Start device monitoring service (5-minute checks)
     const deviceMonitoringService = require('./services/deviceMonitoringService');
     deviceMonitoringService.start();
+
+    // Initialize content scheduler service
+    try {
+      (async () => {
+        await contentSchedulerService.initialize();
+      })();
+      console.log('[SERVICES] Content scheduler service started');
+    } catch (error) {
+      console.error('Error initializing content scheduler service:', error);
+    }
 
     console.log('[SERVICES] Enhanced logging and monitoring services started');
   }, 5000); // Wait 5 seconds for database connection

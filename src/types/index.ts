@@ -236,6 +236,7 @@ export interface Notice {
     priority: number;
     displayOrder: number;
   }>;
+  driveLink?: string;
   displayDevices?: Array<{
     deviceId: string;
     displayedAt: Date;
@@ -263,7 +264,6 @@ export interface NoticeSubmissionData {
     departments?: string[];
     classes?: string[];
   };
-  selectedBoards?: string[];
   attachments?: File[];
 }
 
@@ -288,6 +288,9 @@ export interface NoticeFilters {
   category?: string;
   priority?: string;
   submittedBy?: string;
+  search?: string;
+  dateFrom?: string;
+  dateTo?: string;
   page?: number;
   limit?: number;
   sortBy?: string;

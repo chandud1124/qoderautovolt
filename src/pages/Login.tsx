@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
 import { authAPI } from '@/services/api';
-import { Eye, EyeOff } from 'lucide-react';
+import { Eye, EyeOff, Home } from 'lucide-react';
 
 const Login: React.FC = () => {
   const [form, setForm] = useState({ email: '', password: '' });
@@ -43,7 +43,7 @@ const Login: React.FC = () => {
         });
 
         // Use replace to prevent back navigation to login
-        navigate('/', { replace: true });
+        navigate('/dashboard', { replace: true });
       } else {
         throw new Error('Invalid response format');
       }
@@ -65,6 +65,16 @@ const Login: React.FC = () => {
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen">
+      <Button
+        variant="ghost"
+        size="sm"
+        className="absolute top-4 left-4 gap-2"
+        onClick={() => navigate('/landing')}
+      >
+        <Home className="h-4 w-4" />
+        Back to Home
+      </Button>
+      
       <div className="text-center mb-8">
         <div className="flex justify-center mb-4">
           <img

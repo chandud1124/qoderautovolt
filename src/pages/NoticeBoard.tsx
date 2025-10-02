@@ -4,15 +4,18 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Loader2, Plus, Eye, Clock, CheckCircle, XCircle, AlertTriangle, Monitor, Edit, Trash2 } from 'lucide-react';
 import { NoticeSubmissionForm } from '@/components/NoticeSubmissionForm';
 import { NoticeApprovalPanel } from '@/components/NoticeApprovalPanel';
-import { NoticePublishingPanel } from '@/components/NoticePublishingPanel';
 import BoardManager from '@/components/BoardManager';
 import ContentScheduler from '@/components/ContentScheduler';
+import LiveScreenPreview from '@/components/LiveScreenPreview';
+import { NoticeFilters } from '@/components/NoticeFilters';
+import { NoticePagination } from '@/components/NoticePagination';
+import { BulkActions } from '@/components/BulkActions';
 import { useAuth } from '@/hooks/useAuth';
-import { Notice, NoticeFilters } from '@/types';
+import { Notice, NoticeFilters as NoticeFiltersType } from '@/types';
 import api from '@/services/api';
 import mqttService from '@/services/mqtt';
 import { useToast } from '@/hooks/use-toast';
@@ -23,20 +26,46 @@ const NoticeBoard: React.FC = () => {
   const [notices, setNotices] = useState<Notice[]>([]);
   const [activeNotices, setActiveNotices] = useState<Notice[]>([]);
   const [pendingNotices, setPendingNotices] = useState<Notice[]>([]);
-  const [approvedNotices, setApprovedNotices] = useState<Notice[]>([]);
+  const [activeTab, setActiveTab] = useState<string>((user?.role === 'admin' || user?.role === 'super-admin') ? 'pending' : 'live-preview');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [newlyApprovedContentId, setNewlyApprovedContentId] = useState<string | null>(null);
+  const [contentSchedulerRefreshTrigger, setContentSchedulerRefreshTrigger] = useState(0);
+
+  const refreshContentScheduler = () => {
+    setContentSchedulerRefreshTrigger(prev => prev + 1);
+  };
+
+  // Log tab changes
+  useEffect(() => {
+    console.log('[NoticeBoard] Active tab changed to:', activeTab);
+  }, [activeTab]);
   const [showSubmissionForm, setShowSubmissionForm] = useState(false);
   const [editingNotice, setEditingNotice] = useState<Notice | null>(null);
   const [showEditForm, setShowEditForm] = useState(false);
   const [editContent, setEditContent] = useState('');
   const [boards, setBoards] = useState<any[]>([]);
-  const [filters, setFilters] = useState<NoticeFilters>({
+  const [filters, setFilters] = useState<NoticeFiltersType>({
     page: 1,
-    limit: 10,
+    limit: 25,
     sortBy: 'createdAt',
-    sortOrder: 'desc'
+    sortOrder: 'desc',
+    search: '',
+    status: undefined,
+    priority: undefined,
+    category: undefined,
+    dateFrom: undefined,
+    dateTo: undefined
   });
+
+  const [pagination, setPagination] = useState({
+    currentPage: 1,
+    totalPages: 1,
+    totalItems: 0
+  });
+
+  const [selectedNotices, setSelectedNotices] = useState<string[]>([]);
+  const [drafts, setDrafts] = useState<Notice[]>([]);
 
   // Fetch notices based on user role
   const fetchNotices = async () => {
@@ -51,6 +80,11 @@ const NoticeBoard: React.FC = () => {
 
       if (noticesResponse.data.success) {
         setNotices(noticesResponse.data.notices);
+        setPagination({
+          currentPage: noticesResponse.data.page,
+          totalPages: noticesResponse.data.totalPages,
+          totalItems: noticesResponse.data.totalItems
+        });
       }
 
       if (activeResponse.data.success) {
@@ -59,15 +93,9 @@ const NoticeBoard: React.FC = () => {
 
       // Fetch pending notices for admin users
       if (user?.role === 'admin' || user?.role === 'super-admin') {
-        const [pendingResponse, approvedResponse] = await Promise.all([
-          api.get('/notices/pending'),
-          api.get('/notices', { params: { status: 'approved' } })
-        ]);
+        const pendingResponse = await api.get('/notices/pending');
         if (pendingResponse.data.success) {
           setPendingNotices(pendingResponse.data.notices);
-        }
-        if (approvedResponse.data.success) {
-          setApprovedNotices(approvedResponse.data.notices);
         }
       }
     } catch (err: any) {
@@ -89,11 +117,23 @@ const NoticeBoard: React.FC = () => {
     }
   };
 
+  // Fetch drafts for current user
+  const fetchDrafts = async () => {
+    try {
+      const response = await api.get('/notices/drafts');
+      if (response.data.success) {
+        setDrafts(response.data.drafts);
+      }
+    } catch (err) {
+      console.error('Failed to fetch drafts:', err);
+    }
+  };
+
   useEffect(() => {
     fetchNotices();
     fetchBoards();
-
-    // Set up MQTT event listeners for real-time updates
+    fetchDrafts(); // Add this line
+    // ... rest of useEffect
     const handleNoticeSubmitted = (data: any) => {
       console.log('[MQTT] Notice submitted:', data);
       toast({
@@ -170,6 +210,14 @@ const NoticeBoard: React.FC = () => {
   }, [filters, user, toast]);
 
   const handleEditNotice = (notice: Notice) => {
+    // If notice is approved/active, open ContentScheduler for full editing
+    if (notice.status === 'approved' || notice.status === 'published') {
+      setNewlyApprovedContentId(notice._id);
+      setActiveTab('content-scheduler');
+      return;
+    }
+
+    // For pending notices, use simple edit dialog
     setEditingNotice(notice);
     setEditContent(notice.content);
     setShowEditForm(true);
@@ -277,121 +325,25 @@ const NoticeBoard: React.FC = () => {
         </Alert>
       )}
 
-      <Tabs defaultValue="active" className="space-y-4">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
         <TabsList>
-          <TabsTrigger value="active">Active Notices</TabsTrigger>
+          <TabsTrigger value="live-preview">Live Preview</TabsTrigger>
           {(user?.role === 'admin' || user?.role === 'super-admin') && (
             <>
               <TabsTrigger value="board-management">Board Management</TabsTrigger>
               <TabsTrigger value="content-scheduler">Content Scheduler</TabsTrigger>
-              <TabsTrigger value="approved">
-                Approved ({approvedNotices.length})
-              </TabsTrigger>
               <TabsTrigger value="pending">
                 Pending Approval ({pendingNotices.length})
               </TabsTrigger>
             </>
           )}
+          <TabsTrigger value="my-drafts">
+            My Drafts ({drafts.length})
+          </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="active" className="space-y-4">
-          {activeNotices.length === 0 ? (
-            <Card>
-              <CardContent className="flex items-center justify-center h-32">
-                <p className="text-muted-foreground">No active notices at the moment</p>
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="grid gap-4">
-              {activeNotices.map((notice) => (
-                <Card key={notice._id} className="hover:shadow-md transition-shadow">
-                  <CardHeader>
-                    <div className="flex justify-between items-start">
-                      <div className="space-y-2">
-                        <CardTitle className="text-xl">{notice.title}</CardTitle>
-                        <div className="flex items-center gap-2">
-                          <Badge variant={getPriorityColor(notice.priority)}>
-                            {notice.priority.toUpperCase()}
-                          </Badge>
-                          <Badge variant="outline">{notice.category}</Badge>
-                          <Badge variant={getStatusColor(notice.status)}>
-                            {getStatusIcon(notice.status)}
-                            <span className="ml-1">{notice.status}</span>
-                          </Badge>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleEditNotice(notice)}
-                          title="Edit this notice"
-                        >
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleDeleteNotice(notice._id)}
-                          className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                          title="Delete this notice"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                        <div className="text-right text-sm text-muted-foreground">
-                          <p>By: {notice.submittedBy.name}</p>
-                          <p>{formatDate(notice.createdAt)}</p>
-                          {notice.expiryDate && (
-                            <p className="text-orange-600">
-                              Expires: {formatDate(notice.expiryDate)}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="prose prose-sm max-w-none">
-                      <p className="whitespace-pre-wrap">{notice.content}</p>
-                    </div>
-                    {notice.attachments && notice.attachments.length > 0 && (
-                      <div className="mt-4">
-                        <h4 className="font-medium mb-2">Attachments:</h4>
-                        <div className="flex flex-wrap gap-2">
-                          {notice.attachments.map((attachment, index) => (
-                            <Button
-                              key={index}
-                              variant="outline"
-                              size="sm"
-                              onClick={() => window.open(attachment.url, '_blank')}
-                            >
-                              <Eye className="h-4 w-4 mr-1" />
-                              {attachment.originalName}
-                            </Button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    {notice.targetBoards && notice.targetBoards.length > 0 && (
-                      <div className="mt-4">
-                        <h4 className="font-medium mb-2 flex items-center">
-                          <Monitor className="h-4 w-4 mr-2" />
-                          Display Boards:
-                        </h4>
-                        <div className="flex flex-wrap gap-2">
-                          {notice.targetBoards.map((assignment, index) => (
-                            <Badge key={index} variant="outline" className="text-xs">
-                              Board ID: {assignment.boardId.slice(-6)} • Priority: {assignment.priority}
-                            </Badge>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          )}
+        <TabsContent value="live-preview">
+          <LiveScreenPreview />
         </TabsContent>
 
         {(user?.role === 'admin' || user?.role === 'super-admin') && (
@@ -405,27 +357,155 @@ const NoticeBoard: React.FC = () => {
             <ContentScheduler
               boards={boards}
               onScheduleUpdate={() => fetchNotices()}
+              autoEditContentId={newlyApprovedContentId}
+              onAutoEditComplete={() => setNewlyApprovedContentId(null)}
+              refreshTrigger={contentSchedulerRefreshTrigger}
             />
           </TabsContent>
         )}
 
         {(user?.role === 'admin' || user?.role === 'super-admin') && (
-          <TabsContent value="approved">
-            <NoticePublishingPanel
-              notices={approvedNotices}
-              onRefresh={fetchNotices}
+          <TabsContent value="pending" className="space-y-4">
+            {/* Add Filters */}
+            <NoticeFilters
+              filters={filters}
+              onFilterChange={(newFilters) => {
+                setFilters(newFilters);
+                fetchNotices();
+              }}
+              onClearFilters={() => {
+                setFilters({
+                  page: 1,
+                  limit: 25,
+                  sortBy: 'createdAt',
+                  sortOrder: 'desc'
+                });
+                fetchNotices();
+              }}
             />
-          </TabsContent>
-        )}
 
-        {(user?.role === 'admin' || user?.role === 'super-admin') && (
-          <TabsContent value="pending">
+            {/* Add Bulk Actions */}
+            <BulkActions
+              selectedNotices={selectedNotices}
+              totalNotices={pendingNotices.length}
+              onSelectAll={() => setSelectedNotices(pendingNotices.map(n => n._id))}
+              onDeselectAll={() => setSelectedNotices([])}
+              onActionComplete={() => {
+                setSelectedNotices([]);
+                fetchNotices();
+              }}
+            />
+
+            {/* Existing NoticeApprovalPanel */}
             <NoticeApprovalPanel
               notices={pendingNotices}
               onRefresh={fetchNotices}
+              onApprove={(scheduledContentId) => {
+                // Instead of auto-switching, just refresh and show success
+                console.log('[NoticeBoard] Notice approved with scheduled content ID:', scheduledContentId);
+                fetchNotices();
+                // Optionally show a success message about moving to Content Scheduler
+              }}
+              onContentSchedulerRefresh={refreshContentScheduler}
             />
+
+            {/* Add Pagination */}
+            {pendingNotices.length > 0 && (
+              <NoticePagination
+                currentPage={pagination.currentPage}
+                totalPages={pagination.totalPages}
+                totalItems={pagination.totalItems}
+                itemsPerPage={filters.limit || 25}
+                onPageChange={(page) => {
+                  setFilters({ ...filters, page });
+                  fetchNotices();
+                }}
+                onItemsPerPageChange={(limit) => {
+                  setFilters({ ...filters, limit, page: 1 });
+                  fetchNotices();
+                }}
+              />
+            )}
           </TabsContent>
         )}
+
+        <TabsContent value="my-drafts">
+          <Card>
+            <CardHeader>
+              <CardTitle>My Drafts</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {drafts.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  <p>No drafts saved</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {drafts.map((draft) => (
+                    <Card key={draft._id} className="p-4">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <h3 className="font-semibold">{draft.title}</h3>
+                          <p className="text-sm text-muted-foreground mt-1">
+                            {draft.content.substring(0, 150)}...
+                          </p>
+                          <div className="flex items-center gap-2 mt-2">
+                            <Badge variant={getPriorityColor(draft.priority)}>
+                              {draft.priority}
+                            </Badge>
+                            <Badge variant="secondary">{draft.category}</Badge>
+                            <span className="text-xs text-muted-foreground">
+                              Last updated: {formatDate(draft.updatedAt)}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              // Open edit dialog with draft data
+                              setEditingNotice(draft);
+                              setEditContent(draft.content);
+                              setShowEditForm(true);
+                            }}
+                          >
+                            <Edit className="h-4 w-4 mr-2" />
+                            Edit
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={async () => {
+                              if (confirm('Delete this draft?')) {
+                                try {
+                                  await api.delete(`/notices/drafts/${draft._id}`);
+                                  toast({
+                                    title: 'Draft deleted',
+                                    description: 'The draft has been deleted successfully.'
+                                  });
+                                  fetchDrafts();
+                                } catch (err) {
+                                  toast({
+                                    title: 'Error',
+                                    description: 'Failed to delete draft',
+                                    variant: 'destructive'
+                                  });
+                                }
+                              }
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
       </Tabs>
 
       {showSubmissionForm && (
@@ -443,6 +523,9 @@ const NoticeBoard: React.FC = () => {
           <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Edit Notice</DialogTitle>
+              <DialogDescription>
+                Modify the content of this notice. Changes will be saved immediately.
+              </DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
               <div className="text-sm text-muted-foreground">

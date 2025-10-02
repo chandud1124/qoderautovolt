@@ -11,7 +11,6 @@ import { Loader2, Upload, X, Plus, Tag } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import api from '@/services/api';
 import { NoticeSubmissionData } from '@/types';
-import BoardSelector from './BoardSelector';
 
 interface NoticeSubmissionFormProps {
   onClose: () => void;
@@ -33,7 +32,6 @@ const NoticeSubmissionForm: React.FC<NoticeSubmissionFormProps> = ({ onClose, on
     priority: 'medium',
     category: 'general',
     targetAudience: {},
-    selectedBoards: [],
     attachments: []
   });
 
@@ -119,10 +117,6 @@ const NoticeSubmissionForm: React.FC<NoticeSubmissionFormProps> = ({ onClose, on
 
       if (formData.targetAudience.classes?.length) {
         submitData.append('targetAudienceClasses', JSON.stringify(formData.targetAudience.classes));
-      }
-
-      if (formData.selectedBoards?.length) {
-        submitData.append('selectedBoards', JSON.stringify(formData.selectedBoards));
       }
 
       attachments.forEach((file, index) => {
@@ -345,12 +339,6 @@ const NoticeSubmissionForm: React.FC<NoticeSubmissionFormProps> = ({ onClose, on
               </div>
             )}
           </div>
-
-          <BoardSelector
-            selectedBoards={formData.selectedBoards || []}
-            onSelectionChange={(boardIds) => handleInputChange('selectedBoards', boardIds)}
-            maxSelections={5}
-          />
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>

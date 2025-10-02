@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -12,13 +12,16 @@ import { Loader2, CheckCircle, XCircle, Eye, AlertTriangle, Edit } from 'lucide-
 import { useToast } from '@/hooks/use-toast';
 import api from '@/services/api';
 import { Notice, NoticeReviewData } from '@/types';
+import { config } from '@/config/env';
 
 interface NoticeApprovalPanelProps {
   notices: Notice[];
   onRefresh: () => void;
+  onApprove?: (scheduledContentId?: string) => void; // Callback to switch to Content Scheduler tab with content ID
+  onContentSchedulerRefresh?: () => void; // Callback to refresh ContentScheduler
 }
 
-const NoticeApprovalPanel: React.FC<NoticeApprovalPanelProps> = ({ notices, onRefresh }) => {
+const NoticeApprovalPanel: React.FC<NoticeApprovalPanelProps> = ({ notices, onRefresh, onApprove, onContentSchedulerRefresh }) => {
   const { toast } = useToast();
   const [loading, setLoading] = useState<string | null>(null);
   const [reviewDialog, setReviewDialog] = useState<{
@@ -31,6 +34,24 @@ const NoticeApprovalPanel: React.FC<NoticeApprovalPanelProps> = ({ notices, onRe
     action: null
   });
   const [rejectionReason, setRejectionReason] = useState('');
+  const [schedulingDialog, setSchedulingDialog] = useState<{
+    open: boolean;
+    notice: Notice | null;
+    scheduledContentId: string | null;
+  }>({
+    open: false,
+    notice: null,
+    scheduledContentId: null
+  });
+  const [scheduleData, setScheduleData] = useState({
+    duration: 30,
+    scheduleType: 'recurring' as 'always' | 'recurring' | 'fixed',
+    selectedDays: [1, 2, 3, 4, 5], // Monday to Friday by default
+    startTime: '09:00',
+    endTime: '17:00',
+    assignedBoards: [] as string[]
+  });
+  const [availableBoards, setAvailableBoards] = useState<any[]>([]);
   const [editingNotice, setEditingNotice] = useState<Notice | null>(null);
   const [editData, setEditData] = useState({
     title: '',
@@ -39,6 +60,14 @@ const NoticeApprovalPanel: React.FC<NoticeApprovalPanelProps> = ({ notices, onRe
     tags: [] as string[]
   });
   const [tagInput, setTagInput] = useState('');
+
+  // Debug logging for scheduling dialog
+  useEffect(() => {
+    if (schedulingDialog.open) {
+      console.log('[NoticeApprovalPanel] Scheduling dialog opened for notice:', schedulingDialog.notice?.title);
+      console.log('[NoticeApprovalPanel] ScheduledContentId:', schedulingDialog.scheduledContentId);
+    }
+  }, [schedulingDialog.open, schedulingDialog.notice, schedulingDialog.scheduledContentId]);
 
   const getPriorityColor = (priority: string) => {
     switch (priority) {
@@ -81,12 +110,39 @@ const NoticeApprovalPanel: React.FC<NoticeApprovalPanelProps> = ({ notices, onRe
       const response = await api.patch(`/notices/${noticeId}/review`, reviewData);
 
       if (response.data.success) {
+        console.log('[NoticeApprovalPanel] Approval successful, action:', action);
+        console.log('[NoticeApprovalPanel] onApprove callback exists:', !!onApprove);
+        console.log('[NoticeApprovalPanel] ScheduledContent ID:', response.data.scheduledContentId);
+        
         toast({
           title: `Notice ${action}d successfully`,
           description: action === 'approve'
-            ? 'The notice has been published.'
+            ? 'Notice approved! Configure display schedule below.'
             : 'The notice has been rejected and the submitter has been notified.'
         });
+        
+        if (action === 'approve') {
+          // Show scheduling dialog instead of auto-switching
+          const scheduledContentId = response.data.scheduledContentId;
+          console.log('[NoticeApprovalPanel] Opening scheduling dialog for notice:', reviewDialog.notice?.title);
+          console.log('[NoticeApprovalPanel] ScheduledContentId:', scheduledContentId);
+          setScheduleData({
+            duration: 30,
+            scheduleType: 'recurring' as 'always' | 'recurring' | 'fixed',
+            selectedDays: [1, 2, 3, 4, 5], // Monday to Friday by default
+            startTime: '09:00',
+            endTime: '17:00',
+            assignedBoards: [] as string[]
+          });
+          fetchBoards(); // Fetch available boards
+          setSchedulingDialog({
+            open: true,
+            notice: reviewDialog.notice,
+            scheduledContentId
+          });
+          console.log('[NoticeApprovalPanel] Scheduling dialog state set to open');
+        }
+        
         setReviewDialog({ open: false, notice: null, action: null });
         setRejectionReason('');
         onRefresh();
@@ -162,6 +218,101 @@ const NoticeApprovalPanel: React.FC<NoticeApprovalPanelProps> = ({ notices, onRe
     setRejectionReason('');
   };
 
+  const handleSkipAndPublish = async () => {
+    if (!schedulingDialog.notice) return;
+
+    setLoading(schedulingDialog.notice._id);
+
+    try {
+      const response = await api.patch(`/notices/${schedulingDialog.notice._id}/schedule-publish`, {
+        skipScheduling: true
+      });
+
+      if (response.data.success) {
+        toast({
+          title: 'Notice published successfully',
+          description: 'The notice has been published without scheduling.'
+        });
+        setSchedulingDialog({ open: false, notice: null, scheduledContentId: null });
+        onRefresh();
+        onContentSchedulerRefresh?.(); // Refresh ContentScheduler
+      }
+    } catch (err: any) {
+      toast({
+        title: 'Publishing failed',
+        description: err.response?.data?.message || 'Failed to publish notice',
+        variant: 'destructive'
+      });
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  const handleSaveScheduleAndPublish = async () => {
+    if (!schedulingDialog.notice) return;
+
+    setLoading(schedulingDialog.notice._id);
+
+    try {
+      const response = await api.patch(`/notices/${schedulingDialog.notice._id}/schedule-publish`, {
+        duration: scheduleData.duration,
+        scheduleType: scheduleData.scheduleType,
+        selectedDays: scheduleData.selectedDays,
+        startTime: scheduleData.startTime,
+        endTime: scheduleData.endTime,
+        assignedBoards: scheduleData.assignedBoards,
+        skipScheduling: false
+      });
+
+      if (response.data.success) {
+        toast({
+          title: 'Notice scheduled and published successfully',
+          description: 'The notice has been configured and published.'
+        });
+        setSchedulingDialog({ open: false, notice: null, scheduledContentId: null });
+        onRefresh();
+        onContentSchedulerRefresh?.(); // Refresh ContentScheduler
+      }
+    } catch (err: any) {
+      toast({
+        title: 'Scheduling failed',
+        description: err.response?.data?.message || 'Failed to schedule and publish notice',
+        variant: 'destructive'
+      });
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  const toggleDay = (dayIndex: number) => {
+    setScheduleData(prev => ({
+      ...prev,
+      selectedDays: prev.selectedDays.includes(dayIndex)
+        ? prev.selectedDays.filter(d => d !== dayIndex)
+        : [...prev.selectedDays, dayIndex].sort()
+    }));
+  };
+
+  const fetchBoards = async () => {
+    try {
+      const response = await api.get('/boards');
+      if (response.data.success) {
+        setAvailableBoards(response.data.boards);
+      }
+    } catch (err) {
+      console.error('Failed to fetch boards:', err);
+    }
+  };
+
+  const toggleBoard = (boardId: string) => {
+    setScheduleData(prev => ({
+      ...prev,
+      assignedBoards: prev.assignedBoards.includes(boardId)
+        ? prev.assignedBoards.filter(id => id !== boardId)
+        : [...prev.assignedBoards, boardId]
+    }));
+  };
+
   if (notices.length === 0) {
     return (
       <Card>
@@ -211,6 +362,93 @@ const NoticeApprovalPanel: React.FC<NoticeApprovalPanelProps> = ({ notices, onRe
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
+                  {/* Kiosk-Style Preview Section */}
+                  <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-lg p-6 border-2 border-slate-700">
+                    <div className="flex items-center gap-2 mb-4">
+                      <Eye className="h-5 w-5 text-blue-400" />
+                      <h3 className="text-lg font-semibold text-white">Display Preview</h3>
+                      <Badge variant="outline" className="ml-auto bg-blue-500/20 text-blue-300 border-blue-500/50">
+                        As users will see it
+                      </Badge>
+                    </div>
+                    
+                    {/* Display content based on type */}
+                    {notice.contentType === 'image' && notice.attachments && notice.attachments.length > 0 ? (
+                      <div className="space-y-4">
+                        {notice.content && (
+                          <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700">
+                            <p className="text-white text-base leading-relaxed whitespace-pre-wrap">{notice.content}</p>
+                          </div>
+                        )}
+                        <div className="grid gap-4">
+                          {notice.attachments
+                            .filter(att => att.mimetype?.startsWith('image/') || att.originalName?.match(/\.(jpg|jpeg|png|gif|webp)$/i))
+                            .map((attachment, index) => (
+                              <div key={index} className="border-2 border-slate-600 rounded-lg overflow-hidden bg-black">
+                                <img
+                                  src={`${config.staticBaseUrl}${attachment.url}`}
+                                  alt={attachment.originalName}
+                                  className="w-full h-auto max-h-[500px] object-contain"
+                                  onError={(e) => {
+                                    console.error('Image load error:', attachment.url);
+                                    console.error('Full URL:', `${config.staticBaseUrl}${attachment.url}`);
+                                    console.error('Config staticBaseUrl:', config.staticBaseUrl);
+                                    e.currentTarget.style.display = 'none';
+                                    e.currentTarget.parentElement!.innerHTML = '<div class="p-4 text-red-400">Failed to load image</div>';
+                                  }}
+                                />
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+                    ) : notice.contentType === 'video' && notice.attachments && notice.attachments.length > 0 ? (
+                      <div className="space-y-4">
+                        {notice.content && (
+                          <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700">
+                            <p className="text-white text-base leading-relaxed whitespace-pre-wrap">{notice.content}</p>
+                          </div>
+                        )}
+                        <div className="grid gap-4">
+                          {notice.attachments
+                            .filter(att => att.mimetype?.startsWith('video/') || att.originalName?.match(/\.(mp4|avi|mov|wmv|flv|webm)$/i))
+                            .map((attachment, index) => (
+                              <div key={index} className="border-2 border-slate-600 rounded-lg overflow-hidden bg-black">
+                                <video
+                                  controls
+                                  className="w-full h-auto max-h-[500px]"
+                                  onError={(e) => {
+                                    console.error('Video load error:', attachment.url);
+                                  }}
+                                >
+                                  <source src={`${config.staticBaseUrl}${attachment.url}`} type={attachment.mimetype} />
+                                  Your browser does not support the video tag.
+                                </video>
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="bg-slate-800/50 rounded-lg p-6 border border-slate-700">
+                        <p className="text-white text-base leading-relaxed whitespace-pre-wrap">{notice.content}</p>
+                      </div>
+                    )}
+
+                    {/* Drive Link Preview */}
+                    {notice.driveLink && (
+                      <div className="mt-4 bg-slate-800/50 rounded-lg p-4 border border-slate-700">
+                        <h4 className="text-sm font-medium text-blue-300 mb-2">📁 Cloud Storage Link:</h4>
+                        <a 
+                          href={notice.driveLink} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="text-blue-400 hover:text-blue-300 underline break-all"
+                        >
+                          {notice.driveLink}
+                        </a>
+                      </div>
+                    )}
+                  </div>
+
                   <div className="prose prose-sm max-w-none">
                     <p className="whitespace-pre-wrap">{notice.content}</p>
                   </div>
@@ -218,18 +456,46 @@ const NoticeApprovalPanel: React.FC<NoticeApprovalPanelProps> = ({ notices, onRe
                   {notice.attachments && notice.attachments.length > 0 && (
                     <div>
                       <h4 className="font-medium mb-2">Attachments:</h4>
-                      <div className="flex flex-wrap gap-2">
-                        {notice.attachments.map((attachment, index) => (
-                          <Button
-                            key={index}
-                            variant="outline"
-                            size="sm"
-                            onClick={() => window.open(attachment.url, '_blank')}
-                          >
-                            <Eye className="h-4 w-4 mr-1" />
-                            {attachment.originalName}
-                          </Button>
-                        ))}
+                      <div className="grid gap-2">
+                        {notice.attachments.map((attachment, index) => {
+                          const isImage = attachment.mimetype?.startsWith('image/');
+                          const isVideo = attachment.mimetype?.startsWith('video/');
+                          const isPDF = attachment.mimetype === 'application/pdf';
+                          
+                          return (
+                            <div key={index} className="border rounded-lg p-3 bg-muted/50">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  {isImage && <span className="text-green-600">🖼️</span>}
+                                  {isVideo && <span className="text-blue-600">🎥</span>}
+                                  {isPDF && <span className="text-red-600">📄</span>}
+                                  {!isImage && !isVideo && !isPDF && <span className="text-gray-600">📎</span>}
+                                  <span className="font-medium text-sm">{attachment.originalName}</span>
+                                </div>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => window.open(`${config.staticBaseUrl}${attachment.url}`, '_blank')}
+                                >
+                                  <Eye className="h-4 w-4 mr-1" />
+                                  View
+                                </Button>
+                              </div>
+                              {isImage && (
+                                <div className="mt-2">
+                                  <img
+                                    src={`${config.staticBaseUrl}${attachment.url}`}
+                                    alt={attachment.originalName}
+                                    className="max-w-full h-auto max-h-48 rounded border"
+                                    onError={(e) => {
+                                      e.currentTarget.style.display = 'none';
+                                    }}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
@@ -447,6 +713,169 @@ const NoticeApprovalPanel: React.FC<NoticeApprovalPanelProps> = ({ notices, onRe
               Save Changes
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Integrated Scheduling Dialog */}
+      <Dialog
+        open={schedulingDialog.open}
+        onOpenChange={(open) => {
+          console.log('[NoticeApprovalPanel] Dialog onOpenChange called with:', open);
+          setSchedulingDialog(prev => ({ ...prev, open }));
+        }}
+      >
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Schedule Notice Display</DialogTitle>
+            <DialogDescription>
+              Configure when and where this notice should be displayed before publishing.
+            </DialogDescription>
+          </DialogHeader>
+
+          {schedulingDialog.notice && (
+            <div className="space-y-6">
+              {/* Notice Preview */}
+              <div className="p-4 bg-muted/50 rounded-lg">
+                <h4 className="font-semibold mb-2">{schedulingDialog.notice.title}</h4>
+                <p className="text-sm text-muted-foreground line-clamp-3">
+                  {schedulingDialog.notice.content}
+                </p>
+              </div>
+
+              {/* Quick Schedule Options */}
+              <div className="grid gap-4">
+                <div className="space-y-2">
+                  <Label>Display Duration (seconds)</Label>
+                  <Input
+                    type="number"
+                    placeholder="30"
+                    min="5"
+                    max="300"
+                    value={scheduleData.duration}
+                    onChange={(e) => setScheduleData(prev => ({ ...prev, duration: parseInt(e.target.value) || 30 }))}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Schedule Type</Label>
+                  <Select 
+                    value={scheduleData.scheduleType}
+                    onValueChange={(value: 'always' | 'recurring' | 'fixed') => 
+                      setScheduleData(prev => ({ ...prev, scheduleType: value }))
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="always">Always Display</SelectItem>
+                      <SelectItem value="recurring">Recurring Schedule</SelectItem>
+                      <SelectItem value="fixed">Fixed Time</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {scheduleData.scheduleType !== 'always' && (
+                  <>
+                    <div className="space-y-2">
+                      <Label>Days of Week</Label>
+                      <div className="flex flex-wrap gap-2">
+                        {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day, index) => (
+                          <Button
+                            key={day}
+                            variant={scheduleData.selectedDays.includes(index) ? "default" : "outline"}
+                            size="sm"
+                            className="min-w-[60px]"
+                            onClick={() => toggleDay(index)}
+                          >
+                            {day}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label>Start Time</Label>
+                        <Input 
+                          type="time" 
+                          value={scheduleData.startTime}
+                          onChange={(e) => setScheduleData(prev => ({ ...prev, startTime: e.target.value }))}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>End Time</Label>
+                        <Input 
+                          type="time" 
+                          value={scheduleData.endTime}
+                          onChange={(e) => setScheduleData(prev => ({ ...prev, endTime: e.target.value }))}
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                <div className="space-y-2">
+                  <Label>Assign to Boards</Label>
+                  <div className="max-h-32 overflow-y-auto border rounded-md p-2">
+                    {availableBoards.length > 0 ? (
+                      <div className="space-y-2">
+                        {availableBoards.map((board) => (
+                          <div key={board._id} className="flex items-center space-x-2">
+                            <input
+                              type="checkbox"
+                              id={`board-${board._id}`}
+                              checked={scheduleData.assignedBoards.includes(board._id)}
+                              onChange={() => toggleBoard(board._id)}
+                              className="rounded"
+                            />
+                            <label
+                              htmlFor={`board-${board._id}`}
+                              className="text-sm font-medium cursor-pointer"
+                            >
+                              {board.name} ({board.location || 'No location'})
+                            </label>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">Loading boards...</p>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Select which boards should display this notice
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between pt-4 border-t">
+                <p className="text-sm text-muted-foreground">
+                  Advanced scheduling options available in Content Scheduler
+                </p>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={handleSkipAndPublish}
+                    disabled={loading === schedulingDialog.notice?._id}
+                  >
+                    {loading === schedulingDialog.notice?._id && (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    )}
+                    Skip & Publish Later
+                  </Button>
+                  <Button
+                    onClick={handleSaveScheduleAndPublish}
+                    disabled={loading === schedulingDialog.notice?._id}
+                  >
+                    {loading === schedulingDialog.notice?._id && (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    )}
+                    Save Schedule & Publish
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </>

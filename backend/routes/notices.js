@@ -8,9 +8,19 @@ const {
   reviewNotice,
   editNotice,
   publishNotice,
+  scheduleAndPublishNotice,
   updateNotice,
   deleteNotice,
   getNoticeStats,
+  searchNotices,
+  bulkApprove,
+  bulkReject,
+  bulkArchive,
+  bulkDelete,
+  getDrafts,
+  saveDraft,
+  updateDraft,
+  deleteDraft,
   upload
 } = require('../controllers/noticeController');
 const { auth, authorize } = require('../middleware/auth');
@@ -23,9 +33,7 @@ const noticeValidation = [
   body('priority').optional().isIn(['low', 'medium', 'high', 'urgent']).withMessage('Invalid priority'),
   body('category').optional().isIn(['general', 'academic', 'administrative', 'event', 'emergency', 'maintenance']).withMessage('Invalid category'),
   body('expiryDate').optional().isISO8601().withMessage('Invalid expiry date'),
-  body('targetAudience').optional().isJSON().withMessage('Invalid target audience format'),
-  body('selectedBoards').optional().isArray({ min: 0, max: 5 }).withMessage('Selected boards must be an array with max 5 boards'),
-  body('selectedBoards.*').optional().isMongoId().withMessage('Each selected board must be a valid ID')
+  body('targetAudience').optional().isJSON().withMessage('Invalid target audience format')
 ];
 
 const reviewValidation = [
@@ -98,6 +106,25 @@ router.patch('/:id/publish',
   publishNotice
 );
 
+// Schedule and publish approved notice - admin only
+router.patch('/:id/schedule-publish',
+  auth,
+  authorize('admin', 'super-admin'),
+  param('id').isMongoId().withMessage('Invalid notice ID'),
+  [
+    body('duration').optional().isInt({ min: 5, max: 3600 }).withMessage('Duration must be 5-3600 seconds'),
+    body('scheduleType').optional().isIn(['fixed', 'recurring', 'always']).withMessage('Invalid schedule type'),
+    body('selectedDays').optional().isArray().withMessage('Selected days must be an array'),
+    body('selectedDays.*').optional().isInt({ min: 0, max: 6 }).withMessage('Day must be 0-6'),
+    body('startTime').optional().matches(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/).withMessage('Invalid start time format (HH:MM)'),
+    body('endTime').optional().matches(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/).withMessage('Invalid end time format (HH:MM)'),
+    body('assignedBoards').optional().isArray().withMessage('Assigned boards must be an array'),
+    body('assignedBoards.*').optional().isMongoId().withMessage('Invalid board ID'),
+    body('skipScheduling').optional().isBoolean().withMessage('Skip scheduling must be boolean')
+  ],
+  scheduleAndPublishNotice
+);
+
 // Update notice
 router.patch('/:id',
   auth,
@@ -118,6 +145,77 @@ router.get('/stats/admin',
   auth,
   authorize('admin', 'super-admin'),
   getNoticeStats
+);
+
+// Search notices with advanced filters
+router.get('/search',
+  auth,
+  searchNotices
+);
+
+// Draft management routes
+router.get('/drafts',
+  auth,
+  getDrafts
+);
+
+router.post('/drafts',
+  auth,
+  saveDraft
+);
+
+router.put('/drafts/:id',
+  auth,
+  param('id').isMongoId().withMessage('Invalid draft ID'),
+  updateDraft
+);
+
+router.delete('/drafts/:id',
+  auth,
+  param('id').isMongoId().withMessage('Invalid draft ID'),
+  deleteDraft
+);
+
+// Bulk operations (admin only)
+router.post('/bulk-approve',
+  auth,
+  authorize('admin', 'super-admin'),
+  [
+    body('noticeIds').isArray({ min: 1 }).withMessage('Notice IDs array is required'),
+    body('noticeIds.*').isMongoId().withMessage('Invalid notice ID format')
+  ],
+  bulkApprove
+);
+
+router.post('/bulk-reject',
+  auth,
+  authorize('admin', 'super-admin'),
+  [
+    body('noticeIds').isArray({ min: 1 }).withMessage('Notice IDs array is required'),
+    body('noticeIds.*').isMongoId().withMessage('Invalid notice ID format'),
+    body('rejectionReason').trim().isLength({ min: 1 }).withMessage('Rejection reason is required')
+  ],
+  bulkReject
+);
+
+router.post('/bulk-archive',
+  auth,
+  authorize('admin', 'super-admin'),
+  [
+    body('noticeIds').isArray({ min: 1 }).withMessage('Notice IDs array is required'),
+    body('noticeIds.*').isMongoId().withMessage('Invalid notice ID format')
+  ],
+  bulkArchive
+);
+
+router.post('/bulk-delete',
+  auth,
+  authorize('admin', 'super-admin'),
+  [
+    body('noticeIds').isArray({ min: 1 }).withMessage('Notice IDs array is required'),
+    body('noticeIds.*').isMongoId().withMessage('Invalid notice ID format')
+  ],
+  bulkDelete
 );
 
 module.exports = router;

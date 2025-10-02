@@ -7,6 +7,7 @@ import { Loader2, CheckCircle, Eye, AlertTriangle, Send, Target } from 'lucide-r
 import { useToast } from '@/hooks/use-toast';
 import api from '@/services/api';
 import { Notice } from '@/types';
+import { config } from '@/config/env';
 import ContentAssignment from './ContentAssignment';
 
 interface NoticePublishingPanelProps {
@@ -133,7 +134,7 @@ const NoticePublishingPanel: React.FC<NoticePublishingPanelProps> = ({ notices, 
                           key={index}
                           variant="outline"
                           size="sm"
-                          onClick={() => window.open(attachment.url, '_blank')}
+                          onClick={() => window.open(`${config.staticBaseUrl}${attachment.url}`, '_blank')}
                         >
                           <Eye className="h-4 w-4 mr-1" />
                           {attachment.originalName}
