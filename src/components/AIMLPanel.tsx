@@ -670,7 +670,7 @@ const AIMLPanel: React.FC = () => {
                     </SelectTrigger>
                     <SelectContent>
                       {classrooms.length === 0 ? (
-                        <SelectItem value="" disabled>No classrooms available</SelectItem>
+                        <SelectItem value="no-classrooms" disabled>No classrooms available</SelectItem>
                       ) : (
                         classrooms.map(c => (
                           <SelectItem key={c.id} value={c.id}>
@@ -690,7 +690,7 @@ const AIMLPanel: React.FC = () => {
                     </SelectTrigger>
                     <SelectContent>
                       {availableDevices.length === 0 ? (
-                        <SelectItem value="" disabled>No devices available for selected classroom</SelectItem>
+                        <SelectItem value="no-devices" disabled>No devices available for selected classroom</SelectItem>
                       ) : (
                         availableDevices.map(d => (
                           <SelectItem key={d.id} value={d.id}>

@@ -394,7 +394,7 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent className="max-h-64">
-                            <SelectItem value="">Select</SelectItem>
+                            <SelectItem value="select" disabled>Select</SelectItem>
                             {list.map(pin => (
                               <SelectItem
                                 key={pin.pin}

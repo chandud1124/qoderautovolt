@@ -154,7 +154,7 @@ const CreateTicketDialog: React.FC<CreateTicketDialogProps> = ({ onTicketCreated
                                     <SelectValue placeholder="Select category" />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="" disabled>Select category</SelectItem>
+                                    <SelectItem value="select-category" disabled>Select category</SelectItem>
                                     {categories.map((category) => (
                                         <SelectItem key={category.value} value={category.value}>
                                             {category.label}
@@ -171,7 +171,7 @@ const CreateTicketDialog: React.FC<CreateTicketDialogProps> = ({ onTicketCreated
                                     <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="" disabled>Select priority</SelectItem>
+                                    <SelectItem value="select-priority" disabled>Select priority</SelectItem>
                                     {priorities.map((priority) => (
                                         <SelectItem key={priority.value} value={priority.value}>
                                             {priority.label}
@@ -226,7 +226,7 @@ const CreateTicketDialog: React.FC<CreateTicketDialogProps> = ({ onTicketCreated
                                 <SelectValue placeholder="Select device if issue is device-related" />
                             </SelectTrigger>
                             <SelectContent>
-                                <SelectItem value="">None</SelectItem>
+                                <SelectItem value="none">None</SelectItem>
                                 {devices.map((device) => (
                                     <SelectItem key={device.id} value={device.id}>
                                         {device.name} - {device.location}
