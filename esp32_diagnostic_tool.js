@@ -12,7 +12,7 @@ console.log('🔧 ESP32 CONNECTIVITY DIAGNOSTIC TOOL\n');
 const ESP32_CONFIG = {
   wifiSSID: 'AIMS-WIFI',
   wifiPassword: 'Aimswifi#2025',
-  backendHost: '172.16.3.56',
+  backendHost: '172.16.3.171',
   backendPort: 3001,
   wsPath: '/esp32-ws',
   heartbeatInterval: 30000, // 30 seconds
@@ -165,7 +165,7 @@ async function provideTroubleshootingSteps(diagnosticResults) {
     console.log('⚠️  WEBSOCKET CONNECTIVITY ISSUES:');
     console.log('   1. Verify WebSocket server is running on port 3001');
     console.log('   2. Check firewall settings');
-    console.log('   3. Test with: telnet 172.16.3.56 3001');
+    console.log(`   3. Test with: telnet ${ESP32_CONFIG.backendHost} 3001`);
     console.log('');
   }
   

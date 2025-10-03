@@ -1,6 +1,7 @@
 const Board = require('../models/Board');
 const BoardGroup = require('../models/BoardGroup');
 const Notice = require('../models/Notice');
+const ScheduledContent = require('../models/ScheduledContent');
 const { validationResult } = require('express-validator');
 
 // Create a new board
@@ -322,13 +323,12 @@ const getBoardContent = async (req, res) => {
     }
 
     // Get scheduled content assigned to this board that is active
-    const ScheduledContent = require('../models/ScheduledContent');
     const now = new Date();
     const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
     const currentTime = now.toTimeString().slice(0, 5); // HH:MM format
 
     const scheduledContent = await ScheduledContent.find({
-      assignedBoards: board._id,
+      assignedBoards: board._id.toString(),
       isActive: true
     })
     .sort({ priority: -1, createdAt: -1 })
@@ -503,6 +503,161 @@ const updateBoardContent = async (req, res) => {
   }
 };
 
+// Get board screen capture (simulated for live preview)
+const getBoardScreenCapture = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const board = await Board.findById(id);
+    if (!board) {
+      return res.status(404).json({
+        success: false,
+        message: 'Board not found'
+      });
+    }
+
+    // Get all active content for this board (for remote control)
+    const now = new Date();
+    const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
+    const currentTime = now.toTimeString().slice(0, 5); // HH:MM format
+
+    const allActiveContent = await ScheduledContent.find({
+      assignedBoards: board._id,
+      isActive: true
+    })
+    .sort({ priority: -1, createdAt: -1 })
+    .populate('createdBy', 'name email');
+
+    // Filter content based on schedule for all content
+    const availableContent = [];
+    let currentContent = null;
+    for (const content of allActiveContent) {
+      const schedule = content.schedule;
+      
+      // Always include 'always' type
+      if (schedule.type === 'always') {
+        availableContent.push(content);
+        continue;
+      }
+      
+      // Check if current day is in schedule
+      if (schedule.daysOfWeek && !schedule.daysOfWeek.includes(currentDay)) {
+        continue;
+      }
+      
+      // Check time range
+      if (schedule.startTime && schedule.endTime) {
+        if (currentTime < schedule.startTime || currentTime > schedule.endTime) {
+          continue;
+        }
+      }
+      
+      availableContent.push(content);
+    }
+
+    // Use the board's actual current content if available, otherwise fallback to first available
+    if (board.currentContent && board.currentContent.noticeId) {
+      // Find the current content in available content
+      currentContent = availableContent.find(content => 
+        content._id.toString() === board.currentContent.noticeId.toString()
+      );
+      
+      // If not found in available content, it might be legacy notice - try to find it
+      if (!currentContent) {
+        currentContent = await ScheduledContent.findById(board.currentContent.noticeId)
+          .populate('createdBy', 'name email');
+      }
+    }
+    
+    // Fallback to first available content if no current content set
+    if (!currentContent && availableContent.length > 0) {
+      currentContent = availableContent[0];
+    }    // Get SERVER_URL from environment or construct it
+    const SERVER_URL = process.env.SERVER_URL || `http://localhost:${process.env.PORT || 3001}`;
+
+    // Find current content index
+    const currentContentIndex = availableContent.length > 0 ? 
+      availableContent.findIndex(content => content._id.toString() === (currentContent?._id.toString() || '')) : -1;
+
+    // Create a simulated screen capture response
+    const screenCapture = {
+      board: {
+        id: board._id,
+        name: board.name,
+        location: board.location,
+        status: board.status,
+        isOnline: board.isOnline
+      },
+      currentContent: currentContent ? {
+        id: currentContent._id,
+        title: currentContent.title,
+        content: currentContent.content,
+        priority: currentContent.priority,
+        duration: currentContent.schedule?.duration || board.currentContent?.duration || 60,
+        attachments: currentContent.attachments ? currentContent.attachments.map(attachment => ({
+          ...attachment,
+          url: attachment.url?.startsWith('http')
+            ? attachment.url
+            : `${SERVER_URL}${attachment.url}`,
+          thumbnail: attachment.thumbnail
+            ? (attachment.thumbnail.startsWith('http')
+                ? attachment.thumbnail
+                : `${SERVER_URL}${attachment.thumbnail}`)
+            : null
+        })) : [],
+        schedule: currentContent.schedule,
+        createdBy: currentContent.createdBy,
+        createdAt: currentContent.createdAt,
+        startedAt: board.currentContent?.startedAt,
+        lastUpdate: board.currentContent?.lastUpdate
+      } : null,
+      availableContent: availableContent.map(content => ({
+        id: content._id,
+        title: content.title,
+        content: content.content,
+        priority: content.priority,
+        duration: content.schedule.duration || 60,
+        attachments: content.attachments ? content.attachments.map(attachment => ({
+          ...attachment,
+          url: attachment.url?.startsWith('http')
+            ? attachment.url
+            : `${SERVER_URL}${attachment.url}`,
+          thumbnail: attachment.thumbnail
+            ? (attachment.thumbnail.startsWith('http')
+                ? attachment.thumbnail
+                : `${SERVER_URL}${attachment.thumbnail}`)
+            : null
+        })) : [],
+        schedule: content.schedule,
+        createdBy: content.createdBy,
+        createdAt: content.createdAt
+      })),
+      currentContentIndex: currentContentIndex,
+      totalContent: availableContent.length,
+      timestamp: new Date().toISOString(),
+      status: currentContent ? 'content_displaying' : 'no_content',
+      liveData: {
+        currentContentFromBoard: board.currentContent,
+        lastReported: board.currentContent?.lastUpdate
+      }
+    };
+
+    res.json({
+      success: true,
+      screenCapture,
+      lastUpdate: new Date()
+    });
+
+  } catch (error) {
+    console.error('Error fetching board screen capture:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch screen capture',
+      error: error.message
+    });
+  }
+};
+
 // Get board statistics
 const getBoardStats = async (req, res) => {
   try {
@@ -614,6 +769,103 @@ const updateBoardStatus = async (req, res) => {
   }
 };
 
+// Update board current content (for Raspberry Pi clients to report what they're displaying)
+const updateBoardCurrentContent = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { contentId, contentType, title, priority, startedAt, duration } = req.body;
+
+    const board = await Board.findById(id);
+    if (!board) {
+      return res.status(404).json({
+        success: false,
+        message: 'Board not found'
+      });
+    }
+
+    // Update the board's current content
+    board.currentContent = {
+      noticeId: contentId,
+      contentType: contentType || 'scheduled',
+      title: title,
+      priority: priority || 0,
+      startedAt: startedAt ? new Date(startedAt) : new Date(),
+      duration: duration || 60,
+      lastUpdate: new Date()
+    };
+
+    await board.save();
+
+    // Emit socket event for real-time updates
+    if (req.io) {
+      req.io.to(`board_${board._id}`).emit('currentContentUpdate', {
+        boardId: board._id,
+        currentContent: board.currentContent
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Board current content updated successfully',
+      currentContent: board.currentContent
+    });
+
+  } catch (error) {
+    console.error('Error updating board current content:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update board current content',
+      error: error.message
+    });
+  }
+};
+
+// Control board content display (next/previous/manual selection)
+const controlBoardContent = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { action, index } = req.body;
+
+    const board = await Board.findById(id);
+    if (!board) {
+      return res.status(404).json({
+        success: false,
+        message: 'Board not found'
+      });
+    }
+
+    // Emit socket event for content control
+    if (req.io) {
+      const controlData = {
+        action: action,
+        index: index,
+        timestamp: new Date().toISOString()
+      };
+
+      req.io.to(`board_${board._id}`).emit('contentControl', controlData);
+      logging.info(`Content control command sent to board ${board._id}: ${action}`);
+    }
+
+    res.json({
+      success: true,
+      message: 'Content control command sent successfully',
+      data: {
+        action: action,
+        index: index,
+        boardId: board._id
+      }
+    });
+
+  } catch (error) {
+    console.error('Error controlling board content:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to control board content',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   createBoard,
   getBoards,
@@ -623,5 +875,8 @@ module.exports = {
   deleteBoard,
   getBoardContent,
   updateBoardContent,
-  getBoardStats
+  getBoardStats,
+  getBoardScreenCapture,
+  updateBoardCurrentContent,
+  controlBoardContent
 };

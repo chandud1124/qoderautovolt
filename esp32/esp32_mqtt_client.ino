@@ -125,13 +125,14 @@ void sendQueuedOfflineEvents() {
 
 // --- GLOBALS AND MACROS (must be before all function usage) ---
 
-#define MQTT_BROKER "172.16.3.171" // Set to backend IP or broker IP
-#define MQTT_PORT 1883
+#define MQTT_BROKER_IP MQTT_BROKER  // Use from config.h
+#define MQTT_PORT_NUM MQTT_PORT      // Use from config.h
 #define MQTT_USER ""
 #define MQTT_PASSWORD ""
 #define SWITCH_TOPIC "esp32/switches"
 #define STATE_TOPIC "esp32/state"
 #define TELEMETRY_TOPIC "esp32/telemetry"
+#define CONFIG_TOPIC "esp32/config"
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
@@ -377,16 +378,26 @@ void handleManualSwitches() {
 void sendHeartbeat() {
   static unsigned long lastHeartbeat = 0;
   unsigned long now = millis();
-  if (now - lastHeartbeat < 30000) return; // 30s interval (increased from 10s)
+  if (now - lastHeartbeat < 30000) return; // 30s interval
   lastHeartbeat = now;
-  DynamicJsonDocument doc(128);
+
+  DynamicJsonDocument doc(256);
   doc["mac"] = WiFi.macAddress();
   doc["status"] = "heartbeat";
   doc["heap"] = ESP.getFreeHeap();
-  char buf[128];
+  doc["uptime"] = now / 1000; // uptime in seconds
+  doc["wifi_rssi"] = WiFi.RSSI();
+  doc["mqtt_connected"] = mqttClient.connected();
+
+  char buf[256];
   size_t n = serializeJson(doc, buf);
-  mqttClient.publish(TELEMETRY_TOPIC, buf, n);
-  Serial.println("[HEARTBEAT] Sent heartbeat telemetry");
+  bool success = mqttClient.publish(TELEMETRY_TOPIC, buf, n);
+
+  if (success) {
+    Serial.println("💓 Heartbeat sent successfully");
+  } else {
+    Serial.println("❌ Heartbeat send failed");
+  }
 }
 
 
@@ -432,45 +443,117 @@ void setup_wifi() {
   Serial.print("Connecting to WiFi: ");
   Serial.println(WIFI_SSID);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  // Add WiFi connection timeout and retry logic
   int retries = 0;
-  while (WiFi.status() != WL_CONNECTED && retries < 30) {
-    delay(500);
+  const int maxRetries = 30;
+  const int retryDelay = 500;
+
+  while (WiFi.status() != WL_CONNECTED && retries < maxRetries) {
+    delay(retryDelay);
     Serial.print(".");
+
+    // Print connection status every 5 seconds
+    if (retries % 10 == 0 && retries > 0) {
+      Serial.printf("\n[WiFi] Still connecting... attempt %d/%d\n", retries, maxRetries);
+    }
+
     retries++;
   }
+
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nWiFi connected");
-    Serial.print("IP address: ");
+    Serial.println("\n✅ WiFi connected successfully!");
+    Serial.print("📍 IP address: ");
     Serial.println(WiFi.localIP());
+    Serial.print("📶 Signal strength: ");
+    Serial.print(WiFi.RSSI());
+    Serial.println(" dBm");
+
     connState = WIFI_ONLY;
+
     // Set unique MQTT client ID based on MAC address
     String mac = WiFi.macAddress();
     mac.replace(":", "");
     sprintf(mqttClientId, "ESP32_%s", mac.c_str());
-    Serial.printf("MQTT Client ID: %s\n", mqttClientId);
+    Serial.printf("🆔 MQTT Client ID: %s\n", mqttClientId);
+
+    // Test MQTT broker connectivity
+    Serial.printf("🔗 Testing MQTT broker connectivity to %s:%d...\n", MQTT_BROKER_IP, MQTT_PORT_NUM);
   } else {
-    Serial.println("\nWiFi connection failed, running in offline mode");
+    Serial.println("\n❌ WiFi connection failed after maximum retries");
+    Serial.println("🔄 Running in offline mode - manual switches will still work");
     connState = WIFI_DISCONNECTED;
   }
 }
 
 void reconnect_mqtt() {
-  while (!mqttClient.connected()) {
-    Serial.print("Attempting MQTT connection...");
-    if (mqttClient.connect(mqttClientId, MQTT_USER, MQTT_PASSWORD)) {
-      Serial.println("connected");
-  mqttClient.subscribe(SWITCH_TOPIC);
-  // Only send state update on reconnect, not online status (reduces spam)
-  sendStateUpdate(true); // Send initial state
-  sendQueuedOfflineEvents();
-  connState = BACKEND_CONNECTED;
-    } else {
-      Serial.print("failed, rc=");
-      Serial.print(mqttClient.state());
-      Serial.println(" try again in 5 seconds");
-      connState = WIFI_ONLY;
-      delay(5000);
+  static unsigned long lastReconnectAttempt = 0;
+  static int reconnectAttempts = 0;
+  const unsigned long reconnectInterval = 5000; // 5 seconds between attempts
+  const int maxReconnectAttempts = 10; // Maximum attempts before backing off
+
+  unsigned long now = millis();
+
+  // Rate limit reconnection attempts
+  if (now - lastReconnectAttempt < reconnectInterval) {
+    return;
+  }
+  lastReconnectAttempt = now;
+
+  // Exponential backoff after multiple failures
+  if (reconnectAttempts >= maxReconnectAttempts) {
+    unsigned long backoffDelay = reconnectInterval * (1 << (reconnectAttempts - maxReconnectAttempts + 1));
+    if (backoffDelay > 60000) backoffDelay = 60000; // Cap at 1 minute
+
+    if (now - lastReconnectAttempt < backoffDelay) {
+      return;
     }
+  }
+
+  Serial.printf("[MQTT] Attempting connection to %s:%d (attempt %d)...\n", MQTT_BROKER_IP, MQTT_PORT_NUM, reconnectAttempts + 1);
+
+  // Set a connection timeout
+  mqttClient.setKeepAlive(60); // 60 second keepalive
+
+  if (mqttClient.connect(mqttClientId, MQTT_USER, MQTT_PASSWORD)) {
+    Serial.println("✅ MQTT connected successfully!");
+    mqttClient.subscribe(SWITCH_TOPIC);
+    mqttClient.subscribe(CONFIG_TOPIC);
+
+    // Reset reconnection counter on success
+    reconnectAttempts = 0;
+
+    // Send initial state update and queued offline events
+    sendStateUpdate(true);
+    sendQueuedOfflineEvents();
+
+    connState = BACKEND_CONNECTED;
+
+    // Send a heartbeat immediately to confirm connection
+    sendHeartbeat();
+
+  } else {
+    reconnectAttempts++;
+    int mqttState = mqttClient.state();
+    Serial.printf("❌ MQTT connection failed (state: %d), attempt %d/%d\n", mqttState, reconnectAttempts, maxReconnectAttempts);
+
+    // Interpret MQTT error codes
+    switch (mqttState) {
+      case -4: Serial.println("   ↳ Connection timeout"); break;
+      case -3: Serial.println("   ↳ Connection lost"); break;
+      case -2: Serial.println("   ↳ Connect failed"); break;
+      case -1: Serial.println("   ↳ Disconnected"); break;
+      case 1: Serial.println("   ↳ Protocol error"); break;
+      case 2: Serial.println("   ↳ Invalid client ID"); break;
+      case 3: Serial.println("   ↳ Server unavailable"); break;
+      case 4: Serial.println("   ↳ Bad credentials"); break;
+      case 5: Serial.println("   ↳ Not authorized"); break;
+      default: Serial.printf("   ↳ Unknown error code: %d\n", mqttState); break;
+    }
+
+    connState = WIFI_ONLY;
+
+    // Don't delay here - let the main loop handle timing
   }
 }
 
@@ -524,6 +607,36 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         if (gpio >= 0) {
           queueSwitchCommand(gpio, state);
           processCommandQueue();
+        }
+      }
+    }
+  } else if (String(topic) == CONFIG_TOPIC) {
+    if (message.startsWith("{")) {
+      DynamicJsonDocument doc(512);
+      DeserializationError err = deserializeJson(doc, message);
+      if (!err && doc["mac"].is<const char*>() && doc["switches"].is<JsonArray>()) {
+        String targetMac = doc["mac"];
+        String myMac = WiFi.macAddress();
+        String normalizedTarget = normalizeMac(targetMac);
+        String normalizedMy = normalizeMac(myMac);
+        if (normalizedTarget.equalsIgnoreCase(normalizedMy)) {
+          JsonArray switches = doc["switches"].as<JsonArray>();
+          int n = switches.size();
+          if (n > 0 && n <= 6) {
+            for (int i = 0; i < n; i++) {
+              JsonObject sw = switches[i];
+              relayPins[i] = sw["gpio"] | 0;
+              manualSwitchPins[i] = sw.containsKey("manualGpio") ? (int)sw["manualGpio"] : -1;
+            }
+            prefs.begin("switch_cfg", false);
+            for (int i = 0; i < n; i++) {
+              prefs.putInt(("relay" + String(i)).c_str(), relayPins[i]);
+              prefs.putInt(("manual" + String(i)).c_str(), manualSwitchPins[i]);
+            }
+            prefs.end();
+            initSwitches();
+            Serial.println("[CONFIG] Pin configuration updated from server and applied.");
+          }
         }
       }
     }
@@ -635,31 +748,64 @@ void setup() {
   // ...existing setup code for relays, NVS, offline events, etc...
   setup_wifi();
   Serial.println("WiFi setup complete, initializing MQTT...");
-  mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
+  mqttClient.setServer(MQTT_BROKER_IP, MQTT_PORT_NUM);
   mqttClient.setBufferSize(512); // Increase buffer size for larger state messages
   mqttClient.setCallback(mqttCallback);
+  mqttClient.subscribe(CONFIG_TOPIC);
   // ...existing code for watchdog, relays, etc...
 }
 
 void loop() {
-  // esp_task_wdt_reset(); // Commented out since watchdog not initialized
   // Always allow manual switches to work, even if offline
   handleManualSwitches();
-  // Periodic state update to keep backend informed
-  if (millis() - lastStateSend > 30000) { // 30 seconds (increased from 5s)
-    sendStateUpdate(true);
-    lastStateSend = millis();
+
+  // Check WiFi connection stability
+  static unsigned long lastWiFiCheck = 0;
+  unsigned long now = millis();
+
+  if (now - lastWiFiCheck > 10000) { // Check every 10 seconds
+    lastWiFiCheck = now;
+
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("⚠️  WiFi disconnected! Attempting reconnection...");
+      connState = WIFI_DISCONNECTED;
+      setup_wifi(); // Reconnect WiFi
+    } else {
+      // WiFi is connected, check MQTT
+      if (!mqttClient.connected()) {
+        connState = WIFI_ONLY;
+        reconnect_mqtt();
+      } else {
+        connState = BACKEND_CONNECTED;
+      }
+    }
   }
-  // If not connected to MQTT, try to reconnect
-  if (WiFi.status() == WL_CONNECTED) {
-    if (!mqttClient.connected()) reconnect_mqtt();
+
+  // Handle MQTT operations only if connected
+  if (WiFi.status() == WL_CONNECTED && mqttClient.connected()) {
     mqttClient.loop();
     processCommandQueue();
     sendHeartbeat();
     blinkStatus();
-    if (pendingState) sendStateUpdate(false);
+
+    // Periodic state update to keep backend informed
+    if (now - lastStateSend > 30000) { // 30 seconds
+      sendStateUpdate(true);
+      lastStateSend = now;
+    }
+
+    // Send pending state updates
+    if (pendingState) {
+      sendStateUpdate(false);
+    }
+
     checkSystemHealth();
+  } else if (WiFi.status() == WL_CONNECTED && !mqttClient.connected()) {
+    // WiFi OK but MQTT disconnected - try to reconnect
+    reconnect_mqtt();
   }
+
+  // Small delay to prevent overwhelming the system
   delay(10);
 }
 

@@ -9,7 +9,10 @@ const {
   deleteBoard,
   getBoardContent,
   updateBoardContent,
-  getBoardStats
+  getBoardStats,
+  getBoardScreenCapture,
+  updateBoardCurrentContent,
+  controlBoardContent
 } = require('../controllers/boardController');
 const {
   createBoardGroup,
@@ -169,6 +172,24 @@ router.get('/:id/stats',
   auth,
   param('id').isMongoId().withMessage('Invalid board ID'),
   getBoardStats
+);
+
+// Board screen capture (for live preview)
+router.get('/:id/screen-capture',
+  param('id').isMongoId().withMessage('Invalid board ID'),
+  getBoardScreenCapture
+);
+
+// Update board current content (for Raspberry Pi clients)
+router.patch('/:id/current-content',
+  param('id').isMongoId().withMessage('Invalid board ID'),
+  updateBoardCurrentContent
+);
+
+// Control board content display (next/previous/manual)
+router.post('/:id/control-content',
+  param('id').isMongoId().withMessage('Invalid board ID'),
+  controlBoardContent
 );
 
 // Active boards (legacy route for compatibility)

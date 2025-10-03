@@ -6,7 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Monitor, Clock, Users, Target, Play, Pause, RotateCcw } from 'lucide-react';
 import { toast } from 'sonner';
@@ -189,6 +189,9 @@ const ContentAssignment: React.FC<ContentAssignmentProps> = ({
           <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Assign Notice to Boards</DialogTitle>
+              <DialogDescription>
+                Select which display boards should show this notice. You can assign it to multiple boards.
+              </DialogDescription>
             </DialogHeader>
 
             <div className="space-y-6">

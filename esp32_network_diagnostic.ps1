@@ -6,7 +6,7 @@ Write-Host "=============================" -ForegroundColor Cyan
 Write-Host ""
 
 # Configuration from ESP32 code
-$BackendHost = "172.16.3.56"
+$BackendHost = "172.16.3.171"
 $BackendPort = 3001
 $WiFiSSID = "AIMS-WIFI"
 

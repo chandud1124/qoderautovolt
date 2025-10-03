@@ -2,7 +2,7 @@
 Write-Host "ESP32 Network Diagnostic Tool" -ForegroundColor Cyan
 Write-Host "=============================" -ForegroundColor Cyan
 
-$BackendHost = "172.16.3.56"
+$BackendHost = "172.16.3.171"
 $BackendPort = 3001
 
 # Test backend connectivity

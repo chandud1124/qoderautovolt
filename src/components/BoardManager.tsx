@@ -772,6 +772,9 @@ const BoardGroupsManager: React.FC<BoardGroupsManagerProps> = ({
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Create Board Group</DialogTitle>
+              <DialogDescription>
+                Create a new group to organize boards by location or purpose. Boards in a group can share content.
+              </DialogDescription>
             </DialogHeader>
             <form onSubmit={(e) => { e.preventDefault(); handleCreateGroup(); }} className="space-y-4">
               <div>

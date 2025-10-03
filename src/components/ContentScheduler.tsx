@@ -200,7 +200,21 @@ const ContentScheduler: React.FC<ContentSchedulerProps> = ({
   const fetchScheduledContent = async () => {
     try {
       const response = await api.get('/content');
-      setScheduledContent(response.data.content || []);
+      const content = response.data.content || [];
+      
+      // Normalize board IDs to strings and remove duplicates
+      const normalizedContent = content.map((item: any) => ({
+        ...item,
+        assignedBoards: item.assignedBoards ? [
+          ...new Set(
+            item.assignedBoards.map((board: any) => 
+              typeof board === 'object' && board._id ? String(board._id) : String(board)
+            )
+          )
+        ] : []
+      }));
+      
+      setScheduledContent(normalizedContent);
     } catch (error) {
       console.error('Error fetching scheduled content:', error);
       toast.error('Failed to fetch scheduled content');
@@ -220,6 +234,11 @@ const ContentScheduler: React.FC<ContentSchedulerProps> = ({
   const handleCreateContent = async () => {
     if (!newContent.title.trim() || !newContent.content.trim()) {
       toast.error('Title and content are required');
+      return;
+    }
+
+    if (newContent.selectedAttachments.length === 0) {
+      toast.error('Please select at least one media file to attach');
       return;
     }
 
@@ -374,6 +393,24 @@ const ContentScheduler: React.FC<ContentSchedulerProps> = ({
 
   const handleEditContent = (content: ScheduledContent) => {
     setEditingContent(content);
+    
+    // Convert assignedBoards to string array, handling both ObjectId objects and strings
+    let boardIds: string[] = [];
+    if (Array.isArray(content.assignedBoards)) {
+      boardIds = content.assignedBoards
+        .filter(board => board != null)
+        .map(board => {
+          // If board is an object with _id property (populated board)
+          if (typeof board === 'object' && board && '_id' in board) {
+            return String((board as { _id: string })._id);
+          }
+          // If board is already a string ID
+          return String(board);
+        });
+      // Remove duplicates
+      boardIds = [...new Set(boardIds)];
+    }
+    
     setNewContent({
       title: content.title,
       content: content.content,
@@ -392,7 +429,7 @@ const ContentScheduler: React.FC<ContentSchedulerProps> = ({
         timeSlots: content.schedule.timeSlots || [{ start: '09:00', end: '17:00' }],
         playlist: content.schedule.playlist || []
       },
-      assignedBoards: content.assignedBoards,
+      assignedBoards: boardIds,
       selectedAttachments: content.attachments?.map(a => a.filename) || []
     });
     setIsEditDialogOpen(true);
@@ -515,6 +552,9 @@ const ContentScheduler: React.FC<ContentSchedulerProps> = ({
             <DialogContent className="max-w-md">
               <DialogHeader>
                 <DialogTitle>Upload Media Files</DialogTitle>
+                <DialogDescription>
+                  Upload images, videos, audio files, or documents to use in your content.
+                </DialogDescription>
               </DialogHeader>
               <div className="space-y-4">
                 <div className="space-y-2">
@@ -566,6 +606,9 @@ const ContentScheduler: React.FC<ContentSchedulerProps> = ({
             <DialogContent className="max-w-md">
               <DialogHeader>
                 <DialogTitle>Import Content from File</DialogTitle>
+                <DialogDescription>
+                  Import multiple content items from a CSV or Excel file.
+                </DialogDescription>
               </DialogHeader>
               <div className="space-y-4">
                 <div className="space-y-2">
@@ -620,6 +663,9 @@ const ContentScheduler: React.FC<ContentSchedulerProps> = ({
           <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Schedule New Content</DialogTitle>
+              <DialogDescription>
+                Create new content to display on your boards. Add text and select media files (images, videos, or PDFs) to attach.
+              </DialogDescription>
             </DialogHeader>
 
             <div className="space-y-6">
@@ -914,9 +960,9 @@ const ContentScheduler: React.FC<ContentSchedulerProps> = ({
 
               {/* Media Attachments Section */}
               <div className="space-y-2 border-t pt-4">
-                <Label>Attach Media Files (Optional)</Label>
+                <Label>Attach Media Files *</Label>
                 <p className="text-xs text-gray-500 mb-2">
-                  Select from previously uploaded media files to attach to this content
+                  Select from previously uploaded media files to attach to this content (images, videos, or PDFs only)
                 </p>
                 <div className="max-h-40 overflow-y-auto border rounded p-3">
                   {uploadedMedia.length === 0 ? (
@@ -976,6 +1022,9 @@ const ContentScheduler: React.FC<ContentSchedulerProps> = ({
           <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Edit Content</DialogTitle>
+              <DialogDescription>
+                Modify the content details, attachments, and schedule settings.
+              </DialogDescription>
             </DialogHeader>
 
             <div className="space-y-6">
