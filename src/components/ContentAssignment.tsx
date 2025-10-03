@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Monitor, Clock, Users, Target, Play, Pause, RotateCcw } from 'lucide-react';
 import { toast } from 'sonner';
+import { Notice } from '@/types'; // Import the main Notice type
 
 interface Board {
   _id: string;
@@ -22,21 +23,6 @@ interface Board {
     name: string;
   };
   isOnline: boolean;
-}
-
-interface Notice {
-  _id: string;
-  title: string;
-  content: string;
-  priority: number;
-  category: string;
-  status: 'draft' | 'approved' | 'published' | 'archived';
-  targetBoards: Array<{
-    boardId: string;
-    assignedBy: string;
-    priority: number;
-    displayOrder: number;
-  }>;
 }
 
 interface ContentAssignmentProps {
