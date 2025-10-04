@@ -1,10 +1,32 @@
-
 // Environment configuration
 export const config = {
-  // API Configuration (development vs production)
-  apiBaseUrl: import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? 'http://172.16.3.171:3001' : 'http://172.16.3.171:3001'),
-  staticBaseUrl: import.meta.env.VITE_STATIC_BASE_URL || (import.meta.env.DEV ? 'http://172.16.3.171:3001' : 'http://172.16.3.171:3001'),
-  websocketUrl: import.meta.env.VITE_WEBSOCKET_URL || (import.meta.env.DEV ? 'ws://172.16.3.171:3001' : 'ws://172.16.3.171:3001'),
+  // API Configuration (development vs production) - Dynamic detection for network access
+  apiBaseUrl: (() => {
+    // In development, construct the URL from the current page's hostname
+    if (import.meta.env.DEV) {
+      const currentHost = window.location.hostname;
+      // Use the same hostname where the frontend is being accessed from, but with the backend port
+      return `http://${currentHost}:3001`;
+    }
+    // Production fallback from environment variables
+    return import.meta.env.VITE_API_BASE_URL || 'http://192.168.0.108:3001';
+  })(),
+
+  staticBaseUrl: (() => {
+    if (import.meta.env.DEV) {
+      const currentHost = window.location.hostname;
+      return `http://${currentHost}:3001`;
+    }
+    return import.meta.env.VITE_STATIC_BASE_URL || 'http://192.168.0.108:3001';
+  })(),
+
+  websocketUrl: (() => {
+    if (import.meta.env.DEV) {
+      const currentHost = window.location.hostname;
+      return `ws://${currentHost}:3001`;
+    }
+    return import.meta.env.VITE_WEBSOCKET_URL || 'ws://192.168.0.108:3001';
+  })(),
   
   // Application Settings
   appName: import.meta.env.VITE_APP_NAME || 'AutoVolt - Intelligent Power Management',

@@ -91,7 +91,7 @@ node scripts/secure-config.js validate
 | `ESP32_SECRET_KEY` | ESP32 device authentication key | `eb2930a2e8e3e5cee3743217ea321b1e3929f15ff8e27def` |
 | `WIFI_SSID` | WiFi network name | `AIMS-WIFI` |
 | `WIFI_PASSWORD` | WiFi password | `your-wifi-password` |
-| `WEBSOCKET_HOST` | Backend server IP | `172.16.3.171` |
+| `WEBSOCKET_HOST` | Backend server IP | `192.168.0.108` |
 | `WEBSOCKET_PORT` | Backend server port | `3001` |
 
 ## Security Best Practices
@@ -137,7 +137,7 @@ When you run the setup, a `secure_config.h` file is automatically generated:
 // 🔐 SECURE CONFIGURATION - DO NOT COMMIT TO VERSION CONTROL
 #define WIFI_SSID "AIMS-WIFI"
 #define WIFI_PASSWORD "your-secure-password"
-#define WEBSOCKET_HOST "172.16.3.171"
+#define WEBSOCKET_HOST "192.168.0.108"
 #define WEBSOCKET_PORT 3001
 #define WEBSOCKET_PATH "/esp32-ws"
 #define DEVICE_SECRET_KEY "eb2930a2e8e3e5cee3743217ea321b1e3929f15ff8e27def"

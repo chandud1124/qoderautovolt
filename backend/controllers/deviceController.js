@@ -451,6 +451,11 @@ const updateDevice = async (req, res) => {
     device.lastModifiedBy = req.user.id;
     await device.save();
 
+    // Send updated configuration to ESP32 if device is online
+    if (global.sendDeviceConfigToESP32) {
+      global.sendDeviceConfigToESP32(device.macAddress);
+    }
+
     // Log activity with new action
     try {
       await ActivityLog.create({

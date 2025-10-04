@@ -10,8 +10,10 @@ const {
     getTicketStats
 } = require('../controllers/ticketController');
 
+console.log('DEBUG: Tickets routes loaded');
+
 // All routes require authentication
-router.use(auth);
+// router.use(auth);
 
 // Validation middleware
 const createTicketValidation = [

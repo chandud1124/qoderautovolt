@@ -101,16 +101,36 @@ void loadOfflineEventsFromNVS() {
   Serial.printf("[NVS] Loaded %d offline events\n", (int)offlineEvents.size());
 }
 
+#define MQTT_BROKER "192.168.0.108" // Set to backend IP or broker IP
+#define MQTT_PORT 1883
+#define MQTT_USER ""
+#define MQTT_PASSWORD ""
+#define SWITCH_TOPIC "esp32/switches"
+#define STATE_TOPIC "esp32/state"
+#define TELEMETRY_TOPIC "esp32/telemetry"
+#define CONFIG_TOPIC "esp32/config"
+
+WiFiClient espClient;
+PubSubClient mqttClient(espClient);
+
+char mqttClientId[24];
+
+// Forward declarations
+void publishManualSwitchEvent(int gpio, bool state);
+void sendStateUpdate(bool force);
+int relayNameToGpio(const char* relay);
+String normalizeMac(String mac);
+
 void sendQueuedOfflineEvents() {
-  if (offlineEvents.empty()) return;
-  Serial.printf("[OFFLINE] Sending %d queued events...\n", (int)offlineEvents.size());
+  if (offlineEvents.empty() || !mqttClient.connected()) return;
+  Serial.printf("[OFFLINE] Sending %d queued events to backend...\n", (int)offlineEvents.size());
   for (auto &event : offlineEvents) {
-    // Publish as state update or event (for now, just publish state)
-    publishState();
+    publishManualSwitchEvent(event.gpio, event.newState);
+    delay(50); // Small delay to avoid overwhelming broker
   }
   offlineEvents.clear();
   saveOfflineEventsToNVS();
-  Serial.println("[OFFLINE] Cleared offline event queue");
+  Serial.println("[OFFLINE] All queued events sent to backend successfully");
 }
 
 // --- Status LED patterns ---
@@ -124,20 +144,6 @@ void sendQueuedOfflineEvents() {
 //   - "esp32/telemetry" (publish): ESP32 -> backend telemetry (optional)
 
 // --- GLOBALS AND MACROS (must be before all function usage) ---
-
-#define MQTT_BROKER_IP MQTT_BROKER  // Use from config.h
-#define MQTT_PORT_NUM MQTT_PORT      // Use from config.h
-#define MQTT_USER ""
-#define MQTT_PASSWORD ""
-#define SWITCH_TOPIC "esp32/switches"
-#define STATE_TOPIC "esp32/state"
-#define TELEMETRY_TOPIC "esp32/telemetry"
-#define CONFIG_TOPIC "esp32/config"
-
-WiFiClient espClient;
-PubSubClient mqttClient(espClient);
-
-char mqttClientId[24];
 
 // Number of switches (relays)
 #ifndef NUM_SWITCHES
@@ -161,6 +167,9 @@ struct SwitchState {
   int gpio;                // For compatibility with publishState
 };
 SwitchState switchesLocal[NUM_SWITCHES];
+
+// Track if manual pins have been set up
+bool pinSetup[16] = {false}; // Support up to 16 switches
 
 // Command struct for queue
 struct Command {
@@ -232,14 +241,17 @@ void loadSwitchConfigFromNVS() {
     String keyManual = "manual" + String(i);
     String keyDefault = "def" + String(i);
     String keyState = "state" + String(i);
+    String keyMomentary = "momentary" + String(i);
     int relay = prefs.getInt(keyRelay.c_str(), relayPins[i]);
     int manual = prefs.getInt(keyManual.c_str(), manualSwitchPins[i]);
     bool defState = prefs.getBool(keyDefault.c_str(), false);
     bool savedState = prefs.getBool(keyState.c_str(), false);
+    bool momentary = prefs.getBool(keyMomentary.c_str(), false);  // Load momentary setting
     switchesLocal[i].relayGpio = relay;
     switchesLocal[i].manualGpio = manual;
     switchesLocal[i].defaultState = defState;
     switchesLocal[i].state = savedState;  // Load saved state
+    switchesLocal[i].manualMomentary = momentary;  // Load momentary setting
   }
   prefs.end();
   Serial.println("[NVS] Loaded switch config and state from NVS");
@@ -252,10 +264,12 @@ void saveSwitchConfigToNVS() {
     String keyManual = "manual" + String(i);
     String keyDefault = "def" + String(i);
     String keyState = "state" + String(i);
+    String keyMomentary = "momentary" + String(i);
     prefs.putInt(keyRelay.c_str(), switchesLocal[i].relayGpio);
     prefs.putInt(keyManual.c_str(), switchesLocal[i].manualGpio);
     prefs.putBool(keyDefault.c_str(), switchesLocal[i].defaultState);
     prefs.putBool(keyState.c_str(), switchesLocal[i].state);  // Save current state
+    prefs.putBool(keyMomentary.c_str(), switchesLocal[i].manualMomentary);  // Save momentary setting
   }
   prefs.end();
   Serial.println("[NVS] Saved switch config and state to NVS");
@@ -270,7 +284,7 @@ void initSwitches() {
     switchesLocal[i].manualOverride = false;
     switchesLocal[i].manualEnabled = true;
     switchesLocal[i].manualActiveLow = MANUAL_ACTIVE_LOW;
-    switchesLocal[i].manualMomentary = false;
+    switchesLocal[i].manualMomentary = true;  // Default to momentary
     switchesLocal[i].lastManualLevel = -1;
     switchesLocal[i].lastManualChangeMs = 0;
     switchesLocal[i].stableManualLevel = -1;
@@ -282,14 +296,15 @@ void initSwitches() {
   for (int i = 0; i < NUM_SWITCHES; i++) {
     pinMode(switchesLocal[i].relayGpio, OUTPUT);
     digitalWrite(switchesLocal[i].relayGpio, switchesLocal[i].state ? (RELAY_ACTIVE_HIGH ? HIGH : LOW) : (RELAY_ACTIVE_HIGH ? LOW : HIGH));
+    pinSetup[i] = false;  // Force re-setup of manual pins
   }
 }
 
 
 
 // Debounce and manual switch handling constants
-#define MANUAL_DEBOUNCE_MS 80
-#define MANUAL_REPEAT_IGNORE_MS 200
+#define MANUAL_DEBOUNCE_MS 20  // Reduced from 80ms for faster response
+#define MANUAL_REPEAT_IGNORE_MS 100  // Reduced from 200ms
 
 void handleManualSwitches() {
   unsigned long now = millis();
@@ -298,13 +313,20 @@ void handleManualSwitches() {
     if (!sw.manualEnabled || sw.manualGpio < 0) continue;
 
     // Setup pinMode if not already done (first call)
-    static bool pinSetup[16] = {false};
     if (!pinSetup[i]) {
       pinMode(sw.manualGpio, INPUT_PULLUP);
       pinMode(sw.relayGpio, OUTPUT);
       digitalWrite(sw.relayGpio, sw.state ? (RELAY_ACTIVE_HIGH ? HIGH : LOW) : (RELAY_ACTIVE_HIGH ? LOW : HIGH)); // Apply current state
+      
+      // Initialize with current pin reading
+      int initialLevel = digitalRead(sw.manualGpio);
+      sw.lastManualLevel = initialLevel;
+      sw.stableManualLevel = initialLevel;
+      sw.lastManualActive = sw.manualActiveLow ? (initialLevel == LOW) : (initialLevel == HIGH);
+      sw.lastManualChangeMs = now;
+      
       pinSetup[i] = true;
-      Serial.printf("[MANUAL] Setup GPIO %d (manual pin %d)\n", sw.relayGpio, sw.manualGpio);
+      Serial.printf("[MANUAL] Setup GPIO %d (manual pin %d), initial raw=%d\n", sw.relayGpio, sw.manualGpio, initialLevel);
     }
 
     int rawLevel = digitalRead(sw.manualGpio);
@@ -313,62 +335,78 @@ void handleManualSwitches() {
     // Debug: Log pin readings periodically
     static unsigned long lastDebug[16] = {0};
     if (now - lastDebug[i] > 5000) { // Log every 5 seconds
-      Serial.printf("[MANUAL] GPIO %d manual pin %d: raw=%d, active=%d, state=%d\n",
-        sw.relayGpio, sw.manualGpio, rawLevel, active, sw.state);
+      Serial.printf("[MANUAL] GPIO %d manual pin %d: raw=%d, active=%d, state=%d, lastActive=%d\n",
+        sw.relayGpio, sw.manualGpio, rawLevel, active, sw.state, sw.lastManualActive);
       lastDebug[i] = now;
     }
 
-    // Debounce logic
+    // Detect level change
     if (rawLevel != sw.lastManualLevel) {
       sw.lastManualChangeMs = now;
       sw.lastManualLevel = rawLevel;
+      Serial.printf("[MANUAL] GPIO %d pin change detected: raw=%d\n", sw.relayGpio, rawLevel);
     }
-    if ((now - sw.lastManualChangeMs) > MANUAL_DEBOUNCE_MS && rawLevel != sw.stableManualLevel) {
-      sw.stableManualLevel = rawLevel;
-      // Only act on edge (momentary) or level (maintained)
-      if (sw.manualMomentary) {
-        if (active && !sw.lastManualActive && (now - sw.lastManualChangeMs) > MANUAL_REPEAT_IGNORE_MS) {
-          // Toggle relay state
-          bool prevState = sw.state;
-          sw.state = !sw.state;
-          sw.manualOverride = true;
-          digitalWrite(sw.relayGpio, sw.state ? (RELAY_ACTIVE_HIGH ? HIGH : LOW) : (RELAY_ACTIVE_HIGH ? LOW : HIGH));
-          saveSwitchConfigToNVS();  // Save state change
-          Serial.printf("[MANUAL] Momentary: Relay GPIO %d toggled to %s\n", sw.relayGpio, sw.state ? "ON" : "OFF");
-          // Send manual switch event for logging
-          if (mqttClient.connected()) {
-            publishManualSwitchEvent(sw.relayGpio, sw.state);
+    
+    // Debounce: wait for stable reading
+    if ((now - sw.lastManualChangeMs) > MANUAL_DEBOUNCE_MS) {
+      // Check if the stable level changed
+      if (rawLevel != sw.stableManualLevel) {
+        sw.stableManualLevel = rawLevel;
+        
+        // Recalculate active state after debounce
+        bool currentActive = sw.manualActiveLow ? (rawLevel == LOW) : (rawLevel == HIGH);
+        
+        Serial.printf("[MANUAL] GPIO %d stable change: momentary=%d, active=%d->%d\n", 
+          sw.relayGpio, sw.manualMomentary, sw.lastManualActive, currentActive);
+        
+        if (sw.manualMomentary) {
+          // Momentary: toggle on button press (active transition)
+          if (currentActive && !sw.lastManualActive) {
+            // Button pressed (inactive -> active transition)
+            bool prevState = sw.state;
+            sw.state = !sw.state;
+            sw.manualOverride = true;
+            digitalWrite(sw.relayGpio, sw.state ? (RELAY_ACTIVE_HIGH ? HIGH : LOW) : (RELAY_ACTIVE_HIGH ? LOW : HIGH));
+            saveSwitchConfigToNVS();
+            Serial.printf("[MANUAL] Momentary PRESS: Relay GPIO %d toggled to %s\n", sw.relayGpio, sw.state ? "ON" : "OFF");
+            
+            // Send manual switch event for logging
+            if (mqttClient.connected()) {
+              publishManualSwitchEvent(sw.relayGpio, sw.state);
+            }
+            // Buffer event if offline
+            if (WiFi.status() != WL_CONNECTED || !mqttClient.connected()) {
+              queueOfflineEvent(sw.relayGpio, prevState, sw.state);
+            }
+            // Send immediate state update for UI
+            sendStateUpdate(true);
           }
-          // Buffer event if offline
-          if (WiFi.status() != WL_CONNECTED || !mqttClient.connected()) {
-            queueOfflineEvent(sw.relayGpio, prevState, sw.state);
+        } else {
+          // Maintained: switch state follows manual input
+          if (sw.state != currentActive) {
+            bool prevState = sw.state;
+            sw.state = currentActive;
+            sw.manualOverride = true;
+            digitalWrite(sw.relayGpio, sw.state ? (RELAY_ACTIVE_HIGH ? HIGH : LOW) : (RELAY_ACTIVE_HIGH ? LOW : HIGH));
+            saveSwitchConfigToNVS();
+            Serial.printf("[MANUAL] Maintained: Relay GPIO %d set to %s\n", sw.relayGpio, sw.state ? "ON" : "OFF");
+            
+            // Send manual switch event for logging
+            if (mqttClient.connected()) {
+              publishManualSwitchEvent(sw.relayGpio, sw.state);
+            }
+            // Buffer event if offline
+            if (WiFi.status() != WL_CONNECTED || !mqttClient.connected()) {
+              queueOfflineEvent(sw.relayGpio, prevState, sw.state);
+            }
+            // Send immediate state update for UI
+            sendStateUpdate(true);
           }
-          // Send immediate state update for UI
-          sendStateUpdate(true);
         }
-      } else {
-        // Maintained: switch state follows manual input
-        bool newState = active;
-        if (sw.state != newState) {
-          bool prevState = sw.state;
-          sw.state = newState;
-          sw.manualOverride = true;
-          digitalWrite(sw.relayGpio, sw.state ? (RELAY_ACTIVE_HIGH ? HIGH : LOW) : (RELAY_ACTIVE_HIGH ? LOW : HIGH));
-          saveSwitchConfigToNVS();  // Save state change
-          Serial.printf("[MANUAL] Maintained: Relay GPIO %d set to %s\n", sw.relayGpio, sw.state ? "ON" : "OFF");
-          // Send manual switch event for logging
-          if (mqttClient.connected()) {
-            publishManualSwitchEvent(sw.relayGpio, sw.state);
-          }
-          // Buffer event if offline
-          if (WiFi.status() != WL_CONNECTED || !mqttClient.connected()) {
-            queueOfflineEvent(sw.relayGpio, prevState, sw.state);
-          }
-          // Send immediate state update for UI
-          sendStateUpdate(true);
-        }
+        
+        // Update last active state
+        sw.lastManualActive = currentActive;
       }
-      sw.lastManualActive = active;
     }
   }
 }
@@ -378,26 +416,16 @@ void handleManualSwitches() {
 void sendHeartbeat() {
   static unsigned long lastHeartbeat = 0;
   unsigned long now = millis();
-  if (now - lastHeartbeat < 30000) return; // 30s interval
+  if (now - lastHeartbeat < 30000) return; // 30s interval (increased from 10s)
   lastHeartbeat = now;
-
-  DynamicJsonDocument doc(256);
+  DynamicJsonDocument doc(128);
   doc["mac"] = WiFi.macAddress();
   doc["status"] = "heartbeat";
   doc["heap"] = ESP.getFreeHeap();
-  doc["uptime"] = now / 1000; // uptime in seconds
-  doc["wifi_rssi"] = WiFi.RSSI();
-  doc["mqtt_connected"] = mqttClient.connected();
-
-  char buf[256];
+  char buf[128];
   size_t n = serializeJson(doc, buf);
-  bool success = mqttClient.publish(TELEMETRY_TOPIC, buf, n);
-
-  if (success) {
-    Serial.println("💓 Heartbeat sent successfully");
-  } else {
-    Serial.println("❌ Heartbeat send failed");
-  }
+  mqttClient.publish(TELEMETRY_TOPIC, buf, n);
+  Serial.println("[HEARTBEAT] Sent heartbeat telemetry");
 }
 
 
@@ -443,166 +471,135 @@ void setup_wifi() {
   Serial.print("Connecting to WiFi: ");
   Serial.println(WIFI_SSID);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-  // Add WiFi connection timeout and retry logic
   int retries = 0;
-  const int maxRetries = 30;
-  const int retryDelay = 500;
-
-  while (WiFi.status() != WL_CONNECTED && retries < maxRetries) {
-    delay(retryDelay);
+  while (WiFi.status() != WL_CONNECTED && retries < 30) {
+    delay(500);
     Serial.print(".");
-
-    // Print connection status every 5 seconds
-    if (retries % 10 == 0 && retries > 0) {
-      Serial.printf("\n[WiFi] Still connecting... attempt %d/%d\n", retries, maxRetries);
-    }
-
     retries++;
   }
-
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n✅ WiFi connected successfully!");
-    Serial.print("📍 IP address: ");
+    Serial.println("\nWiFi connected");
+    Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
-    Serial.print("📶 Signal strength: ");
-    Serial.print(WiFi.RSSI());
-    Serial.println(" dBm");
-
     connState = WIFI_ONLY;
-
     // Set unique MQTT client ID based on MAC address
     String mac = WiFi.macAddress();
     mac.replace(":", "");
     sprintf(mqttClientId, "ESP32_%s", mac.c_str());
-    Serial.printf("🆔 MQTT Client ID: %s\n", mqttClientId);
-
-    // Test MQTT broker connectivity
-    Serial.printf("🔗 Testing MQTT broker connectivity to %s:%d...\n", MQTT_BROKER_IP, MQTT_PORT_NUM);
+    Serial.printf("MQTT Client ID: %s\n", mqttClientId);
   } else {
-    Serial.println("\n❌ WiFi connection failed after maximum retries");
-    Serial.println("🔄 Running in offline mode - manual switches will still work");
+    Serial.println("\nWiFi connection failed, running in offline mode");
     connState = WIFI_DISCONNECTED;
+  }
+}
+
+void updateConnectionStatus() {
+  static ConnState lastConnState = WIFI_DISCONNECTED;
+  static unsigned long lastStatusChange = 0;
+  static bool offlineLogged = false;
+  unsigned long now = millis();
+  if (WiFi.status() != WL_CONNECTED) {
+    connState = WIFI_DISCONNECTED;
+  } else if (!mqttClient.connected()) {
+    connState = WIFI_ONLY;
+  } else {
+    connState = BACKEND_CONNECTED;
+  }
+  if (connState != lastConnState) {
+    Serial.printf("[STATUS] Connection state changed: %d -> %d\n", lastConnState, connState);
+    lastConnState = connState;
+    lastStatusChange = now;
+    sendStateUpdate(true);
+    if (!offlineEvents.empty()) {
+      Serial.printf("[STATUS] %d offline events queued for backend transmission\n", (int)offlineEvents.size());
+    }
+    if (connState == BACKEND_CONNECTED) {
+      offlineLogged = false;  // Reset when connected
+    }
+  }
+  if (!offlineLogged && connState != BACKEND_CONNECTED && (now - lastStatusChange > 30000)) {
+    Serial.println("[STATUS] Confirmed offline - no backend connection for 30+ seconds");
+    Serial.printf("[STATUS] Manual switches will work independently. %d events queued.\n", (int)offlineEvents.size());
+    offlineLogged = true;
   }
 }
 
 void reconnect_mqtt() {
   static unsigned long lastReconnectAttempt = 0;
-  static int reconnectAttempts = 0;
-  const unsigned long reconnectInterval = 5000; // 5 seconds between attempts
-  const int maxReconnectAttempts = 10; // Maximum attempts before backing off
-
   unsigned long now = millis();
-
-  // Rate limit reconnection attempts
-  if (now - lastReconnectAttempt < reconnectInterval) {
-    return;
-  }
+  if (now - lastReconnectAttempt < 5000) return;
   lastReconnectAttempt = now;
-
-  // Exponential backoff after multiple failures
-  if (reconnectAttempts >= maxReconnectAttempts) {
-    unsigned long backoffDelay = reconnectInterval * (1 << (reconnectAttempts - maxReconnectAttempts + 1));
-    if (backoffDelay > 60000) backoffDelay = 60000; // Cap at 1 minute
-
-    if (now - lastReconnectAttempt < backoffDelay) {
-      return;
-    }
-  }
-
-  Serial.printf("[MQTT] Attempting connection to %s:%d (attempt %d)...\n", MQTT_BROKER_IP, MQTT_PORT_NUM, reconnectAttempts + 1);
-
-  // Set a connection timeout
-  mqttClient.setKeepAlive(60); // 60 second keepalive
-
+  Serial.print("Attempting MQTT connection...");
   if (mqttClient.connect(mqttClientId, MQTT_USER, MQTT_PASSWORD)) {
-    Serial.println("✅ MQTT connected successfully!");
+    Serial.println("connected");
     mqttClient.subscribe(SWITCH_TOPIC);
     mqttClient.subscribe(CONFIG_TOPIC);
-
-    // Reset reconnection counter on success
-    reconnectAttempts = 0;
-
-    // Send initial state update and queued offline events
     sendStateUpdate(true);
     sendQueuedOfflineEvents();
-
     connState = BACKEND_CONNECTED;
-
-    // Send a heartbeat immediately to confirm connection
-    sendHeartbeat();
-
+    Serial.println("[MQTT] Successfully reconnected - sent current state and queued events");
   } else {
-    reconnectAttempts++;
-    int mqttState = mqttClient.state();
-    Serial.printf("❌ MQTT connection failed (state: %d), attempt %d/%d\n", mqttState, reconnectAttempts, maxReconnectAttempts);
-
-    // Interpret MQTT error codes
-    switch (mqttState) {
-      case -4: Serial.println("   ↳ Connection timeout"); break;
-      case -3: Serial.println("   ↳ Connection lost"); break;
-      case -2: Serial.println("   ↳ Connect failed"); break;
-      case -1: Serial.println("   ↳ Disconnected"); break;
-      case 1: Serial.println("   ↳ Protocol error"); break;
-      case 2: Serial.println("   ↳ Invalid client ID"); break;
-      case 3: Serial.println("   ↳ Server unavailable"); break;
-      case 4: Serial.println("   ↳ Bad credentials"); break;
-      case 5: Serial.println("   ↳ Not authorized"); break;
-      default: Serial.printf("   ↳ Unknown error code: %d\n", mqttState); break;
-    }
-
+    Serial.print("failed, rc=");
+    Serial.print(mqttClient.state());
+    Serial.println(" will retry later");
     connState = WIFI_ONLY;
-
-    // Don't delay here - let the main loop handle timing
   }
 }
 
-// Normalize MAC address: remove colons, make lowercase
-String normalizeMac(String mac) {
-  String normalized = "";
-  for (char c : mac) {
-    if (isAlphaNumeric(c)) {
-      normalized += toLowerCase(c);
-    }
-  }
-  return normalized;
-}
+
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  if (length == 0 || payload == nullptr) {
+    Serial.println("[MQTT] Empty payload received, ignoring");
+    return;
+  }
   String message;
+  if (length > 512) {
+    Serial.println("[MQTT] Payload too large, ignoring");
+    return;
+  }
   for (unsigned int i = 0; i < length; i++) message += (char)payload[i];
   Serial.printf("[MQTT] Message arrived [%s]: %s\n", topic, message.c_str());
   if (String(topic) == SWITCH_TOPIC) {
-    // Parse command: expected format JSON with mac, gpio, state
     if (message.startsWith("{")) {
       DynamicJsonDocument doc(256);
       DeserializationError err = deserializeJson(doc, message);
-      if (!err && doc["mac"].is<const char*>() && doc["gpio"].is<int>() && doc["state"].is<bool>()) {
+      if (!err && doc["mac"].is<const char*>() && doc["secret"].is<const char*>() && doc["gpio"].is<int>() && doc["state"].is<bool>()) {
         String targetMac = doc["mac"];
+        String targetSecret = doc["secret"];
         String myMac = WiFi.macAddress();
-        // Normalize MAC addresses for comparison (remove colons, lowercase)
         String normalizedTarget = normalizeMac(targetMac);
         String normalizedMy = normalizeMac(myMac);
-        // Only process commands addressed to this device
         if (normalizedTarget.equalsIgnoreCase(normalizedMy)) {
-          int gpio = doc["gpio"];
-          bool state = doc["state"];
-          queueSwitchCommand(gpio, state);
-          processCommandQueue();
-          sendStateUpdate(true);  // Send immediate state update after command
-          Serial.printf("[MQTT] Processed command for this device: GPIO %d -> %s\n", gpio, state ? "ON" : "OFF");
+          if (targetSecret == String(DEVICE_SECRET)) {
+            int gpio = doc["gpio"];
+            bool state = doc["state"];
+            bool validGpio = false;
+            for (int i = 0; i < NUM_SWITCHES; i++) {
+              if (switchesLocal[i].relayGpio == gpio) { validGpio = true; break; }
+            }
+            if (validGpio) {
+              queueSwitchCommand(gpio, state);
+              processCommandQueue();
+              Serial.printf("[MQTT] Processed command for this device: GPIO %d -> %s\n", gpio, state ? "ON" : "OFF");
+            } else {
+              Serial.printf("[MQTT] Invalid GPIO %d, ignoring command\n", gpio);
+            }
+          } else {
+            Serial.println("[MQTT] Invalid secret, ignoring command");
+          }
         } else {
           Serial.printf("[MQTT] Ignored command for different device: %s (my MAC: %s)\n", targetMac.c_str(), myMac.c_str());
         }
+      } else {
+        Serial.println("[MQTT] Invalid JSON format or missing required fields");
       }
     } else {
-      // Legacy format support (deprecated)
       int colon = message.indexOf(':');
       if (colon > 0) {
         String relay = message.substring(0, colon);
         String stateStr = message.substring(colon + 1);
         bool state = (stateStr == "on");
-        // Map relay name to GPIO (implement mapping as needed)
         int gpio = relayNameToGpio(relay.c_str());
         if (gpio >= 0) {
           queueSwitchCommand(gpio, state);
@@ -614,28 +611,45 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     if (message.startsWith("{")) {
       DynamicJsonDocument doc(512);
       DeserializationError err = deserializeJson(doc, message);
-      if (!err && doc["mac"].is<const char*>() && doc["switches"].is<JsonArray>()) {
+      if (!err && doc["mac"].is<const char*>() && doc["secret"].is<const char*>() && doc["switches"].is<JsonArray>()) {
         String targetMac = doc["mac"];
+        String targetSecret = doc["secret"];
         String myMac = WiFi.macAddress();
         String normalizedTarget = normalizeMac(targetMac);
         String normalizedMy = normalizeMac(myMac);
         if (normalizedTarget.equalsIgnoreCase(normalizedMy)) {
-          JsonArray switches = doc["switches"].as<JsonArray>();
-          int n = switches.size();
-          if (n > 0 && n <= 6) {
-            for (int i = 0; i < n; i++) {
-              JsonObject sw = switches[i];
-              relayPins[i] = sw["gpio"] | 0;
-              manualSwitchPins[i] = sw.containsKey("manualGpio") ? (int)sw["manualGpio"] : -1;
+          if (targetSecret == String(DEVICE_SECRET)) {
+            JsonArray switches = doc["switches"].as<JsonArray>();
+            int n = switches.size();
+            if (n > 0 && n <= 6) {
+              Serial.printf("[CONFIG] Processing config for %d switches\n", n);
+              for (int i = 0; i < n; i++) {
+                JsonObject sw = switches[i];
+                relayPins[i] = sw["gpio"] | 0;
+                manualSwitchPins[i] = sw.containsKey("manualGpio") ? (int)sw["manualGpio"] : -1;
+                // Handle momentary/maintained mode
+                if (sw.containsKey("manualMode")) {
+                  String mode = sw["manualMode"];
+                  switchesLocal[i].manualMomentary = (mode == "momentary");
+                  Serial.printf("[CONFIG] Switch %d: gpio=%d, manualGpio=%d, manualMode=%s, momentary=%d\n",
+                    i, relayPins[i], manualSwitchPins[i], mode.c_str(), switchesLocal[i].manualMomentary);
+                } else {
+                  Serial.printf("[CONFIG] Switch %d: no manualMode field found\n", i);
+                }
+              }
+              prefs.begin("switch_cfg", false);
+              for (int i = 0; i < n; i++) {
+                prefs.putInt(("relay" + String(i)).c_str(), relayPins[i]);
+                prefs.putInt(("manual" + String(i)).c_str(), manualSwitchPins[i]);
+                // Save momentary setting to NVS
+                prefs.putBool(("momentary" + String(i)).c_str(), switchesLocal[i].manualMomentary);
+              }
+              prefs.end();
+              initSwitches();
+              Serial.println("[CONFIG] Pin configuration and switch modes updated from server and applied.");
             }
-            prefs.begin("switch_cfg", false);
-            for (int i = 0; i < n; i++) {
-              prefs.putInt(("relay" + String(i)).c_str(), relayPins[i]);
-              prefs.putInt(("manual" + String(i)).c_str(), manualSwitchPins[i]);
-            }
-            prefs.end();
-            initSwitches();
-            Serial.println("[CONFIG] Pin configuration updated from server and applied.");
+          } else {
+            Serial.println("[CONFIG] Invalid secret, ignoring config update");
           }
         }
       }
@@ -643,9 +657,11 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   }
 }
 
+// Publish state update to backend
 void publishState() {
   DynamicJsonDocument doc(1024);
   doc["mac"] = WiFi.macAddress();
+  doc["secret"] = DEVICE_SECRET; // Include device secret for authentication
   JsonArray arr = doc.createNestedArray("switches");
   for (int i = 0; i < NUM_SWITCHES; i++) {
     JsonObject o = arr.createNestedObject();
@@ -663,6 +679,7 @@ void publishState() {
 void publishManualSwitchEvent(int gpio, bool state) {
   DynamicJsonDocument doc(128);
   doc["mac"] = WiFi.macAddress();
+  doc["secret"] = DEVICE_SECRET; // Include device secret for authentication
   doc["type"] = "manual_switch";
   doc["gpio"] = gpio;
   doc["state"] = state;
@@ -715,7 +732,7 @@ int relayNameToGpio(const char* relay) {
 String normalizeMac(String mac) {
   String normalized = "";
   for (char c : mac) {
-    if (isHexadecimalDigit(c) || isAlpha(c)) {
+    if (isAlphaNumeric(c)) {
       normalized += tolower(c);
     }
   }
@@ -725,88 +742,43 @@ String normalizeMac(String mac) {
 void setup() {
   Serial.begin(115200);
   Serial.println("\nESP32 Classroom Automation System (MQTT)");
-  // Register main task with watchdog (10s timeout, panic on trigger)
-  // Commenting out watchdog init as it's already initialized by Arduino core
-  /*
-#if defined(ESP_IDF_VERSION)
-  // ESP-IDF style (if available)
-  esp_task_wdt_config_t wdt_config = {
-    .timeout_ms = 10000,
-    .idle_core_mask = (1 << portNUM_PROCESSORS) - 1,
-    .trigger_panic = true
-  };
+  esp_task_wdt_config_t wdt_config = { .timeout_ms = 10000, .idle_core_mask = 0, .trigger_panic = true };
   esp_task_wdt_init(&wdt_config);
-#else
-  // For Arduino-ESP32 3.x, just add the task (init is done by core)
-#endif
   esp_task_wdt_add(NULL);
-  */
-  // Initialize switches with relay/manual mapping
   initSwitches();
-  // Load any queued offline events from previous sessions
   loadOfflineEventsFromNVS();
-  // ...existing setup code for relays, NVS, offline events, etc...
   setup_wifi();
   Serial.println("WiFi setup complete, initializing MQTT...");
-  mqttClient.setServer(MQTT_BROKER_IP, MQTT_PORT_NUM);
-  mqttClient.setBufferSize(512); // Increase buffer size for larger state messages
+  mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
+  mqttClient.setBufferSize(512);
   mqttClient.setCallback(mqttCallback);
   mqttClient.subscribe(CONFIG_TOPIC);
-  // ...existing code for watchdog, relays, etc...
 }
 
 void loop() {
-  // Always allow manual switches to work, even if offline
-  handleManualSwitches();
-
-  // Check WiFi connection stability
-  static unsigned long lastWiFiCheck = 0;
+  esp_task_wdt_reset();
   unsigned long now = millis();
-
-  if (now - lastWiFiCheck > 10000) { // Check every 10 seconds
-    lastWiFiCheck = now;
-
-    if (WiFi.status() != WL_CONNECTED) {
-      Serial.println("⚠️  WiFi disconnected! Attempting reconnection...");
-      connState = WIFI_DISCONNECTED;
-      setup_wifi(); // Reconnect WiFi
-    } else {
-      // WiFi is connected, check MQTT
-      if (!mqttClient.connected()) {
-        connState = WIFI_ONLY;
-        reconnect_mqtt();
-      } else {
-        connState = BACKEND_CONNECTED;
+  handleManualSwitches();
+  updateConnectionStatus();
+  if (millis() - lastStateSend > 30000) {
+    sendStateUpdate(true);
+    lastStateSend = millis();
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!mqttClient.connected()) reconnect_mqtt();
+    if (mqttClient.connected()) {
+      mqttClient.loop();
+      processCommandQueue();
+      static unsigned long lastOfflineSend = 0;
+      if (now - lastOfflineSend > 10000) {
+        sendQueuedOfflineEvents();
+        lastOfflineSend = now;
       }
     }
-  }
-
-  // Handle MQTT operations only if connected
-  if (WiFi.status() == WL_CONNECTED && mqttClient.connected()) {
-    mqttClient.loop();
-    processCommandQueue();
     sendHeartbeat();
-    blinkStatus();
-
-    // Periodic state update to keep backend informed
-    if (now - lastStateSend > 30000) { // 30 seconds
-      sendStateUpdate(true);
-      lastStateSend = now;
-    }
-
-    // Send pending state updates
-    if (pendingState) {
-      sendStateUpdate(false);
-    }
-
-    checkSystemHealth();
-  } else if (WiFi.status() == WL_CONNECTED && !mqttClient.connected()) {
-    // WiFi OK but MQTT disconnected - try to reconnect
-    reconnect_mqtt();
   }
-
-  // Small delay to prevent overwhelming the system
+  blinkStatus();
+  if (pendingState) sendStateUpdate(false);
+  checkSystemHealth();
   delay(10);
 }
-
-// ...all other advanced features, NVS, offline buffer, error handling, etc. remain unchanged...

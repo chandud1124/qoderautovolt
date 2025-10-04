@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const Counter = require('./Counter');
 
 const ticketSchema = new mongoose.Schema({
     ticketId: {
@@ -135,14 +136,28 @@ ticketSchema.virtual('daysOpen').get(function () {
     return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 });
 
-// Pre-save middleware to generate ticket ID
-ticketSchema.pre('save', async function (next) {
+// Pre-validate middleware to generate ticket ID
+ticketSchema.pre('validate', async function(next) {
+    console.log('PRE-VALIDATE MIDDLEWARE CALLED!');
+    console.log('this.isNew:', this.isNew);
+    console.log('this.ticketId:', this.ticketId);
     if (this.isNew && !this.ticketId) {
-        const count = await mongoose.model('Ticket').countDocuments();
-        const year = new Date().getFullYear();
-        this.ticketId = `TKT-${year}-${String(count + 1).padStart(4, '0')}`;
+        try {
+            console.log('About to get next sequence...');
+            const seq = await Counter.getNextSequence('ticketId');
+            console.log('Got sequence:', seq);
+            const year = new Date().getFullYear();
+            this.ticketId = `TKT-${year}-${String(seq).padStart(4, '0')}`;
+            console.log('Generated ticketId:', this.ticketId);
+            next();
+        } catch (err) {
+            console.error('Error generating ticket ID:', err);
+            next(err);
+        }
+    } else {
+        console.log('Skipping ticket ID generation');
+        next();
     }
-    next();
 });
 
 const Ticket = mongoose.model('Ticket', ticketSchema);

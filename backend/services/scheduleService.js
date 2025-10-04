@@ -36,8 +36,8 @@ class ScheduleService {
 
   async loadSchedules() {
     try {
-      // Check if mongoose is connected
-      if (!require('mongoose').connection.readyState) {
+      // Check if mongoose is connected (readyState 1 = connected)
+      if (require('mongoose').connection.readyState !== 1) {
         throw new Error('Database not connected');
       }
 
@@ -73,10 +73,17 @@ class ScheduleService {
 
   _dispatchToHardware(device, gpio, desiredState) {
     try {
-      if (!device || !device.macAddress) return { sent: false, reason: 'no_device_mac' };
+      console.log(`[SCHEDULE] _dispatchToHardware called: device=${device?.name}, MAC=${device?.macAddress}, gpio=${gpio}, state=${desiredState}`);
+      console.log(`[SCHEDULE] global.sendMqttSwitchCommand exists: ${!!global.sendMqttSwitchCommand}, type: ${typeof global.sendMqttSwitchCommand}`);
+      
+      if (!device || !device.macAddress) {
+        console.warn('[SCHEDULE] No device or macAddress');
+        return { sent: false, reason: 'no_device_mac' };
+      }
 
       // Use MQTT instead of WebSocket for ESP32 communication
       if (global.sendMqttSwitchCommand) {
+        console.log(`[SCHEDULE] Calling global.sendMqttSwitchCommand...`);
         global.sendMqttSwitchCommand(device.macAddress, gpio, desiredState);
         console.log(`[SCHEDULE] Published MQTT switch command for device ${device.macAddress}: gpio=${gpio}, state=${desiredState}`);
         return { sent: true, reason: 'mqtt_sent' };
@@ -85,7 +92,7 @@ class ScheduleService {
         return { sent: false, reason: 'mqtt_not_available' };
       }
     } catch (e) {
-      console.error('[SCHEDULE] Error dispatching hardware command:', e.message);
+      console.error('[SCHEDULE] Error dispatching hardware command:', e.message, e.stack);
       return { sent: false, reason: 'exception_' + e.message };
     }
   }
@@ -185,13 +192,20 @@ class ScheduleService {
   async toggleScheduledSwitch(switchRef, schedule) {
     try {
       const device = await Device.findById(switchRef.deviceId);
-      if (!device) return;
+      if (!device) {
+        console.error(`[SCHEDULE] Device not found: ${switchRef.deviceId}`);
+        return;
+      }
 
       const switchIndex = device.switches.findIndex(sw =>
         sw._id.toString() === switchRef.switchId
       );
 
-      if (switchIndex === -1) return;
+      if (switchIndex === -1) {
+        console.error(`[SCHEDULE] Switch not found in device ${device.name}: switchId=${switchRef.switchId}`);
+        console.error(`[SCHEDULE] Available switch IDs: ${device.switches.map(s => s._id.toString()).join(', ')}`);
+        return;
+      }
 
       const switch_ = device.switches[switchIndex];
 
@@ -254,16 +268,23 @@ class ScheduleService {
 
       // Push command to ESP32 if connected, else queue intent for when it comes online
       const gpio = device.switches[switchIndex].relayGpio || device.switches[switchIndex].gpio;
+      console.log(`[SCHEDULE] Switch ${switch_.name}: gpio=${gpio}, desiredState=${desiredState}`);
       if (gpio !== undefined) {
         const hw = this._dispatchToHardware(device, gpio, desiredState);
+        console.log(`[SCHEDULE] Hardware dispatch result:`, hw);
         if (!hw.sent) {
           // Queue intent (replace any existing for same gpio)
           try {
             device.queuedIntents = (device.queuedIntents || []).filter(q => q.switchGpio !== gpio);
             device.queuedIntents.push({ switchGpio: gpio, desiredState, createdAt: new Date() });
             await device.save();
-          } catch { }
+            console.log(`[SCHEDULE] Queued intent for GPIO ${gpio}`);
+          } catch (e) {
+            console.error(`[SCHEDULE] Error queueing intent:`, e.message);
+          }
         }
+      } else {
+        console.error(`[SCHEDULE] No GPIO defined for switch ${switch_.name}`);
       }
 
       // Log activity
@@ -390,43 +411,6 @@ class ScheduleService {
       try { if (existing && typeof existing.destroy === 'function') existing.destroy(); } catch { }
       this.jobs.delete(scheduleId);
       console.log(`Removed cron job for schedule: ${scheduleId}`);
-    }
-  }
-
-  _dispatchToHardware(device, gpio, desiredState) {
-    try {
-      // Get MQTT client from global or app context
-      const mqttClient = global.mqttClient;
-      if (!mqttClient || !mqttClient.connected) {
-        console.error('[SCHEDULE] MQTT client not available or not connected');
-        return { sent: false, error: 'MQTT client not available' };
-      }
-
-      if (!device.macAddress) {
-        console.error('[SCHEDULE] Device has no MAC address:', device.name);
-        return { sent: false, error: 'No MAC address' };
-      }
-
-      // Send MQTT command to ESP32 (same format as socket handlers)
-      const command = {
-        mac: device.macAddress,
-        gpio: gpio,
-        state: desiredState
-      };
-
-      const message = JSON.stringify(command);
-      const result = mqttClient.publish('esp32/switches', message);
-
-      if (result) {
-        console.log('[SCHEDULE] Sent command to ESP32:', device.macAddress, command);
-        return { sent: true };
-      } else {
-        console.error('[SCHEDULE] Failed to publish MQTT message');
-        return { sent: false, error: 'Publish failed' };
-      }
-    } catch (error) {
-      console.error('[SCHEDULE] Error dispatching to hardware:', error);
-      return { sent: false, error: error.message };
     }
   }
 }

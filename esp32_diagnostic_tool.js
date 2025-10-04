@@ -3,8 +3,8 @@
 // ESP32 Connectivity Diagnostic Tool
 // Helps diagnose why ESP32 shows offline despite being connected
 
-const ping = require('ping');
-const axios = require('axios');
+import ping from 'ping';
+import axios from 'axios';
 
 console.log('🔧 ESP32 CONNECTIVITY DIAGNOSTIC TOOL\n');
 
@@ -270,9 +270,9 @@ async function checkDependencies() {
   }
 }
 
-// Run diagnostics if dependencies are available
-if (require.main === module) {
+// Run diagnostics if this is the main module
+if (import.meta.url === `file://${process.argv[1]}`) {
   runDiagnostics();
 }
 
-module.exports = { runDiagnostics, pingHost, checkBackendHealth };
+export { runDiagnostics, pingHost, checkBackendHealth };

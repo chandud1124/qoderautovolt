@@ -14,7 +14,7 @@ const routeMonitor = require('./middleware/routeMonitor');
 // --- MQTT client for Mosquitto broker (for ESP32 communication) ---
 const mqtt = require('mqtt');
 const MOSQUITTO_PORT = 1883; // Use standard MQTT port
-const MOSQUITTO_HOST = 'localhost'; // Use local MQTT broker
+const MOSQUITTO_HOST = '192.168.0.108'; // Use network MQTT broker
 
 const mqttClient = mqtt.connect(`mqtt://${MOSQUITTO_HOST}:${MOSQUITTO_PORT}`, {
   clientId: 'backend_server',
@@ -23,6 +23,11 @@ const mqttClient = mqtt.connect(`mqtt://${MOSQUITTO_HOST}:${MOSQUITTO_PORT}`, {
   reconnectPeriod: 1000,
   protocolVersion: 4
 });
+
+// Import models
+const Device = require('./models/Device');
+const ActivityLog = require('./models/ActivityLog');
+const Counter = require('./models/Counter');
 
 mqttClient.on('connect', () => {
   console.log(`[MQTT] Connected to Aedes broker on port ${MOSQUITTO_PORT}`);
@@ -67,42 +72,55 @@ mqttClient.on('message', (topic, message) => {
         return mac.replace(/[^a-fA-F0-9]/g, '').toLowerCase();
       }
       const normalizedMac = normalizeMac(data.mac);
-      const Device = require('./models/Device');
-      Device.findOneAndUpdate(
-        { $or: [
+      Device.findOne({
+        $or: [
           { macAddress: data.mac },
           { macAddress: data.mac.toUpperCase() },
           { macAddress: data.mac.toLowerCase() },
           { macAddress: normalizedMac },
           { macAddress: normalizedMac.toUpperCase() },
           { macAddress: normalizedMac.toLowerCase() }
-        ] },
-        { $set: { status: 'online', lastSeen: new Date() } },
-        { new: true }
-      ).then(device => {
-        if (device) {
-          console.log(`[MQTT] Marked device ${device.macAddress} as online`);
-          let stateChanged = false;
+        ]
+      }).select('+deviceSecret').then(device => {
+        if (!device) {
+          console.warn('[MQTT] esp32/state: Device not found for MAC:', data.mac);
+          return;
+        }
 
-          // Update switch states from ESP32 payload if switches array is present
-          if (data.switches && Array.isArray(data.switches)) {
-            data.switches.forEach(esp32Switch => {
-              const deviceSwitch = device.switches.find(s => (s.relayGpio || s.gpio) === esp32Switch.gpio);
-              if (deviceSwitch && deviceSwitch.state !== esp32Switch.state) {
-                deviceSwitch.state = esp32Switch.state;
-                deviceSwitch.manualOverride = esp32Switch.manual_override || false;
-                deviceSwitch.lastStateChange = new Date();
-                stateChanged = true;
-                console.log(`[MQTT] Updated switch GPIO ${esp32Switch.gpio} to state ${esp32Switch.state} for device ${device.macAddress}`);
-              }
-            });
-          }
+        if (data.secret && data.secret !== device.deviceSecret) {
+          console.warn('[MQTT] esp32/state: Invalid secret for device:', device.macAddress);
+          return;
+        }
+
+        // Update device status
+        device.status = 'online';
+        device.lastSeen = new Date();
+
+        let stateChanged = false;
+
+        // Update switch states from ESP32 payload if switches array is present
+        if (data.switches && Array.isArray(data.switches)) {
+          data.switches.forEach(esp32Switch => {
+            const deviceSwitch = device.switches.find(s => (s.relayGpio || s.gpio) === esp32Switch.gpio);
+            if (deviceSwitch && deviceSwitch.state !== esp32Switch.state) {
+              deviceSwitch.state = esp32Switch.state;
+              deviceSwitch.manualOverride = esp32Switch.manual_override || false;
+              deviceSwitch.lastStateChange = new Date();
+              stateChanged = true;
+              console.log(`[MQTT] Updated switch GPIO ${esp32Switch.gpio} to state ${esp32Switch.state} for device ${device.macAddress}`);
+            }
+          });
+        }
+
+        // Save device
+        device.save().then(() => {
+          console.log(`[MQTT] Marked device ${device.macAddress} as online`);
+
+          // Send current configuration to ESP32
+          sendDeviceConfigToESP32(device.macAddress);
 
           // Only emit events if state actually changed or this is the first time we're seeing the device online
           if (stateChanged || device.status !== 'online') {
-            device.lastModifiedBy = null; // ESP32 update
-            device.save().catch(err => console.error('[MQTT] Error saving device switches:', err));
-
             // Emit to frontend via Socket.IO if available
             if (global.io) {
               // 1. Legacy event for backward compatibility
@@ -123,11 +141,11 @@ mqttClient.on('message', (topic, message) => {
               });
             }
           }
-        } else {
-          console.warn(`[MQTT] Device with MAC ${data.mac} (normalized: ${normalizedMac}) not found in DB`);
-        }
+        }).catch(err => {
+          console.error('[MQTT] Error saving device:', err);
+        });
       }).catch(err => {
-        console.error('[MQTT] Error updating device status:', err);
+        console.error('[MQTT] Error finding device:', err);
       });
     } catch (e) {
       console.error('[MQTT] Exception in esp32/state handler:', e);
@@ -196,21 +214,6 @@ mqttClient.on('message', (topic, message) => {
                   location: device.location,
                   ip: 'ESP32',
                   userAgent: 'ESP32 Manual Switch'
-                });
-
-                // Also log to ManualSwitchLog for dedicated manual switch tracking
-                await ManualSwitchLog.create({
-                  deviceId: device._id,
-                  deviceName: device.name,
-                  deviceMac: device.macAddress,
-                  switchId: switchInfo._id.toString(),
-                  switchName: switchInfo.name,
-                  physicalPin: data.gpio,
-                  action: data.state ? 'manual_on' : 'manual_off',
-                  previousState: !data.state ? 'on' : 'off', // Assuming toggle, so previous is opposite
-                  newState: data.state ? 'on' : 'off',
-                  detectedBy: 'gpio_interrupt',
-                  location: device.location
                 });
 
                 console.log(`[ACTIVITY] Logged manual switch: ${device.name} - ${switchInfo.name} -> ${data.state ? 'ON' : 'OFF'}`);
@@ -369,18 +372,63 @@ function emitDeviceStateChangedNow(device, meta = {}) {
 
 // Function to send switch commands to ESP32 via MQTT
 function sendMqttSwitchCommand(macAddress, gpio, state) {
-  const command = {
-    mac: macAddress, // Include MAC address to target specific device
-    gpio: gpio,
-    state: state
-  };
-  const message = JSON.stringify(command);
-  const result = mqttClient.publish('esp32/switches', message);
-  console.log(`[MQTT] Sent switch command:`, command, 'result:', result);
+  console.log(`[MQTT] sendMqttSwitchCommand called: MAC=${macAddress}, GPIO=${gpio}, state=${state}`);
+  
+  // Get device secret from database
+  Device.findOne({ macAddress: new RegExp('^' + macAddress + '$', 'i') }).select('+deviceSecret').then(device => {
+    console.log(`[MQTT] Database query result: device found=${!!device}`);
+    
+    if (!device || !device.deviceSecret) {
+      console.warn('[MQTT] Device not found or no secret for MAC:', macAddress);
+      return;
+    }
+    
+    const command = {
+      mac: macAddress, // Include MAC address to target specific device
+      secret: device.deviceSecret, // Include device secret for authentication
+      gpio: gpio,
+      state: state
+    };
+    const message = JSON.stringify(command);
+    
+    console.log(`[MQTT] Publishing to esp32/switches:`, message);
+    const result = mqttClient.publish('esp32/switches', message);
+    console.log(`[MQTT] Sent switch command:`, command, 'publish result:', result);
+  }).catch(err => {
+    console.error('[MQTT] Error getting device secret:', err.message, err.stack);
+  });
+}
+
+// Send device configuration to ESP32 via MQTT
+function sendDeviceConfigToESP32(macAddress) {
+  // Get device config from database
+  Device.findOne({ macAddress: new RegExp('^' + macAddress + '$', 'i') }).select('+deviceSecret').then(device => {
+    if (!device || !device.deviceSecret) {
+      console.warn('[MQTT] Device not found or no secret for MAC:', macAddress);
+      return;
+    }
+
+    const config = {
+      mac: macAddress,
+      secret: device.deviceSecret,
+      switches: device.switches.map(sw => ({
+        gpio: sw.relayGpio || sw.gpio,
+        manualGpio: sw.manualSwitchGpio,
+        manualMode: sw.manualMode || 'maintained'
+      }))
+    };
+
+    const message = JSON.stringify(config);
+    const result = mqttClient.publish('esp32/config', message);
+    console.log(`[MQTT] Sent device config to ESP32:`, config, 'result:', result);
+  }).catch(err => {
+    console.error('[MQTT] Error getting device config:', err.message);
+  });
 }
 
 // Make MQTT functions available globally (if needed elsewhere)
 global.sendMqttSwitchCommand = sendMqttSwitchCommand;
+global.sendDeviceConfigToESP32 = sendDeviceConfigToESP32;
 
 console.log('[MQTT] Using Mosquitto broker for all ESP32 device communication');
 
@@ -503,11 +551,13 @@ const connectDB = async (retries = 5) => {
       logger.error('Admin user creation error:', adminError);
     }
     // Initialize schedule service after DB connection
-    // try {
-    //   await scheduleService.initialize();
-    // } catch (scheduleError) {
-    //   logger.error('Schedule service initialization error:', scheduleError);
-    // }
+    logger.info('[DEBUG] About to initialize schedule service...');
+    try {
+      await scheduleService.initialize();
+      logger.info('[DEBUG] Schedule service initialization completed');
+    } catch (scheduleError) {
+      logger.error('Schedule service initialization error:', scheduleError);
+    }
   } catch (err) {
     const msg = err && (err.message || String(err));
     logger.error('MongoDB connection error (continuing in LIMITED MODE):', msg);
@@ -975,7 +1025,7 @@ io.on('connection', (socket) => {
 
       // Get device from database to find MAC address
       const Device = require('./models/Device');
-      const device = await Device.findById(deviceId);
+      const device = await Device.findById(deviceId).select('+deviceSecret');
 
       if (!device || !device.macAddress) {
         console.warn('[SOCKET] Device not found or no MAC address:', deviceId);
@@ -985,6 +1035,7 @@ io.on('connection', (socket) => {
       // Send MQTT command to ESP32 (JSON format)
       const command = {
         mac: device.macAddress, // Include MAC address
+        secret: device.deviceSecret, // Include device secret for authentication
         gpio: gpio,
         state: desiredState
       };
@@ -1013,7 +1064,7 @@ io.on('connection', (socket) => {
 
       // Get devices from database
       const Device = require('./models/Device');
-      const devices = await Device.find({ _id: { $in: deviceIds } });
+      const devices = await Device.find({ _id: { $in: deviceIds } }).select('+deviceSecret');
 
       if (!devices || devices.length === 0) {
         console.warn('[SOCKET] No devices found for bulk operation:', deviceIds);
@@ -1044,6 +1095,7 @@ io.on('connection', (socket) => {
         for (const switchInfo of switchesToToggle) {
           const command = {
             mac: device.macAddress, // Include MAC address
+            secret: device.deviceSecret, // Include device secret for authentication
             gpio: switchInfo.gpio,
             state: desiredState
           };
@@ -1195,6 +1247,7 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`[DEBUG] Server address:`, server.address());
 
   // Connect to database after server starts
+  logger.info('[DEBUG] About to call connectDB...');
   connectDB().catch(() => { });
 
   // Start enhanced services after successful startup
@@ -1202,35 +1255,50 @@ server.listen(PORT, '0.0.0.0', () => {
     // Only initialize metrics if not running tests
     if (process.env.NODE_ENV !== 'test') {
       try {
-        const metricsService = require('./metricsService');
-        (async () => {
-          await metricsService.initializeMetrics();
-        })();
+        // const metricsService = require('./metricsService');
+        // (async () => {
+        //   await metricsService.initializeMetrics();
+        // })();
+        console.log('Metrics service disabled for debugging');
       } catch (error) {
         console.error('Error initializing metrics service:', error);
       }
     }
 
     // Start device monitoring service (5-minute checks)
-    const deviceMonitoringService = require('./services/deviceMonitoringService');
-    deviceMonitoringService.start();
+    // const deviceMonitoringService = require('./services/deviceMonitoringService');
+    // deviceMonitoringService.start();
+    console.log('Device monitoring service disabled for debugging');
 
     // Initialize content scheduler service
     try {
-      (async () => {
-        await contentSchedulerService.initialize();
-      })();
-      console.log('[SERVICES] Content scheduler service started');
+      // (async () => {
+      //   await contentSchedulerService.initialize();
+      // })();
+      // console.log('[SERVICES] Content scheduler service started');
+      console.log('Content scheduler service disabled for debugging');
     } catch (error) {
       console.error('Error initializing content scheduler service:', error);
     }
 
-    console.log('[SERVICES] Enhanced logging and monitoring services started');
+    // console.log('[SERVICES] Enhanced logging and monitoring services started');
+    console.log('Enhanced services disabled for debugging');
   }, 5000); // Wait 5 seconds for database connection
 });
 
 server.on('error', (error) => {
   console.error('Server error:', error);
+  process.exit(1);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  process.exit(1);
 });
 
 

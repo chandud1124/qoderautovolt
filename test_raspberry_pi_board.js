@@ -6,7 +6,7 @@
 
 import axios from 'axios';
 
-const BASE_URL = 'http://172.16.3.171:3001/api';
+const BASE_URL = 'http://192.168.0.108:3001/api';
 const TEST_BOARD = {
   name: 'Test Raspberry Pi Display',
   description: 'A test Raspberry Pi display board',

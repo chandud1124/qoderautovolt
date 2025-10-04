@@ -4,7 +4,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { X, Plus, Ticket } from 'lucide-react';
 import { ticketAPI } from '@/services/api';
@@ -50,6 +50,19 @@ const CreateTicketDialog: React.FC<CreateTicketDialogProps> = ({ onTicketCreated
         { value: 'medium', label: 'Medium' },
         { value: 'high', label: 'High' },
         { value: 'urgent', label: 'Urgent' }
+    ];
+
+    const departments = [
+        'IT',
+        'HR',
+        'Finance',
+        'Operations',
+        'Marketing',
+        'Sales',
+        'Engineering',
+        'Support',
+        'Administration',
+        'Other'
     ];
 
     const handleInputChange = (field: string, value: string) => {
@@ -130,6 +143,9 @@ const CreateTicketDialog: React.FC<CreateTicketDialogProps> = ({ onTicketCreated
             <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
                     <DialogTitle>Create Support Ticket</DialogTitle>
+                    <DialogDescription>
+                        Submit a support ticket for technical issues, feature requests, or other concerns.
+                    </DialogDescription>
                 </DialogHeader>
 
                 <form onSubmit={handleSubmit} className="space-y-6">
@@ -149,12 +165,11 @@ const CreateTicketDialog: React.FC<CreateTicketDialogProps> = ({ onTicketCreated
                     <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-2">
                             <Label>Category *</Label>
-                            <Select value={formData.category} onValueChange={(value) => handleInputChange('category', value)}>
+                            <Select value={formData.category || ""} onValueChange={(value) => handleInputChange('category', value)}>
                                 <SelectTrigger>
                                     <SelectValue placeholder="Select category" />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="select-category" disabled>Select category</SelectItem>
                                     {categories.map((category) => (
                                         <SelectItem key={category.value} value={category.value}>
                                             {category.label}
@@ -168,10 +183,9 @@ const CreateTicketDialog: React.FC<CreateTicketDialogProps> = ({ onTicketCreated
                             <Label>Priority</Label>
                             <Select value={formData.priority} onValueChange={(value) => handleInputChange('priority', value)}>
                                 <SelectTrigger>
-                                    <SelectValue />
+                                    <SelectValue placeholder="Select priority" />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="select-priority" disabled>Select priority</SelectItem>
                                     {priorities.map((priority) => (
                                         <SelectItem key={priority.value} value={priority.value}>
                                             {priority.label}
@@ -198,13 +212,19 @@ const CreateTicketDialog: React.FC<CreateTicketDialogProps> = ({ onTicketCreated
                     {/* Department and Location */}
                     <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-2">
-                            <Label htmlFor="department">Department</Label>
-                            <Input
-                                id="department"
-                                value={formData.department}
-                                onChange={(e) => handleInputChange('department', e.target.value)}
-                                placeholder="Your department"
-                            />
+                            <Label>Department</Label>
+                            <Select value={formData.department} onValueChange={(value) => handleInputChange('department', value)}>
+                                <SelectTrigger>
+                                    <SelectValue placeholder="Select department" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {departments.map((dept) => (
+                                        <SelectItem key={dept} value={dept}>
+                                            {dept}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
                         </div>
 
                         <div className="space-y-2">
@@ -221,7 +241,7 @@ const CreateTicketDialog: React.FC<CreateTicketDialogProps> = ({ onTicketCreated
                     {/* Device Selection */}
                     <div className="space-y-2">
                         <Label>Related Device (Optional)</Label>
-                        <Select value={formData.deviceId || undefined} onValueChange={(value) => handleInputChange('deviceId', value)}>
+                        <Select value={formData.deviceId || ""} onValueChange={(value) => handleInputChange('deviceId', value === "none" ? "" : value)}>
                             <SelectTrigger>
                                 <SelectValue placeholder="Select device if issue is device-related" />
                             </SelectTrigger>

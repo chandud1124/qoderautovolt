@@ -39,8 +39,7 @@ router.get('/activities', async (req, res) => {
       ];
     }
     
-    // Exclude manual switch operations from activities (they appear in manual-switches tab)
-    query.triggeredBy = { $ne: 'manual_switch' };
+    // Include all activity types including manual switches in active logs
 
     const logs = await ActivityLog.find(query)
       .populate('deviceId', 'name location')
@@ -99,6 +98,9 @@ router.get('/manual-switches', async (req, res) => {
     const query = {};
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
+    // Only show manual switch activities
+    query.triggeredBy = 'manual_switch';
+
     if (deviceId && deviceId !== 'all') {
       query.deviceId = deviceId;
     }
@@ -115,13 +117,13 @@ router.get('/manual-switches', async (req, res) => {
       ];
     }
 
-    const logs = await ManualSwitchLog.find(query)
+    const logs = await ActivityLog.find(query)
       .populate('deviceId', 'name location')
       .sort({ timestamp: -1 })
       .skip(skip)
       .limit(parseInt(limit));
 
-    const total = await ManualSwitchLog.countDocuments(query);
+    const total = await ActivityLog.countDocuments(query);
 
     const formattedLogs = logs.map(log => ({
       id: log._id,
@@ -131,12 +133,9 @@ router.get('/manual-switches', async (req, res) => {
       switchId: log.switchId,
       switchName: log.switchName,
       action: log.action,
-      previousState: log.previousState,
-      newState: log.newState,
-      conflictWith: log.conflictWith,
-      responseTime: log.responseTime,
+      triggeredBy: log.triggeredBy,
       location: log.location || log.deviceId?.location,
-      details: log.context
+      details: log.context || log.details
     }));
 
     res.json({

@@ -359,7 +359,8 @@ exports.getDeviceConfig = async (req, res) => {
         usePir: sw.usePir,
         dontAutoOff: sw.dontAutoOff,
         manualSwitchEnabled: sw.manualSwitchEnabled,
-        manualSwitchGpio: sw.manualSwitchGpio
+        manualSwitchGpio: sw.manualSwitchGpio,
+        manualMode: sw.manualMode || 'maintained'
       }))
     };
 
