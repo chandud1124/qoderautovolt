@@ -193,8 +193,8 @@ void loadOfflineEventsFromStorage() {
   Serial.printf("[STORAGE] Loaded %d offline events\n", (int)offlineEvents.size());
 }
 
-#define MQTT_BROKER "172.16.3.171" // Set to backend IP or broker IP
-#define MQTT_PORT 1883
+#define MQTT_BROKER MQTT_BROKER_IP // Use IP from config.h
+#define MQTT_PORT MQTT_BROKER_PORT  // Use port from config.h
 #define MQTT_USER "81742e8ed7732de20885894514bbae323078c5cd39af9571"
 #define MQTT_PASSWORD ""
 #define SWITCH_TOPIC "esp32/switches"

@@ -10,6 +10,11 @@
 // Device Authentication
 #define DEVICE_SECRET "81742e8ed7732de20885894514bbae323078c5cd39af9571"
 
+// MQTT Broker Configuration - Update this IP to match your network setup
+// If ESP8266 is on AIMS-WIFI network, this IP must be accessible from that network
+#define MQTT_BROKER_IP "172.16.3.171"  // Server IP - may need to change if networks are different
+#define MQTT_BROKER_PORT 1883
+
 // Relay Configuration (ESP8266-safe GPIO pins)
 #define relayPins {4, 5, 12, 13, 14, 16}  // GPIO 4,5,12,13,14,16 (safe for ESP8266)
 

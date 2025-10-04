@@ -264,14 +264,7 @@ const Devices = () => {
 
 
 
-// ...existing code...
 
-const [globalAiEnabled, setGlobalAiEnabled] = useState(false);
-
-const handleGlobalAiToggle = (checked: boolean) => {
-  setGlobalAiEnabled(checked);
-  // TODO: Persist to backend if needed
-};
 
   return (
     <>
@@ -284,12 +277,6 @@ const handleGlobalAiToggle = (checked: boolean) => {
       />
 
       <div className="container mx-auto py-6 px-4 sm:px-6">
-        {/* Global AI/ML Toggle */}
-        <div className="flex items-center gap-3 p-4 bg-card rounded-xl shadow mb-6">
-          <ToggleSwitch checked={globalAiEnabled} onCheckedChange={handleGlobalAiToggle} />
-          <span className="font-semibold">Global AI/ML Control</span>
-          <span className="text-xs text-muted-foreground" title="ON: AI can control all devices. OFF: AI only shows insights.">(affects all devices)</span>
-        </div>
         {/* Header with Connection Status */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
           <div className="flex items-center gap-3">
