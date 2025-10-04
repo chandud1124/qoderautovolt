@@ -1,10 +1,10 @@
 // MQTT Test Script
 // Run this to test MQTT communication between backend and ESP32
 
-const mqtt = require('mqtt');
+import mqtt from 'mqtt';
 
 // Connect to Mosquitto broker
-const client = mqtt.connect('mqtt://localhost:1883', {
+const client = mqtt.connect('mqtt://172.16.3.171:1883', {
   clientId: 'test_client',
   clean: true,
 });

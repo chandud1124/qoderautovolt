@@ -75,9 +75,11 @@ class SocketService {
   }
 
   connect(): Promise<void> {
+    console.log('[Socket.IO] connect() method called');
     return new Promise((resolve, reject) => {
       // Prevent duplicate connection attempts
       if (this.isConnecting || this.socket?.connected) {
+        console.log('[Socket.IO] Connect called but already connecting or connected');
         if (this.socket?.connected) {
           resolve();
         } else {
@@ -97,33 +99,23 @@ class SocketService {
       }
 
       this.isConnecting = true;
+      console.log('[Socket.IO] Starting connection attempt');
 
       try {
-        const backendUrl = getBackendOrigin();
-        console.log('[Socket.IO] Connecting to:', backendUrl);
+        // In development, connect to the Vite dev server (which proxies to backend)
+        // In production, connect directly to the backend
+        const isDevelopment = import.meta.env.DEV;
+        const backendUrl = isDevelopment ? window.location.origin : getBackendOrigin();
+        console.log('[Socket.IO] Connecting to:', backendUrl, 'Development mode:', isDevelopment);
 
         this.socket = io(backendUrl, {
-          // Force polling transport only to avoid WebSocket frame header issues
-          transports: ['polling'],
-          timeout: 20000,
-          forceNew: false, // Don't force new connections
-          reconnection: true,
-          reconnectionAttempts: 5,
-          reconnectionDelay: 1000,
-          // Disable perMessageDeflate to avoid header corruption
-          perMessageDeflate: { threshold: 0 },
-          // Don't remember upgrades to avoid header issues
-          rememberUpgrade: false,
-          // Add auth token if available
+          transports: ['polling', 'websocket'],
           auth: {
             token: localStorage.getItem('auth_token')
-          },
-          // Additional stability settings
-          upgrade: false, // Disable WebSocket upgrade
-          randomizationFactor: 0.5,
-          // Disable compression to avoid frame header issues
-          forceBase64: false
+          }
         });
+
+        console.log('[Socket.IO] Socket.IO client created, setting up event listeners');
 
         this.setupEventListeners();
 

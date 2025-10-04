@@ -118,13 +118,13 @@ Use Wireshark to capture MQTT traffic:
 ```cpp
 #define WIFI_SSID "AIMS-WIFI"
 #define WIFI_PASSWORD "Aimswifi#2025"
-#define MQTT_BROKER "172.16.3.171"
+// #define MQTT_BROKER "172.16.3.171"
 #define MQTT_PORT 1883
 ```
 
 ### Backend Environment (`.env`)
 ```
-MQTT_BROKER=localhost
+MQTT_BROKER=172.16.3.171
 MQTT_PORT=1883
 ```
 

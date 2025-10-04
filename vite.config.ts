@@ -9,12 +9,12 @@ export default defineConfig(({ mode }) => ({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://192.168.0.108:3001',
+        target: 'http://localhost:3001',
         changeOrigin: true,
         secure: false,
       },
       '/socket.io': {
-        target: 'http://192.168.0.108:3001',
+        target: 'http://localhost:3001',
         changeOrigin: true,
         ws: true,
       }

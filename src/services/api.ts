@@ -22,6 +22,17 @@ const API_URLS = [
 
 let detectedApiBaseUrl = API_URLS[0];
 
+// In development, use the Vite proxy instead of direct backend connection
+const isDevelopment = import.meta.env.DEV;
+const effectiveBaseUrl = isDevelopment ? '' : detectedApiBaseUrl; // Empty string means relative to current origin
+
+// Call detectApiBaseUrl on initialization (only in production)
+if (!isDevelopment) {
+  detectApiBaseUrl().catch((error) => {
+    console.warn('[api] Failed to detect API base URL, using default:', detectedApiBaseUrl, error);
+  });
+}
+
 export async function detectApiBaseUrl() {
   for (const url of API_URLS) {
     try {
@@ -40,7 +51,7 @@ export async function detectApiBaseUrl() {
 }
 
 const api = axios.create({
-  baseURL: detectedApiBaseUrl,
+  baseURL: effectiveBaseUrl,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -48,14 +59,27 @@ const api = axios.create({
 });
 
 // Helper to get backend origin (strip trailing /api)
-export const getBackendOrigin = () => detectedApiBaseUrl.replace(/\/api\/?$/, '');
+export const getBackendOrigin = () => {
+  if (isDevelopment) {
+    return window.location.origin; // Use Vite dev server
+  }
+  return detectedApiBaseUrl.replace(/\/api\/?$/, '');
+};
 
 // Normalize any accidental double /api prefixes (e.g., request to /api/devices when baseURL already ends with /api)
 api.interceptors.request.use((config) => {
   if (config.url) {
-    // Replace leading /api/ with / if baseURL already ends with /api
-    if (detectedApiBaseUrl.endsWith('/api') && config.url.startsWith('/api/')) {
-      config.url = config.url.replace(/^\/api\//, '/');
+    if (isDevelopment) {
+      // In development, ensure URLs start with /api for Vite proxy
+      if (!config.url.startsWith('/api/') && !config.url.startsWith('/api')) {
+        config.url = '/api' + (config.url.startsWith('/') ? config.url : '/' + config.url);
+      }
+    } else {
+      // In production, handle the existing logic
+      // Replace leading /api/ with / if baseURL already ends with /api
+      if (detectedApiBaseUrl.endsWith('/api') && config.url.startsWith('/api/')) {
+        config.url = config.url.replace(/^\/api\//, '/');
+      }
     }
     // Guard against resulting // paths
     config.url = config.url.replace(/\/\//g, '/');
@@ -108,7 +132,8 @@ api.interceptors.response.use(
       try {
         const refreshToken = localStorage.getItem('refresh_token');
         if (refreshToken) {
-          const refreshResp = await axios.post(`${detectedApiBaseUrl}/auth/refresh-token`, { refreshToken });
+          const refreshUrl = isDevelopment ? '/api/auth/refresh-token' : `${detectedApiBaseUrl}/auth/refresh-token`;
+          const refreshResp = await axios.post(refreshUrl, { refreshToken });
           if (refreshResp.data?.token) {
             localStorage.setItem('auth_token', refreshResp.data.token);
             api.defaults.headers.common['Authorization'] = `Bearer ${refreshResp.data.token}`;

@@ -13,8 +13,8 @@ const routeMonitor = require('./middleware/routeMonitor');
 
 // --- MQTT client for Mosquitto broker (for ESP32 communication) ---
 const mqtt = require('mqtt');
-const MOSQUITTO_PORT = 1883; // Use standard MQTT port
-const MOSQUITTO_HOST = '192.168.0.108'; // Use network MQTT broker
+const MOSQUITTO_PORT = process.env.MQTT_PORT || 1883; // Use standard MQTT port
+const MOSQUITTO_HOST = process.env.MQTT_BROKER || '172.16.3.171'; // Use network MQTT broker
 
 const mqttClient = mqtt.connect(`mqtt://${MOSQUITTO_HOST}:${MOSQUITTO_PORT}`, {
   clientId: 'backend_server',

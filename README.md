@@ -1073,7 +1073,7 @@ The system supports **dual communication protocols** for maximum reliability and
 4. **Environment Variables**
    ```env
    # Add to backend/.env
-   MQTT_BROKER_URL=mqtt://localhost:1883
+  MQTT_BROKER_URL=mqtt://172.16.3.171:1883
    MQTT_ENABLED=true
    ```
 

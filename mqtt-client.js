@@ -4,7 +4,7 @@
 const mqtt = require('mqtt');
 
 // MQTT Broker settings
-const brokerUrl = 'mqtt://192.168.0.108:1883'; // Mosquitto running at correct IP
+const brokerUrl = 'mqtt://172.16.3.171:1883'; // Mosquitto running at correct IP
 const options = {
   clientId: 'backend_server',
   clean: true,

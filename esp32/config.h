@@ -10,7 +10,7 @@
 #define DEVICE_SECRET "d6c498bc1c92fde490d198ec65048e20cd3cdb6a5c73e794" // Optional: Device secret/API key for authentication
 
 // MQTT Broker Configuration - Update this to match your network
-#define MQTT_BROKER "192.168.0.108"      // Backend server IP
+#define MQTT_BROKER "172.16.3.171"      // Backend server IP
 #define MQTT_PORT 1883                  // MQTT port
 
 // Aligned relay and manual switch pin mapping

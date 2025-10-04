@@ -101,7 +101,7 @@ void loadOfflineEventsFromNVS() {
   Serial.printf("[NVS] Loaded %d offline events\n", (int)offlineEvents.size());
 }
 
-#define MQTT_BROKER "192.168.0.108" // Set to backend IP or broker IP
+#define MQTT_BROKER "172.16.3.171" // Set to backend IP or broker IP
 #define MQTT_PORT 1883
 #define MQTT_USER ""
 #define MQTT_PASSWORD ""
@@ -561,6 +561,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   for (unsigned int i = 0; i < length; i++) message += (char)payload[i];
   Serial.printf("[MQTT] Message arrived [%s]: %s\n", topic, message.c_str());
   if (String(topic) == SWITCH_TOPIC) {
+    Serial.printf("[MQTT] Received switch command: %s\n", message.c_str());
     if (message.startsWith("{")) {
       DynamicJsonDocument doc(256);
       DeserializationError err = deserializeJson(doc, message);
@@ -570,8 +571,11 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         String myMac = WiFi.macAddress();
         String normalizedTarget = normalizeMac(targetMac);
         String normalizedMy = normalizeMac(myMac);
+        Serial.printf("[MQTT] Target MAC: %s, My MAC: %s, Normalized Target: %s, Normalized My: %s\n", targetMac.c_str(), myMac.c_str(), normalizedTarget.c_str(), normalizedMy.c_str());
         if (normalizedTarget.equalsIgnoreCase(normalizedMy)) {
+          Serial.println("[MQTT] MAC matches");
           if (targetSecret == String(DEVICE_SECRET)) {
+            Serial.println("[MQTT] Secret matches");
             int gpio = doc["gpio"];
             bool state = doc["state"];
             bool validGpio = false;
@@ -579,6 +583,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
               if (switchesLocal[i].relayGpio == gpio) { validGpio = true; break; }
             }
             if (validGpio) {
+              Serial.printf("[MQTT] Valid GPIO %d, queuing command\n", gpio);
               queueSwitchCommand(gpio, state);
               processCommandQueue();
               Serial.printf("[MQTT] Processed command for this device: GPIO %d -> %s\n", gpio, state ? "ON" : "OFF");
