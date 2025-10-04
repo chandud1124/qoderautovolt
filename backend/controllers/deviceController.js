@@ -1388,7 +1388,7 @@ const getPirData = async (req, res) => {
 const getGpioPinInfo = async (req, res) => {
   try {
     const { deviceId } = req.params;
-    const { includeUsed = 'true' } = req.query;
+    const { includeUsed = 'true', deviceType = 'esp32' } = req.query;
 
     let device = null;
     if (deviceId && deviceId !== 'new') {
@@ -1412,10 +1412,11 @@ const getGpioPinInfo = async (req, res) => {
       }
     }
 
-    // Generate pin information
+    // Generate pin information based on device type
+    const maxPin = deviceType === 'esp8266' ? 16 : 39;
     const pins = [];
-    for (let pin = 0; pin <= 39; pin++) {
-      const status = gpioUtils.getGpioPinStatus(pin);
+    for (let pin = 0; pin <= maxPin; pin++) {
+      const status = gpioUtils.getGpioPinStatus(pin, deviceType);
       const isUsed = usedPins.has(pin);
 
       pins.push({
@@ -1437,9 +1438,9 @@ const getGpioPinInfo = async (req, res) => {
 
     // Recommended safe pins for different purposes
     const recommendations = {
-      relayPins: gpioUtils.getRecommendedPins('relay'),
-      manualPins: gpioUtils.getRecommendedPins('manual'),
-      pirPins: gpioUtils.getRecommendedPins('pir')
+      relayPins: gpioUtils.getRecommendedPins('relay', 'primary', deviceType),
+      manualPins: gpioUtils.getRecommendedPins('manual', 'primary', deviceType),
+      pirPins: gpioUtils.getRecommendedPins('pir', 'primary', deviceType)
     };
 
     res.json({
@@ -1448,6 +1449,7 @@ const getGpioPinInfo = async (req, res) => {
         pins,
         grouped,
         recommendations,
+        deviceType,
         summary: {
           totalPins: pins.length,
           safePins: grouped.safe.length,
@@ -1466,7 +1468,7 @@ const getGpioPinInfo = async (req, res) => {
 // Validate GPIO pin configuration
 const validateGpioConfig = async (req, res) => {
   try {
-    const { switches = [], pirEnabled = false, pirGpio } = req.body;
+    const { switches = [], pirEnabled = false, pirGpio, deviceType = 'esp32' } = req.body;
 
     const errors = [];
     const warnings = [];
@@ -1482,10 +1484,10 @@ const validateGpioConfig = async (req, res) => {
           errors.push(`Switch ${switchNum}: GPIO ${sw.gpio} is already used`);
         } else {
           usedPins.add(sw.gpio);
-          const status = gpioUtils.getGpioPinStatus(sw.gpio);
+          const status = gpioUtils.getGpioPinStatus(sw.gpio, deviceType);
           if (!status.safe) {
             if (status.status === 'problematic') {
-              warnings.push(`Switch ${switchNum}: GPIO ${sw.gpio} may cause ESP32 boot issues`);
+              warnings.push(`Switch ${switchNum}: GPIO ${sw.gpio} may cause ${deviceType.toUpperCase()} boot issues`);
             } else {
               errors.push(`Switch ${switchNum}: GPIO ${sw.gpio} is ${status.status} (${status.reason})`);
             }
@@ -1499,10 +1501,10 @@ const validateGpioConfig = async (req, res) => {
           errors.push(`Switch ${switchNum}: Manual GPIO ${sw.manualSwitchGpio} is already used`);
         } else {
           usedPins.add(sw.manualSwitchGpio);
-          const status = gpioUtils.getGpioPinStatus(sw.manualSwitchGpio);
+          const status = gpioUtils.getGpioPinStatus(sw.manualSwitchGpio, deviceType);
           if (!status.safe) {
             if (status.status === 'problematic') {
-              warnings.push(`Switch ${switchNum}: Manual GPIO ${sw.manualSwitchGpio} may cause ESP32 boot issues`);
+              warnings.push(`Switch ${switchNum}: Manual GPIO ${sw.manualSwitchGpio} may cause ${deviceType.toUpperCase()} boot issues`);
             } else {
               errors.push(`Switch ${switchNum}: Manual GPIO ${sw.manualSwitchGpio} is ${status.status} (${status.reason})`);
             }
@@ -1516,10 +1518,10 @@ const validateGpioConfig = async (req, res) => {
       if (usedPins.has(pirGpio)) {
         errors.push(`PIR: GPIO ${pirGpio} is already used`);
       } else {
-        const status = gpioUtils.getGpioPinStatus(pirGpio);
+        const status = gpioUtils.getGpioPinStatus(pirGpio, deviceType);
         if (!status.safe) {
           if (status.status === 'problematic') {
-            warnings.push(`PIR: GPIO ${pirGpio} may cause ESP32 boot issues`);
+            warnings.push(`PIR: GPIO ${pirGpio} may cause ${deviceType.toUpperCase()} boot issues`);
           } else {
             errors.push(`PIR: GPIO ${pirGpio} is ${status.status} (${status.reason})`);
           }

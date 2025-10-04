@@ -230,7 +230,7 @@ export const deviceAPI = {
     api.get(`/devices/${deviceId}`, { params: { includeSecret: 1, ...(pin && { secretPin: pin }) } }),
 
   // GPIO pin information and validation
-  getGpioPinInfo: (deviceId?: string) => api.get(`/devices/gpio-info/${deviceId || 'new'}`),
+  getGpioPinInfo: (deviceId?: string, deviceType?: string) => api.get(`/devices/gpio-info/${deviceId || 'new'}`, { params: deviceType ? { deviceType } : {} }),
   validateGpioConfig: (config: Record<string, unknown>) => api.post('/devices/validate-gpio', config),
 };
 

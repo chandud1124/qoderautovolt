@@ -13,15 +13,15 @@ const switchSchema = new mongoose.Schema({
     type: Number,
     required: [true, 'GPIO pin number is required'],
     min: [0, 'GPIO pin must be >= 0'],
-    max: [39, 'GPIO pin must be <= 39'],
+    max: [39, 'GPIO pin must be <= 39'], // Will be validated in pre-save
     validate: {
       validator: function(v) {
         // Allow problematic pins for existing devices during updates to prevent bulk toggle failures
         // Only enforce strict validation for new devices
-        return gpioUtils.validateGpioPin(v, true); // Allow problematic pins
+        return gpioUtils.validateGpioPin(v, true, 'esp32'); // Default to ESP32, will be re-validated in pre-save
       },
       message: function(props) {
-        const status = gpioUtils.getGpioPinStatus(props.value);
+        const status = gpioUtils.getGpioPinStatus(props.value, 'esp32');
         return status.reason;
       }
     }
@@ -50,15 +50,15 @@ const switchSchema = new mongoose.Schema({
   manualSwitchGpio: {
     type: Number,
     min: [0, 'GPIO pin must be >= 0'],
-    max: [39, 'GPIO pin must be <= 39'],
+    max: [39, 'GPIO pin must be <= 39'], // Will be validated in pre-save
     validate: {
       validator: function(v) {
         if (v === undefined || v === null) return true;
         // Allow problematic pins for existing devices during updates
-        return gpioUtils.validateGpioPin(v, true); // Allow problematic pins
+        return gpioUtils.validateGpioPin(v, true, 'esp32'); // Default to ESP32, will be re-validated in pre-save
       },
       message: function(props) {
-        const status = gpioUtils.getGpioPinStatus(props.value);
+        const status = gpioUtils.getGpioPinStatus(props.value, 'esp32');
         return status.reason;
       }
     }
@@ -94,7 +94,7 @@ const deviceSchema = new mongoose.Schema({
   },
   deviceType: {
     type: String,
-    enum: ['esp32'],
+    enum: ['esp32', 'esp8266'],
     default: 'esp32'
   },
   macAddress: {
@@ -141,9 +141,15 @@ const deviceSchema = new mongoose.Schema({
     validate: [
       {
         validator: function(switches) {
-          return switches.length <= 8;
+          const deviceType = this.deviceType || 'esp32';
+          const maxSwitches = deviceType === 'esp8266' ? 6 : 8;
+          return switches.length <= maxSwitches;
         },
-        message: 'Maximum 8 switches allowed per ESP32 device'
+        message: function() {
+          const deviceType = this.deviceType || 'esp32';
+          const maxSwitches = deviceType === 'esp8266' ? 6 : 8;
+          return `Maximum ${maxSwitches} switches allowed per ${deviceType.toUpperCase()} device`;
+        }
       },
       {
         validator: function(switches) {
@@ -165,15 +171,15 @@ const deviceSchema = new mongoose.Schema({
     type: Number,
     required: function() { return this.pirEnabled; },
     min: [0, 'GPIO pin must be >= 0'],
-    max: [39, 'GPIO pin must be <= 39'],
+    max: [39, 'GPIO pin must be <= 39'], // Will be validated in pre-save
     validate: {
       validator: function(v) {
         if (!this.pirEnabled) return true;
         // Allow problematic pins for existing devices during updates
-        return gpioUtils.validateGpioPin(v, true); // Allow problematic pins
+        return gpioUtils.validateGpioPin(v, true, this.deviceType || 'esp32'); // Allow problematic pins
       },
       message: function(props) {
-        const status = gpioUtils.getGpioPinStatus(props.value);
+        const status = gpioUtils.getGpioPinStatus(props.value, this.deviceType || 'esp32');
         return status.reason;
       }
     }
@@ -225,6 +231,46 @@ deviceSchema.pre('save', function(next) {
   if (this.macAddress) {
     this.macAddress = this.macAddress.replace(/[^a-fA-F0-9]/g, '').toLowerCase();
   }
+
+  const deviceType = this.deviceType || 'esp32';
+  const maxPin = deviceType === 'esp8266' ? 16 : 39;
+
+  // Validate GPIO pins based on device type
+  for (const sw of this.switches) {
+    if (sw.gpio > maxPin) {
+      next(new Error(`GPIO pin ${sw.gpio} exceeds maximum for ${deviceType.toUpperCase()} (${maxPin})`));
+      return;
+    }
+    if (sw.manualSwitchGpio !== undefined && sw.manualSwitchGpio > maxPin) {
+      next(new Error(`Manual switch GPIO pin ${sw.manualSwitchGpio} exceeds maximum for ${deviceType.toUpperCase()} (${maxPin})`));
+      return;
+    }
+    // Validate pin safety
+    if (!gpioUtils.validateGpioPin(sw.gpio, true, deviceType)) {
+      const status = gpioUtils.getGpioPinStatus(sw.gpio, deviceType);
+      next(new Error(`Switch GPIO ${sw.gpio}: ${status.reason}`));
+      return;
+    }
+    if (sw.manualSwitchEnabled && sw.manualSwitchGpio !== undefined && !gpioUtils.validateGpioPin(sw.manualSwitchGpio, true, deviceType)) {
+      const status = gpioUtils.getGpioPinStatus(sw.manualSwitchGpio, deviceType);
+      next(new Error(`Manual switch GPIO ${sw.manualSwitchGpio}: ${status.reason}`));
+      return;
+    }
+  }
+
+  // Validate PIR GPIO
+  if (this.pirEnabled && this.pirGpio !== undefined) {
+    if (this.pirGpio > maxPin) {
+      next(new Error(`PIR GPIO pin ${this.pirGpio} exceeds maximum for ${deviceType.toUpperCase()} (${maxPin})`));
+      return;
+    }
+    if (!gpioUtils.validateGpioPin(this.pirGpio, true, deviceType)) {
+      const status = gpioUtils.getGpioPinStatus(this.pirGpio, deviceType);
+      next(new Error(`PIR GPIO ${this.pirGpio}: ${status.reason}`));
+      return;
+    }
+  }
+
   const switchNames = new Set();
   for (const sw of this.switches) {
     if (switchNames.has(sw.name)) {

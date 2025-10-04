@@ -65,6 +65,7 @@ const formSchema = z.object({
   ipAddress: z.string().regex(/^(\d{1,3}\.){3}\d{1,3}$/, 'Invalid IP').refine(v => v.split('.').every(o => +o >= 0 && +o <= 255), 'Octets 0-255'),
   location: z.string().min(1),
   classroom: z.string().optional(),
+  deviceType: z.enum(['esp32', 'esp8266']).default('esp32'),
   pirEnabled: z.boolean().default(false),
   pirGpio: z.number().min(0).max(39).optional(),
   pirAutoOffDelay: z.number().min(0).default(30),
@@ -86,6 +87,24 @@ const parseLocation = (loc?: string) => {
   return { block: b, floor: f };
 };
 
+// ESP8266 NodeMCU pin mapping (GPIO to board pin names)
+const getEsp8266BoardPinName = (gpio: number): string => {
+  const pinMap: { [key: number]: string } = {
+    0: 'D3', 1: 'TX', 2: 'D4', 3: 'RX', 4: 'D2', 5: 'D1',
+    12: 'D6', 13: 'D7', 14: 'D5', 15: 'D8', 16: 'D0'
+  };
+  return pinMap[gpio] || `GPIO${gpio}`;
+};
+
+// Get display name for GPIO pin based on device type
+const getPinDisplayName = (gpio: number, deviceType: string): string => {
+  if (deviceType === 'esp8266') {
+    const boardName = getEsp8266BoardPinName(gpio);
+    return `${boardName} (GPIO${gpio})`;
+  }
+  return `GPIO ${gpio}`;
+};
+
 export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubmit, initialData }) => {
   const locParts = parseLocation(initialData?.location);
   const [block, setBlock] = useState(locParts.block);
@@ -101,6 +120,7 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
       ipAddress: initialData.ipAddress,
       location: initialData.location || `Block ${locParts.block} Floor ${locParts.floor}`,
       classroom: initialData.classroom || '',
+      deviceType: (initialData.deviceType === 'esp32' || initialData.deviceType === 'esp8266') ? initialData.deviceType : 'esp32',
       pirEnabled: initialData.pirEnabled || false,
       pirGpio: initialData.pirGpio,
       pirAutoOffDelay: initialData.pirAutoOffDelay || 30,
@@ -120,7 +140,7 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
         dontAutoOff: sw.dontAutoOff || false
       }))
     } : {
-      name: '', macAddress: '', ipAddress: '', location: `Block ${locParts.block} Floor ${locParts.floor}`, classroom: '', pirEnabled: false, pirGpio: undefined, pirAutoOffDelay: 30,
+      name: '', macAddress: '', ipAddress: '', location: `Block ${locParts.block} Floor ${locParts.floor}`, classroom: '', deviceType: 'esp32', pirEnabled: false, pirGpio: undefined, pirAutoOffDelay: 30,
   switches: [{ id: `switch-${Date.now()}-0`, name: '', gpio: 0, relayGpio: 0, type: 'relay', icon: 'lightbulb', state: false, manualSwitchEnabled: false, manualMode: 'maintained', manualActiveLow: true, usePir: false, dontAutoOff: false }]
     }
   });
@@ -136,6 +156,7 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
         ipAddress: initialData.ipAddress,
         location: initialData.location || `Block ${lp.block} Floor ${lp.floor}`,
         classroom: initialData.classroom || '',
+        deviceType: (initialData.deviceType === 'esp32' || initialData.deviceType === 'esp8266') ? initialData.deviceType : 'esp32',
         pirEnabled: initialData.pirEnabled || false,
         pirGpio: initialData.pirGpio,
         pirAutoOffDelay: initialData.pirAutoOffDelay || 30,
@@ -159,12 +180,22 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
       const lp = parseLocation(undefined);
       fetchGpioInfo(); // Fetch GPIO info when creating new device
       form.reset({
-        name: '', macAddress: '', ipAddress: '', location: `Block ${lp.block} Floor ${lp.floor}`, classroom: '', pirEnabled: false, pirGpio: undefined, pirAutoOffDelay: 30,
+        name: '', macAddress: '', ipAddress: '', location: `Block ${lp.block} Floor ${lp.floor}`, classroom: '', deviceType: 'esp32', pirEnabled: false, pirGpio: undefined, pirAutoOffDelay: 30,
   switches: [{ id: `switch-${Date.now()}-0`, name: '', gpio: 0, relayGpio: 0, type: 'relay', icon: 'lightbulb', state: false, manualSwitchEnabled: false, manualMode: 'maintained', manualActiveLow: true, usePir: false, dontAutoOff: false }]
       });
     }
   }, [initialData, open]);
   useEffect(() => { form.setValue('location', `Block ${block} Floor ${floor}`); }, [block, floor]);
+
+  // Refetch GPIO info when deviceType changes
+  const prevDeviceTypeRef = React.useRef<string>();
+  useEffect(() => {
+    const currentDeviceType = form.getValues('deviceType');
+    if (open && currentDeviceType !== prevDeviceTypeRef.current) {
+      prevDeviceTypeRef.current = currentDeviceType;
+      fetchGpioInfo();
+    }
+  }, [open]);
 
   // Keep gpio and relayGpio synchronized for each switch
   useEffect(() => {
@@ -196,7 +227,8 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
   const fetchGpioInfo = async () => {
     try {
       setLoadingGpio(true);
-      const response = await deviceAPI.getGpioPinInfo(deviceId);
+      const deviceType = form.getValues('deviceType') || 'esp32';
+      const response = await deviceAPI.getGpioPinInfo(deviceId, deviceType);
       setGpioInfo(response.data.data.pins);
     } catch (error) {
       console.error('Failed to fetch GPIO info:', error);
@@ -208,7 +240,8 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
   // Validate GPIO configuration
   const validateGpioConfig = async (config: { switches: import('@/types').Switch[]; pirEnabled: boolean; pirGpio?: number }) => {
     try {
-      const response = await deviceAPI.validateGpioConfig(config);
+      const deviceType = form.getValues('deviceType') || 'esp32';
+      const response = await deviceAPI.validateGpioConfig({ ...config, deviceType });
       setGpioValidation(response.data.data);
       return response.data.data;
     } catch (error) {
@@ -311,6 +344,7 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
               </div>
               <input type="hidden" {...form.register('location')} />
               <FormField control={form.control} name="classroom" render={({ field }) => (<FormItem><FormLabel>Classroom (Optional)</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>)} />
+              <FormField control={form.control} name="deviceType" render={({ field }) => (<FormItem><FormLabel>Device Type</FormLabel><Select onValueChange={field.onChange} value={field.value}><FormControl><SelectTrigger><SelectValue placeholder="Select device type" /></SelectTrigger></FormControl><SelectContent><SelectItem value="esp32">ESP32</SelectItem><SelectItem value="esp8266">ESP8266</SelectItem></SelectContent></Select><FormMessage /></FormItem>)} />
             </div>
             <Separator />
             {initialData && (
@@ -345,8 +379,13 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
               {form.watch('pirEnabled') && (
                 <div className="grid gap-4 md:grid-cols-2">
                   <FormField control={form.control} name="pirGpio" render={({ field }) => {
-                    // Recommended pins for PIR sensors: 34, 35, 36, 39 (primary), 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33 (secondary)
-                    const recommendedPirPins = [34, 35, 36, 39, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33];
+                    const deviceType = form.getValues('deviceType') || 'esp32';
+                    
+                    // Device-specific recommended PIR pins
+                    const recommendedPirPins = deviceType === 'esp8266' 
+                      ? [4, 5, 12, 13, 14, 16]  // ESP8266 safe pins
+                      : [34, 35, 36, 39, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33]; // ESP32 pins
+                    
                     const availablePins = gpioInfo.filter(p => p.safe && recommendedPirPins.includes(p.pin));
                     const list = [...availablePins];
 
@@ -377,6 +416,9 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
                     };
 
                     const getPirPinRecommendation = (pin: GpioPinInfo) => {
+                      if (deviceType === 'esp8266') {
+                        return 'Safe for ESP8266';
+                      }
                       const primaryPirPins = [34, 35, 36, 39];
                       const secondaryPirPins = [16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33];
                       if (primaryPirPins.includes(pin.pin)) return 'Primary (Recommended)';
@@ -405,7 +447,7 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
                                 <div className="flex items-center gap-2">
                                   {getPinStatusDot(pin)}
                                   {getPinStatusIcon(pin)}
-                                  <span>GPIO {pin.pin}</span>
+                                  <span>{getPinDisplayName(pin.pin, deviceType)}</span>
                                   {pin.status === 'safe' && (
                                     <Badge variant="outline" className="text-xs bg-success/50 text-white border-success/70">
                                       {getPirPinRecommendation(pin)}
@@ -476,7 +518,7 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
                             <div className="flex items-start gap-3 p-4 bg-card border border-border rounded-md">
                 <Info className="h-5 w-5 text-success mt-0.5 flex-shrink-0" />
                 <div className="text-sm text-muted-foreground">
-                  <strong>GPIO Pin Safety:</strong> Only safe GPIO pins are available for selection. These pins are recommended for reliable ESP32 operation and avoid boot issues or system instability.
+                  <strong>GPIO Pin Safety:</strong> Only safe GPIO pins are available for selection. These pins are recommended for reliable {form.watch('deviceType') === 'esp8266' ? 'ESP8266' : 'ESP32'} operation and avoid boot issues or system instability.
                   <div className="mt-2 flex items-center gap-4">
                     <div className="flex items-center gap-1">
                       <CheckCircle className="h-4 w-4 text-success" />
@@ -509,8 +551,13 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
                     <FormField control={form.control} name={`switches.${idx}.gpio`} render={({ field }) => {
                       const switches = form.watch('switches') || [];
                       const usedPins = new Set(switches.flatMap((s, i) => i === idx ? [] : [s.gpio]));
-                      // Only show pins recommended for relay switches
-                      const recommendedRelayPins = [16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33];
+                      const deviceType = form.getValues('deviceType') || 'esp32';
+                      
+                      // Device-specific recommended relay pins
+                      const recommendedRelayPins = deviceType === 'esp8266' 
+                        ? [4, 5, 12, 14, 13, 16]  // ESP8266: primary (4,5,12,14), secondary (13,16)
+                        : [16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33]; // ESP32 pins
+                      
                       const availablePins = gpioInfo.filter(p =>
                         p.safe &&
                         recommendedRelayPins.includes(p.pin) &&
@@ -545,6 +592,11 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
                       };
 
                       const getPinRecommendation = (pin: GpioPinInfo) => {
+                        if (deviceType === 'esp8266') {
+                          if ([4, 5, 12, 14].includes(pin.pin)) return 'Primary (Most Stable)';
+                          if ([13, 16].includes(pin.pin)) return 'Secondary (Alternative)';
+                          return 'Not Recommended';
+                        }
                         const primaryRelayPins = [16, 17, 18, 19, 21, 22];
                         const secondaryRelayPins = [23, 25, 26, 27, 32, 33];
                         if (primaryRelayPins.includes(pin.pin)) return 'Primary (Recommended)';
@@ -572,7 +624,7 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
                                   <div className="flex items-center gap-2">
                                     {getPinStatusDot(pin)}
                                     {getPinStatusIcon(pin)}
-                                    <span>GPIO {pin.pin}</span>
+                                    <span>{getPinDisplayName(pin.pin, deviceType)}</span>
                                     {pin.status === 'safe' && (
                                       <Badge variant="outline" className="text-xs bg-success/50 text-white border-success/70">
                                         {getPinRecommendation(pin)}
@@ -625,7 +677,9 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
                               <AlertDescription className="text-foreground">
                                 <strong>Note:</strong> This pin is safe but not recommended for relay control.
                                 <div className="mt-2">
-                                  <strong>Recommended relay pins:</strong> GPIO 16, 17, 18, 19, 21, 22 (Primary) or 23, 25, 26, 27, 32, 33 (Secondary)
+                                  <strong>Recommended relay pins:</strong> {deviceType === 'esp8266' 
+                                    ? 'GPIO 4, 5, 12, 14 (Primary/Most Stable) or 13, 16 (Secondary/Alternative)' 
+                                    : 'GPIO 16, 17, 18, 19, 21, 22 (Primary) or 23, 25, 26, 27, 32, 33 (Secondary)'}
                                 </div>
                               </AlertDescription>
                             </Alert>
@@ -640,10 +694,18 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
                         <FormField control={form.control} name={`switches.${idx}.manualSwitchGpio`} render={({ field }) => {
                           const all = form.watch('switches') || [];
                           const used = new Set(all.flatMap((s, i) => { const arr = [s.gpio]; if (s.manualSwitchEnabled && s.manualSwitchGpio !== undefined) arr.push(s.manualSwitchGpio); return i === idx ? [s.gpio] : arr; }));
-                          // Only show pins recommended for manual switches
-                          const recommendedManualPins = [16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33];
+                          const deviceType = form.getValues('deviceType') || 'esp32';
+                          
+                          // Device-specific recommended manual pins
+                          const recommendedManualPins = deviceType === 'esp8266' 
+                            ? [13, 1, 3, 0, 2, 15, 16]  // ESP8266: safe pins first (13,1,3), then problematic (0,2,15,16)
+                            : [16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33]; // ESP32 pins
+                          
+                          // For ESP8266, allow problematic pins for manual switches
+                          const allowProblematic = deviceType === 'esp8266';
+                          
                           const availablePins = gpioInfo.filter(p =>
-                            p.safe &&
+                            (p.safe || (allowProblematic && p.status === 'problematic')) &&
                             recommendedManualPins.includes(p.pin) &&
                             !used.has(p.pin)
                           );
@@ -676,6 +738,11 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
                           };
 
                           const getPinRecommendation = (pin: GpioPinInfo) => {
+                            if (deviceType === 'esp8266') {
+                              if ([13, 1, 3].includes(pin.pin)) return 'Primary (Safe)';
+                              if ([0, 2, 15, 16].includes(pin.pin)) return 'Secondary (Caution)';
+                              return 'Available';
+                            }
                             const primaryManualPins = [23, 25, 26, 27, 32, 33];
                             const secondaryManualPins = [16, 17, 18, 19, 21, 22];
                             if (primaryManualPins.includes(pin.pin)) return 'Primary (Recommended)';
@@ -706,7 +773,7 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
                                       <div className="flex items-center gap-2">
                                         {getPinStatusDot(pin)}
                                         {getPinStatusIcon(pin)}
-                                        <span>GPIO {pin.pin}</span>
+                                        <span>{getPinDisplayName(pin.pin, deviceType)}</span>
                                         {pin.status === 'safe' && (
                                           <Badge variant="outline" className="text-xs bg-success/50 text-white border-success/70">
                                             {getPinRecommendation(pin)}
@@ -731,8 +798,10 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
                                 <Alert className="mt-2 border-warning/70 bg-warning/20">
                                   <AlertTriangle className="h-4 w-4 text-warning" />
                                   <AlertDescription className="text-foreground">
-                                    <strong>Warning:</strong> {gpioInfo.find(p => p.pin === field.value)?.reason}
-                                    {gpioInfo.find(p => p.pin === field.value)?.alternativePins && (
+                                    <strong>Warning:</strong> {deviceType === 'esp8266' && [0, 2, 15, 16].includes(field.value) 
+                                      ? `This pin (${field.value === 16 ? 'has limited functionality' : 'may affect ESP8266 boot/serial communication'}) but can be used for manual switches with proper wiring.` 
+                                      : gpioInfo.find(p => p.pin === field.value)?.reason}
+                                    {deviceType === 'esp32' && gpioInfo.find(p => p.pin === field.value)?.alternativePins && (
                                       <div className="mt-2">
                                         <strong>Recommended manual switch pins:</strong> GPIO {gpioInfo.find(p => p.pin === field.value)?.alternativePins?.join(', ')}
                                       </div>
@@ -759,7 +828,9 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
                                   <AlertDescription className="text-foreground">
                                     <strong>Note:</strong> This pin is safe but not recommended for manual switches.
                                     <div className="mt-2">
-                                      <strong>Recommended manual switch pins:</strong> GPIO 23, 25, 26, 27, 32, 33 (Primary) or 16, 17, 18, 19, 21, 22 (Secondary)
+                                      <strong>Recommended manual switch pins:</strong> {deviceType === 'esp8266' 
+                                        ? 'GPIO 13, 1, 3 (Primary/Safe) or 0, 2, 15, 16 (Secondary/Caution)' 
+                                        : 'GPIO 23, 25, 26, 27, 32, 33 (Primary) or 16, 17, 18, 19, 21, 22 (Secondary)'}
                                     </div>
                                   </AlertDescription>
                                 </Alert>

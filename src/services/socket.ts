@@ -102,10 +102,10 @@ class SocketService {
       console.log('[Socket.IO] Starting connection attempt');
 
       try {
-        // In development, connect to the Vite dev server (which proxies to backend)
-        // In production, connect directly to the backend
+        // In development, connect directly to backend (port 3001)
+        // In production, connect to the backend origin
         const isDevelopment = import.meta.env.DEV;
-        const backendUrl = isDevelopment ? window.location.origin : getBackendOrigin();
+        const backendUrl = isDevelopment ? 'http://localhost:3001' : getBackendOrigin();
         console.log('[Socket.IO] Connecting to:', backendUrl, 'Development mode:', isDevelopment);
 
         this.socket = io(backendUrl, {
