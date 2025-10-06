@@ -24,6 +24,30 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Get single schedule by ID
+router.get('/:id', 
+  [
+    param('id')
+      .isMongoId()
+      .withMessage('Valid schedule ID is required')
+  ],
+  handleValidationErrors,
+  async (req, res) => {
+  try {
+    const schedule = await Schedule.findById(req.params.id)
+      .populate('createdBy', 'name email')
+      .populate('switches.deviceId', 'name location classroom');
+    
+    if (!schedule) {
+      return res.status(404).json({ message: 'Schedule not found' });
+    }
+    
+    res.json({ success: true, data: schedule });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 // Create schedule
 router.post('/', 
   authorize('admin', 'faculty'),

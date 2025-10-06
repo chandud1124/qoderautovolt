@@ -195,8 +195,8 @@ void loadOfflineEventsFromStorage() {
 
 #define MQTT_BROKER MQTT_BROKER_IP // Use IP from config.h
 #define MQTT_PORT MQTT_BROKER_PORT  // Use port from config.h
-#define MQTT_USER "81742e8ed7732de20885894514bbae323078c5cd39af9571"
-#define MQTT_PASSWORD ""
+#define MQTT_USER ""  // Empty for anonymous connection
+#define MQTT_PASSWORD ""  // Empty for anonymous connection
 #define SWITCH_TOPIC "esp32/switches"
 #define STATE_TOPIC "esp32/state"
 #define TELEMETRY_TOPIC "esp32/telemetry"
@@ -645,7 +645,8 @@ void reconnect_mqtt() {
   if (now - lastReconnectAttempt < 5000) return;
   lastReconnectAttempt = now;
   Serial.print("Attempting MQTT connection...");
-  if (mqttClient.connect(mqttClientId, MQTT_USER, MQTT_PASSWORD)) {
+  // Connect anonymously (no username/password required since Mosquitto allows anonymous connections)
+  if (mqttClient.connect(mqttClientId)) {
     Serial.println("connected");
     mqttClient.subscribe(SWITCH_TOPIC);
     mqttClient.subscribe(CONFIG_TOPIC);

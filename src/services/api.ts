@@ -282,6 +282,8 @@ export const authAPI = {
 export const scheduleAPI = {
   getAllSchedules: () => api.get('/schedules'),
 
+  getSchedule: (scheduleId: string) => api.get(`/schedules/${scheduleId}`),
+
   createSchedule: (scheduleData: Partial<Schedule>) => api.post('/schedules', scheduleData),
 
   updateSchedule: (scheduleId: string, updates: Partial<Schedule>) =>

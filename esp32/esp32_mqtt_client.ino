@@ -42,68 +42,10 @@ void blinkStatus() {
   digitalWrite(STATUS_LED_PIN, pattern ? HIGH : LOW);
 }
 
-// --- Offline event buffering and NVS persistence ---
-struct OfflineEvent {
-  int gpio;
-  bool previousState;
-  bool newState;
-  unsigned long timestamp;
-  bool valid;
-};
-
-#define MAX_OFFLINE_EVENTS 50
-std::vector<OfflineEvent> offlineEvents;
-
-void queueOfflineEvent(int gpio, bool previousState, bool newState) {
-  if (offlineEvents.size() >= MAX_OFFLINE_EVENTS) {
-    offlineEvents.erase(offlineEvents.begin());
-  }
-  OfflineEvent event = {gpio, previousState, newState, millis(), true};
-  offlineEvents.push_back(event);
-  saveOfflineEventsToNVS();
-  Serial.printf("[OFFLINE] Queued event: GPIO %d %s -> %s (buffer: %d/%d)\n",
-    gpio, previousState ? "ON" : "OFF", newState ? "ON" : "OFF", (int)offlineEvents.size(), MAX_OFFLINE_EVENTS);
-}
-
-void saveOfflineEventsToNVS() {
-  prefs.begin("offline_events", false);
-  int numEvents = std::min((int)offlineEvents.size(), MAX_OFFLINE_EVENTS);
-  prefs.putInt("count", numEvents);
-  for (int i = 0; i < numEvents; i++) {
-    prefs.putInt(("gpio" + String(i)).c_str(), offlineEvents[i].gpio);
-    prefs.putBool(("prev" + String(i)).c_str(), offlineEvents[i].previousState);
-    prefs.putBool(("new" + String(i)).c_str(), offlineEvents[i].newState);
-    prefs.putULong(("ts" + String(i)).c_str(), offlineEvents[i].timestamp);
-    prefs.putBool(("valid" + String(i)).c_str(), offlineEvents[i].valid);
-  }
-  prefs.end();
-  Serial.printf("[NVS] Saved %d offline events\n", numEvents);
-}
-
-void loadOfflineEventsFromNVS() {
-  prefs.begin("offline_events", true);
-  int numEvents = prefs.getInt("count", 0);
-  if (numEvents <= 0 || numEvents > MAX_OFFLINE_EVENTS) {
-    prefs.end();
-    return;
-  }
-  offlineEvents.clear();
-  for (int i = 0; i < numEvents; i++) {
-    OfflineEvent event;
-    event.gpio = prefs.getInt(("gpio" + String(i)).c_str(), -1);
-    event.previousState = prefs.getBool(("prev" + String(i)).c_str(), false);
-    event.newState = prefs.getBool(("new" + String(i)).c_str(), false);
-    event.timestamp = prefs.getULong(("ts" + String(i)).c_str(), 0);
-    event.valid = prefs.getBool(("valid" + String(i)).c_str(), false);
-    if (event.gpio >= 0 && event.valid) offlineEvents.push_back(event);
-  }
-  prefs.end();
-  Serial.printf("[NVS] Loaded %d offline events\n", (int)offlineEvents.size());
-}
 
 #define MQTT_BROKER "172.16.3.171" // Set to backend IP or broker IP
 #define MQTT_PORT 1883
-#define MQTT_USER ""
+#define MQTT_USER "351e01d4ccc5023263388c643badeb0a9672563d5bed0db7"
 #define MQTT_PASSWORD ""
 #define SWITCH_TOPIC "esp32/switches"
 #define STATE_TOPIC "esp32/state"
@@ -121,17 +63,6 @@ void sendStateUpdate(bool force);
 int relayNameToGpio(const char* relay);
 String normalizeMac(String mac);
 
-void sendQueuedOfflineEvents() {
-  if (offlineEvents.empty() || !mqttClient.connected()) return;
-  Serial.printf("[OFFLINE] Sending %d queued events to backend...\n", (int)offlineEvents.size());
-  for (auto &event : offlineEvents) {
-    publishManualSwitchEvent(event.gpio, event.newState);
-    delay(50); // Small delay to avoid overwhelming broker
-  }
-  offlineEvents.clear();
-  saveOfflineEventsToNVS();
-  Serial.println("[OFFLINE] All queued events sent to backend successfully");
-}
 
 // --- Status LED patterns ---
 #ifndef STATUS_LED_PIN
@@ -303,7 +234,7 @@ void initSwitches() {
 
 
 // Debounce and manual switch handling constants
-#define MANUAL_DEBOUNCE_MS 20  // Reduced from 80ms for faster response
+#define MANUAL_DEBOUNCE_MS 100  // Increased from 20ms for better noise rejection
 #define MANUAL_REPEAT_IGNORE_MS 100  // Reduced from 200ms
 
 void handleManualSwitches() {
@@ -331,6 +262,11 @@ void handleManualSwitches() {
 
     int rawLevel = digitalRead(sw.manualGpio);
     bool active = sw.manualActiveLow ? (rawLevel == LOW) : (rawLevel == HIGH);
+
+    // Special debug logging for GPIO 19
+    if (sw.relayGpio == 19) {
+      Serial.printf("[DEBUG] GPIO 19: raw=%d, active=%d, state=%d, lastActive=%d\n", rawLevel, active, sw.state, sw.lastManualActive);
+    }
 
     // Debug: Log pin readings periodically
     static unsigned long lastDebug[16] = {0};
@@ -374,10 +310,7 @@ void handleManualSwitches() {
             if (mqttClient.connected()) {
               publishManualSwitchEvent(sw.relayGpio, sw.state);
             }
-            // Buffer event if offline
-            if (WiFi.status() != WL_CONNECTED || !mqttClient.connected()) {
-              queueOfflineEvent(sw.relayGpio, prevState, sw.state);
-            }
+            // No offline event buffering: manual switch always controls relay locally
             // Send immediate state update for UI
             sendStateUpdate(true);
           }
@@ -395,10 +328,7 @@ void handleManualSwitches() {
             if (mqttClient.connected()) {
               publishManualSwitchEvent(sw.relayGpio, sw.state);
             }
-            // Buffer event if offline
-            if (WiFi.status() != WL_CONNECTED || !mqttClient.connected()) {
-              queueOfflineEvent(sw.relayGpio, prevState, sw.state);
-            }
+            // No offline event buffering: manual switch always controls relay locally
             // Send immediate state update for UI
             sendStateUpdate(true);
           }
@@ -510,18 +440,12 @@ void updateConnectionStatus() {
     lastConnState = connState;
     lastStatusChange = now;
     sendStateUpdate(true);
-    if (!offlineEvents.empty()) {
-      Serial.printf("[STATUS] %d offline events queued for backend transmission\n", (int)offlineEvents.size());
-    }
+    // No offline event reporting
     if (connState == BACKEND_CONNECTED) {
       offlineLogged = false;  // Reset when connected
     }
   }
-  if (!offlineLogged && connState != BACKEND_CONNECTED && (now - lastStatusChange > 30000)) {
-    Serial.println("[STATUS] Confirmed offline - no backend connection for 30+ seconds");
-    Serial.printf("[STATUS] Manual switches will work independently. %d events queued.\n", (int)offlineEvents.size());
-    offlineLogged = true;
-  }
+  // No offline event logging or queue reporting
 }
 
 void reconnect_mqtt() {
@@ -535,9 +459,8 @@ void reconnect_mqtt() {
     mqttClient.subscribe(SWITCH_TOPIC);
     mqttClient.subscribe(CONFIG_TOPIC);
     sendStateUpdate(true);
-    sendQueuedOfflineEvents();
-    connState = BACKEND_CONNECTED;
-    Serial.println("[MQTT] Successfully reconnected - sent current state and queued events");
+  connState = BACKEND_CONNECTED;
+  Serial.println("[MQTT] Successfully reconnected - sent current state");
   } else {
     Serial.print("failed, rc=");
     Serial.print(mqttClient.state());
@@ -751,7 +674,7 @@ void setup() {
   esp_task_wdt_init(&wdt_config);
   esp_task_wdt_add(NULL);
   initSwitches();
-  loadOfflineEventsFromNVS();
+  // No offline event loading: do not persist manual switch events
   setup_wifi();
   Serial.println("WiFi setup complete, initializing MQTT...");
   mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
@@ -774,16 +697,27 @@ void loop() {
     if (mqttClient.connected()) {
       mqttClient.loop();
       processCommandQueue();
-      static unsigned long lastOfflineSend = 0;
-      if (now - lastOfflineSend > 10000) {
-        sendQueuedOfflineEvents();
-        lastOfflineSend = now;
-      }
     }
     sendHeartbeat();
   }
   blinkStatus();
   if (pendingState) sendStateUpdate(false);
   checkSystemHealth();
+
+  // Re-apply relay states periodically to counteract hardware drift
+  static unsigned long lastRelayCheck = 0;
+  if (now - lastRelayCheck > 5000) { // Every 5 seconds
+    for (int i = 0; i < NUM_SWITCHES; i++) {
+      bool expectedLevel = switchesLocal[i].state ? (RELAY_ACTIVE_HIGH ? HIGH : LOW) : (RELAY_ACTIVE_HIGH ? LOW : HIGH);
+      digitalWrite(switchesLocal[i].relayGpio, expectedLevel);
+      // Special logging for GPIO 19
+      if (switchesLocal[i].relayGpio == 19) {
+        Serial.printf("[RELAY] Re-applied GPIO 19: state=%d, level=%d\n", switchesLocal[i].state, expectedLevel);
+      }
+    }
+    lastRelayCheck = now;
+    Serial.println("[RELAY] Re-applied all relay states");
+  }
+
   delay(10);
 }

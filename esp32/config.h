@@ -4,10 +4,10 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#define WIFI_SSID "AIMS-WIFI"           // Your WiFi SSID
-#define WIFI_PASSWORD "Aimswifi#2025"   // Your WiFi password
+#define WIFI_SSID "AIMS-WIFI"
+#define WIFI_PASSWORD "Aimswifi#2025"
 
-#define DEVICE_SECRET "d6c498bc1c92fde490d198ec65048e20cd3cdb6a5c73e794" // Optional: Device secret/API key for authentication
+#define DEVICE_SECRET "351e01d4ccc5023263388c643badeb0a9672563d5bed0db7" // Optional: Device secret/API key for authentication
 
 // MQTT Broker Configuration - Update this to match your network
 #define MQTT_BROKER "172.16.3.171"      // Backend server IP
