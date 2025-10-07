@@ -2,19 +2,16 @@ import React, { useState, memo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Switch as ToggleSwitch } from '@/components/ui/switch';
-import { 
-  Cpu, 
-  Wifi, 
-  WifiOff, 
-  Settings, 
+import {
+  Cpu,
+  Wifi,
+  WifiOff,
+  Settings,
   Trash2,
   AlertCircle
 } from 'lucide-react';
 import { SwitchControl } from './SwitchControl';
 import { Device } from '@/types';
-
-
 
 interface DeviceCardProps {
   device: Device;
@@ -27,13 +24,6 @@ interface DeviceCardProps {
 }
 
   export default memo(function DeviceCard({ device, onToggleSwitch, onEditDevice, onDeleteDevice, showSwitches = true, showActions = true, compact = false }: DeviceCardProps) {
-    const [aiEnabled, setAiEnabled] = useState(device.aiEnabled ?? false);
-
-    const handleAiToggle = (checked: boolean) => {
-      setAiEnabled(checked);
-      // TODO: Persist to backend if needed
-    };
-
     // In dashboard (showActions === false), highlight card green if online, red if offline
     const isOnline = device.status === 'online';
     const dashboardOnline = !showActions && isOnline;
@@ -62,11 +52,6 @@ interface DeviceCardProps {
         }}
         className={`shadow-md hover:shadow-lg transition-shadow duration-200 sm:max-w-xs sm:p-2 sm:overflow-hidden relative${dashboardOnline ? ' ring-4 ring-green-600' : ''}${(dashboardOffline || deviceOffline) ? ' opacity-70 grayscale' : ''}`}
       >
-        {/* AI/ML Toggle */}
-        <div className="absolute top-2 right-2 z-10 flex items-center gap-1">
-          <ToggleSwitch checked={aiEnabled} onCheckedChange={handleAiToggle} />
-          <span className="text-xs" title="AI/ML Control: ON = AI can control device, OFF = AI only shows insights">AI</span>
-        </div>
         {/* Status Indicator - Top Left */}
         <div className="absolute top-2 left-2 z-10">
           <Badge

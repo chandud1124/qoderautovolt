@@ -5,6 +5,8 @@ const { validationResult } = require('express-validator');
 const path = require('path');
 const fs = require('fs').promises;
 const multer = require('multer');
+const PiSignageService = require('../services/piSignageService');
+const OfflineService = require('../services/offlineService');
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -339,71 +341,7 @@ const reviewNotice = async (req, res) => {
       notice.approvedBy = reviewedBy;
       notice.approvedAt = new Date();
 
-      // Create a ScheduledContent entry from the approved notice
-      const scheduledContent = new ScheduledContent({
-        title: notice.title,
-        content: notice.content,
-        type: notice.priority === 'high' ? 'emergency' : 'user',
-        priority: notice.priority === 'high' ? 8 : notice.priority === 'medium' ? 5 : 3,
-        duration: 60, // Default 60 seconds
-        schedule: {
-          type: 'always', // Default to always available
-          startTime: '00:00',
-          endTime: '23:59',
-          daysOfWeek: [0, 1, 2, 3, 4, 5, 6],
-          frequency: 'daily'
-        },
-        assignedBoards: [], // Will be assigned in Content Scheduler
-        createdBy: notice.submittedBy,
-        isActive: false, // Inactive until boards are assigned
-        attachments: (notice.attachments || []).map(attachment => ({
-          type: attachment.mimetype?.startsWith('image/') ? 'image' :
-                attachment.mimetype?.startsWith('video/') ? 'video' :
-                attachment.mimetype?.startsWith('audio/') ? 'audio' : 'document',
-          filename: attachment.filename,
-          originalName: attachment.originalName,
-          mimeType: attachment.mimetype,
-          size: attachment.size,
-          url: attachment.url
-        })),
-        display: {
-          template: 'default'
-        }
-      });
-
-      try {
-        console.log('[NOTICE-APPROVAL] Attempting to create ScheduledContent for notice:', notice._id);
-        console.log('[NOTICE-APPROVAL] ScheduledContent data:', {
-          title: notice.title,
-          type: notice.priority === 'high' ? 'emergency' : 'user',
-          priority: notice.priority === 'high' ? 8 : notice.priority === 'medium' ? 5 : 3,
-          createdBy: notice.submittedBy,
-          attachmentsCount: (notice.attachments || []).length
-        });
-        
-        await scheduledContent.save();
-        scheduledContentId = scheduledContent._id.toString();
-        console.log(`[NOTICE-APPROVAL] Successfully created ScheduledContent: ${scheduledContentId} from notice: ${notice._id}`);
-      } catch (saveError) {
-        console.error('[NOTICE-APPROVAL] Error creating ScheduledContent:', saveError);
-        console.error('[NOTICE-APPROVAL] Error details:', {
-          message: saveError.message,
-          name: saveError.name,
-          errors: saveError.errors
-        });
-        console.error('[NOTICE-APPROVAL] ScheduledContent data that failed:', JSON.stringify({
-          title: notice.title,
-          content: notice.content.substring(0, 100) + '...',
-          type: notice.priority === 'high' ? 'emergency' : 'user',
-          priority: notice.priority === 'high' ? 8 : notice.priority === 'medium' ? 5 : 3,
-          createdBy: notice.submittedBy,
-          attachments: (notice.attachments || []).map(att => ({
-            filename: att.filename,
-            mimetype: att.mimetype
-          }))
-        }, null, 2));
-        // Continue with notice approval even if ScheduledContent creation fails
-      }
+      // Note: PiSignage integration will happen during publishing
     } else if (action === 'reject') {
       notice.status = 'rejected';
       notice.approvedBy = reviewedBy;
@@ -456,8 +394,7 @@ const reviewNotice = async (req, res) => {
     res.json({
       success: true,
       message: `Notice ${action === 'approve' ? 'approved' : 'rejected'} successfully`,
-      notice,
-      scheduledContentId // Include the ID of created scheduled content
+      notice
     });
 
   } catch (error) {
@@ -582,7 +519,7 @@ const publishNotice = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const notice = await Notice.findById(id);
+    const notice = await Notice.findById(id).populate('targetBoards.boardId');
     if (!notice) {
       return res.status(404).json({
         success: false,
@@ -597,9 +534,89 @@ const publishNotice = async (req, res) => {
       });
     }
 
+    // If notice has attachments, upload them to PiSignage
+    let piSignageAssets = [];
+    if (notice.attachments && notice.attachments.length > 0) {
+      try {
+        for (const attachment of notice.attachments) {
+          const filePath = path.join(__dirname, '../uploads/notices/', attachment.filename);
+          const asset = await PiSignageService.uploadAsset(filePath, attachment.originalName);
+          piSignageAssets.push({
+            _id: asset._id,
+            duration: attachment.mimetype?.startsWith('video/') ? 30 : 10, // Videos 30s, others 10s
+            name: asset.name
+          });
+        }
+      } catch (uploadError) {
+        console.error('Error uploading assets to PiSignage:', uploadError);
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to upload assets to PiSignage',
+          error: uploadError.message
+        });
+      }
+    }
+
+    // Create playlist in PiSignage
+    let playlistId = null;
+    try {
+      const playlist = await PiSignageService.createPlaylist(`${notice.title} - ${notice._id}`, piSignageAssets);
+      playlistId = playlist._id;
+    } catch (playlistError) {
+      console.error('Error creating playlist in PiSignage:', playlistError);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to create playlist in PiSignage',
+        error: playlistError.message
+      });
+    }
+
+    // Schedule playlist on assigned boards
+    if (notice.targetBoards && notice.targetBoards.length > 0) {
+      try {
+        for (const targetBoard of notice.targetBoards) {
+          if (targetBoard.boardId && targetBoard.boardId.piSignageGroupId) {
+            await PiSignageService.schedulePlaylist(
+              playlistId, 
+              targetBoard.boardId.piSignageGroupId, 
+              {
+                startDate: new Date().toISOString().split('T')[0],
+                endDate: notice.expiryDate ? notice.expiryDate.toISOString().split('T')[0] : null,
+                startTime: '00:00',
+                endTime: '23:59',
+                daysOfWeek: [0,1,2,3,4,5,6]
+              }
+            );
+          }
+        }
+      } catch (scheduleError) {
+        console.error('Error scheduling playlist in PiSignage:', scheduleError);
+        // Continue with publishing even if scheduling fails
+      }
+    }
+
     notice.status = 'published';
     notice.publishedAt = new Date();
+    notice.piSignagePlaylistId = playlistId;
     await notice.save();
+
+    // Queue content for offline storage on assigned boards
+    if (notice.targetBoards && notice.targetBoards.length > 0) {
+      try {
+        for (const targetBoard of notice.targetBoards) {
+          if (targetBoard.boardId && targetBoard.boardId.offlineSettings?.enabled) {
+            await OfflineService.queueContentForOffline(
+              targetBoard.boardId._id,
+              notice._id,
+              notice.priority === 'high' ? 2 : notice.priority === 'medium' ? 1 : 0
+            );
+          }
+        }
+      } catch (offlineError) {
+        console.error('Error queuing content for offline storage:', offlineError);
+        // Continue with publishing even if offline queuing fails
+      }
+    }
 
     // Emit real-time notification via MQTT
     if (global.mqttClient && global.mqttClient.connected) {
@@ -622,8 +639,9 @@ const publishNotice = async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Notice published successfully',
-      notice
+      message: 'Notice published successfully to PiSignage',
+      notice,
+      playlistId
     });
 
   } catch (error) {
@@ -636,21 +654,12 @@ const publishNotice = async (req, res) => {
   }
 };
 
-// Schedule and publish notice (admin only)
-const scheduleAndPublishNotice = async (req, res) => {
+// Assign boards and schedule notice
+const assignBoardsAndSchedule = async (req, res) => {
   try {
-    const { id } = req.params;
-    const {
-      duration,
-      scheduleType,
-      selectedDays,
-      startTime,
-      endTime,
-      assignedBoards,
-      skipScheduling
-    } = req.body;
+    const { noticeId, boardIds, schedule } = req.body;
 
-    const notice = await Notice.findById(id);
+    const notice = await Notice.findById(noticeId);
     if (!notice) {
       return res.status(404).json({
         success: false,
@@ -658,74 +667,281 @@ const scheduleAndPublishNotice = async (req, res) => {
       });
     }
 
-    if (notice.status !== 'approved') {
-      return res.status(400).json({
-        success: false,
-        message: 'Only approved notices can be scheduled and published'
-      });
+    // Update notice with board assignments
+    notice.targetBoards = boardIds.map(boardId => ({
+      boardId,
+      assignedAt: new Date(),
+      assignedBy: req.user.id
+    }));
+
+    if (schedule) {
+      notice.schedule = schedule;
     }
 
-    // Find the associated ScheduledContent
-    const scheduledContent = await ScheduledContent.findOne({ title: notice.title, createdBy: notice.submittedBy });
-    if (!scheduledContent) {
-      return res.status(404).json({
-        success: false,
-        message: 'Associated scheduled content not found'
-      });
-    }
-
-    if (!skipScheduling) {
-      // Update the scheduled content with user preferences
-      scheduledContent.duration = duration || 60;
-      scheduledContent.schedule = {
-        type: scheduleType || 'always',
-        startTime: startTime || '00:00',
-        endTime: endTime || '23:59',
-        daysOfWeek: selectedDays || [0, 1, 2, 3, 4, 5, 6],
-        frequency: 'daily'
-      };
-      scheduledContent.assignedBoards = assignedBoards || [];
-      scheduledContent.isActive = true;
-
-      await scheduledContent.save();
-    }
-
-    // Publish the notice
-    notice.status = 'published';
-    notice.publishedAt = new Date();
     await notice.save();
 
-    // Emit real-time notification via MQTT
-    if (global.mqttClient && global.mqttClient.connected) {
-      const publishData = {
-        notice: {
-          _id: notice._id,
-          title: notice.title,
-          content: notice.content,
-          priority: notice.priority,
-          category: notice.category,
-          publishedAt: notice.publishedAt,
-          targetAudience: notice.targetAudience
-        },
-        message: `Notice "${notice.title}" has been published`,
-        timestamp: new Date().toISOString()
-      };
+    res.json({
+      success: true,
+      message: 'Boards assigned and notice scheduled successfully',
+      notice
+    });
 
-      global.mqttClient.publish('notices/published', JSON.stringify(publishData), { qos: 1 });
+  } catch (error) {
+    console.error('Error assigning boards and scheduling:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to assign boards and schedule notice',
+      error: error.message
+    });
+  }
+};
+
+// Create sequenced playlist from multiple notices
+const createSequencedPlaylist = async (req, res) => {
+  try {
+    const { name, sequence, targetBoards, schedule } = req.body;
+
+    if (!sequence || !Array.isArray(sequence) || sequence.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Sequence array is required'
+      });
+    }
+
+    // Build the sequence with assets from notices
+    const sequencedAssets = [];
+    const noticeIds = [];
+
+    for (let i = 0; i < sequence.length; i++) {
+      const item = sequence[i];
+      const notice = await Notice.findById(item.noticeId).populate('targetBoards.boardId');
+
+      if (!notice) {
+        return res.status(404).json({
+          success: false,
+          message: `Notice ${item.noticeId} not found`
+        });
+      }
+
+      noticeIds.push(notice._id);
+
+      // Add notice attachments
+      if (notice.attachments && notice.attachments.length > 0) {
+        for (const attachment of notice.attachments) {
+          const filePath = path.join(__dirname, '../uploads/notices/', attachment.filename);
+          try {
+            const asset = await PiSignageService.uploadAsset(filePath, attachment.originalName);
+            sequencedAssets.push({
+              _id: asset._id,
+              duration: item.duration || attachment.mimetype?.startsWith('video/') ? 30 : 10,
+              order: sequencedAssets.length
+            });
+          } catch (uploadError) {
+            console.error('Error uploading asset for sequence:', uploadError);
+            continue;
+          }
+        }
+      } else {
+        // Add text content as asset
+        sequencedAssets.push({
+          _id: `text_${notice._id}_${i}`,
+          duration: item.duration || 15,
+          order: sequencedAssets.length,
+          content: notice.content,
+          type: 'text'
+        });
+      }
+    }
+
+    // Create sequenced playlist
+    const playlist = await PiSignageService.createSequencedPlaylist(name, sequencedAssets);
+
+    // Schedule on target boards with priority
+    if (targetBoards && targetBoards.length > 0) {
+      for (const boardId of targetBoards) {
+        const board = await require('../models/Board').findById(boardId);
+        if (board && board.piSignageGroupId) {
+          await PiSignageService.schedulePlaylistWithPriority(
+            playlist._id,
+            board.piSignageGroupId,
+            schedule || {
+              startDate: new Date().toISOString().split('T')[0],
+              endDate: null,
+              startTime: '00:00',
+              endTime: '23:59',
+              daysOfWeek: [0,1,2,3,4,5,6]
+            },
+            1 // High priority for sequenced playlists
+          );
+        }
+      }
     }
 
     res.json({
       success: true,
-      message: skipScheduling ? 'Notice published successfully' : 'Notice scheduled and published successfully',
-      notice,
-      scheduledContent: skipScheduling ? null : scheduledContent
+      message: 'Sequenced playlist created and scheduled successfully',
+      playlist,
+      noticeIds
     });
 
   } catch (error) {
-    console.error('Error scheduling and publishing notice:', error);
+    console.error('Error creating sequenced playlist:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to schedule and publish notice',
+      message: 'Failed to create sequenced playlist',
+      error: error.message
+    });
+  }
+};
+
+// Update playlist sequence/order
+const updatePlaylistSequence = async (req, res) => {
+  try {
+    const { playlistId } = req.params;
+    const { assets, settings } = req.body;
+
+    const updates = {};
+    if (assets) {
+      updates.assets = assets.map((asset, index) => ({
+        _id: asset._id,
+        duration: asset.duration,
+        order: index
+      }));
+    }
+
+    if (settings) {
+      updates.settings = settings;
+    }
+
+    const updatedPlaylist = await PiSignageService.updatePlaylist(playlistId, updates);
+
+    res.json({
+      success: true,
+      message: 'Playlist sequence updated successfully',
+      playlist: updatedPlaylist
+    });
+
+  } catch (error) {
+    console.error('Error updating playlist sequence:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update playlist sequence',
+      error: error.message
+    });
+  }
+};
+
+// Advanced scheduling with multiple playlists and priorities
+const createAdvancedSchedule = async (req, res) => {
+  try {
+    const { boardId, schedules } = req.body;
+
+    if (!boardId || !schedules || !Array.isArray(schedules)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Board ID and schedules array are required'
+      });
+    }
+
+    const board = await require('../models/Board').findById(boardId);
+    if (!board || !board.piSignageGroupId) {
+      return res.status(404).json({
+        success: false,
+        message: 'Board not found or not linked to PiSignage group'
+      });
+    }
+
+    // Validate and prepare schedules
+    const validatedSchedules = schedules.map(schedule => ({
+      playlistId: schedule.playlistId,
+      priority: schedule.priority || 1,
+      startTime: schedule.startTime || '00:00',
+      endTime: schedule.endTime || '23:59',
+      daysOfWeek: schedule.daysOfWeek || [0,1,2,3,4,5,6],
+      startDate: schedule.startDate,
+      endDate: schedule.endDate
+    }));
+
+    const result = await PiSignageService.createAdvancedSchedule(board.piSignageGroupId, validatedSchedules);
+
+    res.json({
+      success: true,
+      message: 'Advanced schedule created successfully',
+      schedule: result
+    });
+
+  } catch (error) {
+    console.error('Error creating advanced schedule:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create advanced schedule',
+      error: error.message
+    });
+  }
+};
+
+// Get current schedules for a board
+const getBoardSchedules = async (req, res) => {
+  try {
+    const { boardId } = req.params;
+
+    const board = await require('../models/Board').findById(boardId);
+    if (!board || !board.piSignageGroupId) {
+      return res.status(404).json({
+        success: false,
+        message: 'Board not found or not linked to PiSignage group'
+      });
+    }
+
+    const schedules = await PiSignageService.getGroupSchedules(board.piSignageGroupId);
+
+    res.json({
+      success: true,
+      schedules
+    });
+
+  } catch (error) {
+    console.error('Error getting board schedules:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get board schedules',
+      error: error.message
+    });
+  }
+};
+
+// Update board playback settings
+const updateBoardSettings = async (req, res) => {
+  try {
+    const { boardId } = req.params;
+    const { playbackMode, defaultDuration, enableTransitions, settings } = req.body;
+
+    const board = await require('../models/Board').findById(boardId);
+    if (!board || !board.piSignageGroupId) {
+      return res.status(404).json({
+        success: false,
+        message: 'Board not found or not linked to PiSignage group'
+      });
+    }
+
+    const updatedSettings = await PiSignageService.updateGroupSettings(board.piSignageGroupId, {
+      playbackMode: playbackMode || 'sequential',
+      defaultDuration: defaultDuration || 10,
+      enableTransitions: enableTransitions !== false,
+      ...settings
+    });
+
+    res.json({
+      success: true,
+      message: 'Board settings updated successfully',
+      settings: updatedSettings
+    });
+
+  } catch (error) {
+    console.error('Error updating board settings:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update board settings',
       error: error.message
     });
   }
@@ -975,213 +1191,178 @@ const searchNotices = async (req, res) => {
   }
 };
 
-// Bulk approve notices
-const bulkApprove = async (req, res) => {
+// Get offline status for a board
+const getOfflineStatus = async (req, res) => {
   try {
-    const { noticeIds } = req.body;
+    const { boardId } = req.params;
 
-    if (!noticeIds || !Array.isArray(noticeIds) || noticeIds.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Notice IDs are required'
-      });
-    }
-
-    const results = await Promise.allSettled(
-      noticeIds.map(async (noticeId) => {
-        const notice = await Notice.findById(noticeId);
-        if (!notice) throw new Error(`Notice ${noticeId} not found`);
-        
-        notice.status = 'approved';
-        notice.approvedBy = req.user.id;
-        notice.approvedAt = new Date();
-        await notice.save();
-
-        // Create scheduled content
-        const ScheduledContent = require('../models/ScheduledContent');
-        await ScheduledContent.create({
-          title: notice.title,
-          content: notice.content,
-          type: notice.priority === 'urgent' || notice.priority === 'high' ? 'emergency' : 'user',
-          priority: notice.priority === 'urgent' ? 10 : notice.priority === 'high' ? 7 : notice.priority === 'medium' ? 5 : 3,
-          duration: 60,
-          schedule: {
-            type: 'recurring',
-            startTime: '09:00',
-            endTime: '17:00',
-            daysOfWeek: [1, 2, 3, 4, 5],
-            frequency: 'daily'
-          },
-          isActive: false,
-          assignedBoards: []
-        });
-
-        return noticeId;
-      })
-    );
-
-    const successful = results.filter(r => r.status === 'fulfilled').length;
-    const failed = results.filter(r => r.status === 'rejected').length;
+    const status = await OfflineService.getOfflineStatus(boardId);
 
     res.json({
       success: true,
-      message: `Approved ${successful} notice(s)${failed > 0 ? `, ${failed} failed` : ''}`,
-      successful,
-      failed
+      status
     });
+
   } catch (error) {
-    console.error('Error bulk approving notices:', error);
+    console.error('Error getting offline status:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to bulk approve notices',
+      message: 'Failed to get offline status',
       error: error.message
     });
   }
 };
 
-// Bulk reject notices
-const bulkReject = async (req, res) => {
+// Trigger manual sync for a board
+const triggerBoardSync = async (req, res) => {
   try {
-    const { noticeIds, rejectionReason } = req.body;
+    const { boardId } = req.params;
 
-    if (!noticeIds || !Array.isArray(noticeIds) || noticeIds.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Notice IDs are required'
-      });
-    }
-
-    if (!rejectionReason || !rejectionReason.trim()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Rejection reason is required'
-      });
-    }
-
-    const results = await Promise.allSettled(
-      noticeIds.map(async (noticeId) => {
-        const notice = await Notice.findById(noticeId);
-        if (!notice) throw new Error(`Notice ${noticeId} not found`);
-        
-        notice.status = 'rejected';
-        notice.rejectionReason = rejectionReason;
-        notice.approvedBy = req.user.id;
-        notice.approvedAt = new Date();
-        await notice.save();
-
-        return noticeId;
-      })
-    );
-
-    const successful = results.filter(r => r.status === 'fulfilled').length;
-    const failed = results.filter(r => r.status === 'rejected').length;
+    const result = await OfflineService.syncWithBoard(boardId);
 
     res.json({
       success: true,
-      message: `Rejected ${successful} notice(s)${failed > 0 ? `, ${failed} failed` : ''}`,
-      successful,
-      failed
+      result
     });
+
   } catch (error) {
-    console.error('Error bulk rejecting notices:', error);
+    console.error('Error triggering board sync:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to bulk reject notices',
+      message: 'Failed to trigger board sync',
       error: error.message
     });
   }
 };
 
-// Bulk archive notices
-const bulkArchive = async (req, res) => {
+// Handle board going offline
+const handleBoardOffline = async (req, res) => {
   try {
-    const { noticeIds } = req.body;
+    const { boardId } = req.params;
 
-    if (!noticeIds || !Array.isArray(noticeIds) || noticeIds.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Notice IDs are required'
-      });
-    }
-
-    const result = await Notice.updateMany(
-      { _id: { $in: noticeIds } },
-      { $set: { status: 'archived', isActive: false } }
-    );
+    const result = await OfflineService.handleBoardOffline(boardId);
 
     res.json({
       success: true,
-      message: `Archived ${result.modifiedCount} notice(s)`,
-      modifiedCount: result.modifiedCount
+      result
     });
+
   } catch (error) {
-    console.error('Error bulk archiving notices:', error);
+    console.error('Error handling board offline:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to bulk archive notices',
+      message: 'Failed to handle board offline',
       error: error.message
     });
   }
 };
 
-// Bulk delete notices
-const bulkDelete = async (req, res) => {
+// Handle board coming back online
+const handleBoardOnline = async (req, res) => {
   try {
-    const { noticeIds } = req.body;
+    const { boardId } = req.params;
 
-    if (!noticeIds || !Array.isArray(noticeIds) || noticeIds.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Notice IDs are required'
-      });
-    }
-
-    // Delete associated files
-    const notices = await Notice.find({ _id: { $in: noticeIds } });
-    for (const notice of notices) {
-      if (notice.attachments && notice.attachments.length > 0) {
-        for (const attachment of notice.attachments) {
-          try {
-            const filePath = path.join(__dirname, '../', attachment.url);
-            await fs.unlink(filePath);
-          } catch (err) {
-            console.error('Error deleting file:', err);
-          }
-        }
-      }
-    }
-
-    const result = await Notice.deleteMany({ _id: { $in: noticeIds } });
+    const result = await OfflineService.handleBoardOnline(boardId);
 
     res.json({
       success: true,
-      message: `Deleted ${result.deletedCount} notice(s)`,
-      deletedCount: result.deletedCount
+      result
     });
+
   } catch (error) {
-    console.error('Error bulk deleting notices:', error);
+    console.error('Error handling board online:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to bulk delete notices',
+      message: 'Failed to handle board online',
       error: error.message
     });
   }
 };
 
-// Get user's drafts
+// Initialize offline content for a board
+const initializeBoardOffline = async (req, res) => {
+  try {
+    const { boardId } = req.params;
+
+    const result = await OfflineService.initializeBoardOffline(boardId);
+
+    res.json({
+      success: true,
+      result
+    });
+
+  } catch (error) {
+    console.error('Error initializing board offline:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to initialize board offline',
+      error: error.message
+    });
+  }
+};
+
+// Queue specific content for offline storage
+const queueContentForOffline = async (req, res) => {
+  try {
+    const { boardId, contentId } = req.params;
+    const { priority } = req.body;
+
+    const result = await OfflineService.queueContentForOffline(boardId, contentId, priority);
+
+    res.json({
+      success: true,
+      result
+    });
+
+  } catch (error) {
+    console.error('Error queuing content for offline:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to queue content for offline',
+      error: error.message
+    });
+  }
+};
+
+// Download specific content
+const downloadContent = async (req, res) => {
+  try {
+    const { boardId, contentId } = req.params;
+
+    const result = await OfflineService.downloadContent(boardId, contentId);
+
+    res.json({
+      success: true,
+      result
+    });
+
+  } catch (error) {
+    console.error('Error downloading content:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to download content',
+      error: error.message
+    });
+  }
+};
+
+// Get drafts for current user
 const getDrafts = async (req, res) => {
   try {
+    const userId = req.user.id;
+
     const drafts = await Notice.find({
-      submittedBy: req.user.id,
+      submittedBy: userId,
       isDraft: true
     })
-      .sort({ updatedAt: -1 })
-      .populate('submittedBy', 'name email role');
+    .populate('submittedBy', 'name email')
+    .sort({ updatedAt: -1 });
 
     res.json({
       success: true,
       drafts
     });
+
   } catch (error) {
     console.error('Error fetching drafts:', error);
     res.status(500).json({
@@ -1192,98 +1373,22 @@ const getDrafts = async (req, res) => {
   }
 };
 
-// Save draft
-const saveDraft = async (req, res) => {
-  try {
-    const {
-      title,
-      content,
-      contentType,
-      tags,
-      priority,
-      category
-    } = req.body;
-
-    const draft = new Notice({
-      title,
-      content,
-      contentType: contentType || 'text',
-      tags: tags || [],
-      priority: priority || 'medium',
-      category: category || 'general',
-      submittedBy: req.user.id,
-      isDraft: true,
-      status: 'pending'
-    });
-
-    await draft.save();
-    await draft.populate('submittedBy', 'name email role');
-
-    res.status(201).json({
-      success: true,
-      message: 'Draft saved successfully',
-      draft
-    });
-  } catch (error) {
-    console.error('Error saving draft:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to save draft',
-      error: error.message
-    });
-  }
-};
-
-// Update draft
-const updateDraft = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const draft = await Notice.findOne({
-      _id: id,
-      submittedBy: req.user.id,
-      isDraft: true
-    });
-
-    if (!draft) {
-      return res.status(404).json({
-        success: false,
-        message: 'Draft not found'
-      });
-    }
-
-    Object.assign(draft, req.body);
-    await draft.save();
-    await draft.populate('submittedBy', 'name email role');
-
-    res.json({
-      success: true,
-      message: 'Draft updated successfully',
-      draft
-    });
-  } catch (error) {
-    console.error('Error updating draft:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to update draft',
-      error: error.message
-    });
-  }
-};
-
-// Delete draft
+// Delete a draft
 const deleteDraft = async (req, res) => {
   try {
     const { id } = req.params;
+    const userId = req.user.id;
+
     const draft = await Notice.findOneAndDelete({
       _id: id,
-      submittedBy: req.user.id,
+      submittedBy: userId,
       isDraft: true
     });
 
     if (!draft) {
       return res.status(404).json({
         success: false,
-        message: 'Draft not found'
+        message: 'Draft not found or access denied'
       });
     }
 
@@ -1291,6 +1396,7 @@ const deleteDraft = async (req, res) => {
       success: true,
       message: 'Draft deleted successfully'
     });
+
   } catch (error) {
     console.error('Error deleting draft:', error);
     res.status(500).json({
@@ -1309,18 +1415,24 @@ module.exports = {
   reviewNotice,
   editNotice,
   publishNotice,
-  scheduleAndPublishNotice,
+  assignBoardsAndSchedule,
+  createSequencedPlaylist,
+  updatePlaylistSequence,
+  createAdvancedSchedule,
+  getBoardSchedules,
+  updateBoardSettings,
   updateNotice,
   deleteNotice,
   getNoticeStats,
   searchNotices,
-  bulkApprove,
-  bulkReject,
-  bulkArchive,
-  bulkDelete,
+  upload,
+  getOfflineStatus,
+  triggerBoardSync,
+  handleBoardOffline,
+  handleBoardOnline,
+  initializeBoardOffline,
+  queueContentForOffline,
+  downloadContent,
   getDrafts,
-  saveDraft,
-  updateDraft,
-  deleteDraft,
-  upload
+  deleteDraft
 };

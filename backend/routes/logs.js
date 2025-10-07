@@ -118,25 +118,37 @@ router.get('/manual-switches', async (req, res) => {
     }
 
     const logs = await ActivityLog.find(query)
-      .populate('deviceId', 'name location')
+      .populate('deviceId', 'name location switches')
       .sort({ timestamp: -1 })
       .skip(skip)
       .limit(parseInt(limit));
 
     const total = await ActivityLog.countDocuments(query);
 
-    const formattedLogs = logs.map(log => ({
-      id: log._id,
-      timestamp: log.timestamp,
-      deviceId: log.deviceId?._id,
-      deviceName: log.deviceName || log.deviceId?.name,
-      switchId: log.switchId,
-      switchName: log.switchName,
-      action: log.action,
-      triggeredBy: log.triggeredBy,
-      location: log.location || log.deviceId?.location,
-      details: log.context || log.details
-    }));
+    const formattedLogs = logs.map(log => {
+      // Find the switch GPIO information
+      let gpioPin = null;
+      if (log.deviceId && log.deviceId.switches) {
+        const switchInfo = log.deviceId.switches.find(sw => sw.name === log.switchName);
+        if (switchInfo) {
+          gpioPin = switchInfo.manualSwitchEnabled ? switchInfo.manualSwitchGpio : switchInfo.gpio;
+        }
+      }
+
+      return {
+        id: log._id,
+        timestamp: log.timestamp,
+        deviceId: log.deviceId?._id,
+        deviceName: log.deviceName || log.deviceId?.name,
+        switchId: log.switchId,
+        switchName: log.switchName,
+        gpioPin: gpioPin,
+        action: log.action,
+        triggeredBy: log.triggeredBy,
+        location: log.location || log.deviceId?.location,
+        details: log.context || log.details
+      };
+    });
 
     res.json({
       logs: formattedLogs,
@@ -216,6 +228,147 @@ router.get('/device-status', async (req, res) => {
   }
 });
 
+// GET /api/logs/web-switches
+router.get('/web-switches', async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 50,
+      search,
+      deviceId,
+      startDate,
+      endDate
+    } = req.query;
+
+    const query = {};
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    // Only show web switch activities (triggered by user from web interface)
+    query.triggeredBy = 'user';
+
+    if (deviceId && deviceId !== 'all') {
+      query.deviceId = deviceId;
+    }
+    if (startDate || endDate) {
+      query.timestamp = {};
+      if (startDate) query.timestamp.$gte = new Date(startDate);
+      if (endDate) query.timestamp.$lte = new Date(endDate);
+    }
+    if (search) {
+      query.$or = [
+        { deviceName: { $regex: search, $options: 'i' } },
+        { switchName: { $regex: search, $options: 'i' } },
+        { userName: { $regex: search, $options: 'i' } },
+        { action: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    const logs = await ActivityLog.find(query)
+      .populate('deviceId', 'name location')
+      .populate('userId', 'name')
+      .sort({ timestamp: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    const total = await ActivityLog.countDocuments(query);
+
+    const formattedLogs = logs.map(log => ({
+      id: log._id,
+      timestamp: log.timestamp,
+      deviceId: log.deviceId?._id,
+      deviceName: log.deviceName || log.deviceId?.name,
+      switchId: log.switchId,
+      switchName: log.switchName,
+      userId: log.userId?._id,
+      userName: log.userName || log.userId?.name,
+      ipAddress: log.ip,
+      newState: log.action,
+      location: log.location || log.deviceId?.location,
+      details: log.context || log.details
+    }));
+
+    res.json({
+      logs: formattedLogs,
+      total,
+      page: parseInt(page),
+      limit: parseInt(limit),
+      totalPages: Math.ceil(total / parseInt(limit))
+    });
+  } catch (error) {
+    console.error('Error fetching web switch logs:', error);
+    res.status(500).json({ error: 'Failed to fetch web switch logs' });
+  }
+});
+
+// GET /api/logs/schedule-switches
+router.get('/schedule-switches', async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 50,
+      search,
+      deviceId,
+      startDate,
+      endDate
+    } = req.query;
+
+    const query = {};
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    // Only show scheduled switch activities
+    query.triggeredBy = 'schedule';
+
+    if (deviceId && deviceId !== 'all') {
+      query.deviceId = deviceId;
+    }
+    if (startDate || endDate) {
+      query.timestamp = {};
+      if (startDate) query.timestamp.$gte = new Date(startDate);
+      if (endDate) query.timestamp.$lte = new Date(endDate);
+    }
+    if (search) {
+      query.$or = [
+        { deviceName: { $regex: search, $options: 'i' } },
+        { switchName: { $regex: search, $options: 'i' } },
+        { action: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    const logs = await ActivityLog.find(query)
+      .populate('deviceId', 'name location')
+      .sort({ timestamp: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    const total = await ActivityLog.countDocuments(query);
+
+    const formattedLogs = logs.map(log => ({
+      id: log._id,
+      timestamp: log.timestamp,
+      deviceId: log.deviceId?._id,
+      deviceName: log.deviceName || log.deviceId?.name,
+      switchId: log.switchId,
+      switchName: log.switchName,
+      scheduleName: log.context?.scheduleName || 'Unknown Schedule',
+      triggerTime: log.context?.scheduledTime || log.timestamp,
+      newState: log.action,
+      location: log.location || log.deviceId?.location,
+      details: log.context || log.details
+    }));
+
+    res.json({
+      logs: formattedLogs,
+      total,
+      page: parseInt(page),
+      limit: parseInt(limit),
+      totalPages: Math.ceil(total / parseInt(limit))
+    });
+  } catch (error) {
+    console.error('Error fetching schedule switch logs:', error);
+    res.status(500).json({ error: 'Failed to fetch schedule switch logs' });
+  }
+});
+
 // GET /api/logs/stats
 router.get('/stats', async (req, res) => {
   try {
@@ -231,12 +384,28 @@ router.get('/stats', async (req, res) => {
     });
 
     // Manual switch logs stats
-    const manualTotal = await ManualSwitchLog.countDocuments();
-    const manualToday = await ManualSwitchLog.countDocuments({
+    const manualTotal = await ActivityLog.countDocuments({ triggeredBy: 'manual_switch' });
+    const manualToday = await ActivityLog.countDocuments({
+      triggeredBy: 'manual_switch',
       timestamp: { $gte: today, $lt: tomorrow }
     });
-    const manualConflicts = await ManualSwitchLog.countDocuments({
-      'conflictWith.webCommand': true
+    const manualConflicts = await ActivityLog.countDocuments({
+      triggeredBy: 'manual_switch',
+      'conflictResolution.hasConflict': true
+    });
+
+    // Web switch logs stats
+    const webTotal = await ActivityLog.countDocuments({ triggeredBy: 'user' });
+    const webToday = await ActivityLog.countDocuments({
+      triggeredBy: 'user',
+      timestamp: { $gte: today, $lt: tomorrow }
+    });
+
+    // Schedule switch logs stats
+    const scheduleTotal = await ActivityLog.countDocuments({ triggeredBy: 'schedule' });
+    const scheduleToday = await ActivityLog.countDocuments({
+      triggeredBy: 'schedule',
+      timestamp: { $gte: today, $lt: tomorrow }
     });
 
     // Device status logs stats
@@ -254,6 +423,14 @@ router.get('/stats', async (req, res) => {
         total: manualTotal,
         today: manualToday,
         conflicts: manualConflicts
+      },
+      webSwitches: {
+        total: webTotal,
+        today: webToday
+      },
+      scheduleSwitches: {
+        total: scheduleTotal,
+        today: scheduleToday
       },
       deviceStatus: {
         total: deviceTotal,

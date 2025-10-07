@@ -483,17 +483,130 @@ export const esp32API = {
     api.post(`/esp32/command/${macAddress}`, { command }),
 };
 
-export const activityLogsAPI = {
-  // Get activity logs with filtering
-  getLogs: (params?: {
-    deviceId?: string;
-    userId?: string;
-    classroom?: string;
-    limit?: number;
-  }) => api.get('/activity-logs', { params }),
-};
+export const integrationsAPI = {
+  // RSS Feed Management
+  rss: {
+    getAll: () => api.get('/integrations/rss'),
+    create: (data: {
+      name: string;
+      url: string;
+      updateInterval?: number;
+      maxItems?: number;
+      autoPublish?: boolean;
+      filters?: Record<string, unknown>;
+    }) => api.post('/integrations/rss', data),
+    update: (feedId: string, data: Partial<{
+      name: string;
+      url: string;
+      updateInterval: number;
+      maxItems: number;
+      autoPublish: boolean;
+      filters: Record<string, unknown>;
+    }>) => api.patch(`/integrations/rss/${feedId}`, data),
+    delete: (feedId: string) => api.delete(`/integrations/rss/${feedId}`),
+    fetch: (feedId: string) => api.post(`/integrations/rss/${feedId}/fetch`),
+  },
 
-export default api;
+  // Social Media Management
+  socialMedia: {
+    getAll: () => api.get('/integrations/social-media'),
+    create: (data: {
+      name: string;
+      platform: 'instagram' | 'twitter' | 'facebook';
+      accessToken: string;
+      accounts?: string[];
+      hashtags?: string[];
+      updateInterval?: number;
+      autoPublish?: boolean;
+    }) => api.post('/integrations/social-media', data),
+    update: (feedId: string, data: Partial<{
+      name: string;
+      platform: string;
+      accessToken: string;
+      accounts: string[];
+      hashtags: string[];
+      updateInterval: number;
+      autoPublish: boolean;
+    }>) => api.patch(`/integrations/social-media/${feedId}`, data),
+    delete: (feedId: string) => api.delete(`/integrations/social-media/${feedId}`),
+    fetch: (feedId: string) => api.post(`/integrations/social-media/${feedId}/fetch`),
+  },
+
+  // Weather Management
+  weather: {
+    getAll: () => api.get('/integrations/weather'),
+    create: (data: {
+      name: string;
+      apiKey: string;
+      location: string;
+      units?: 'metric' | 'imperial';
+      updateInterval?: number;
+      autoPublish?: boolean;
+    }) => api.post('/integrations/weather', data),
+    update: (feedId: string, data: Partial<{
+      name: string;
+      apiKey: string;
+      location: string;
+      units: string;
+      updateInterval: number;
+      autoPublish: boolean;
+    }>) => api.patch(`/integrations/weather/${feedId}`, data),
+    delete: (feedId: string) => api.delete(`/integrations/weather/${feedId}`),
+    fetch: (feedId: string) => api.post(`/integrations/weather/${feedId}/fetch`),
+  },
+
+  // Webhook Management
+  webhooks: {
+    getAll: () => api.get('/integrations/webhooks'),
+    getDetails: (feedId: string) => api.get(`/integrations/webhooks/${feedId}`),
+    create: (data: {
+      name: string;
+      autoPublish?: boolean;
+    }) => api.post('/integrations/webhooks', data),
+    update: (feedId: string, data: Partial<{
+      name: string;
+      autoPublish: boolean;
+    }>) => api.patch(`/integrations/webhooks/${feedId}`, data),
+    delete: (feedId: string) => api.delete(`/integrations/webhooks/${feedId}`),
+    test: (feedId: string) => api.post(`/integrations/webhooks/${feedId}/test`),
+    getStats: (feedId: string) => api.get(`/integrations/webhooks/${feedId}/stats`),
+  },
+
+  // Database Management
+  database: {
+    getAll: () => api.get('/integrations/database'),
+    create: (data: {
+      name: string;
+      dbType: 'mysql' | 'postgres' | 'mssql';
+      connectionString: string;
+      query: string;
+      updateInterval?: number;
+      autoPublish?: boolean;
+    }) => api.post('/integrations/database', data),
+    update: (feedId: string, data: Partial<{
+      name: string;
+      dbType: string;
+      connectionString: string;
+      query: string;
+      updateInterval: number;
+      autoPublish: boolean;
+    }>) => api.patch(`/integrations/database/${feedId}`, data),
+    delete: (feedId: string) => api.delete(`/integrations/database/${feedId}`),
+    fetch: (feedId: string) => api.post(`/integrations/database/${feedId}/fetch`),
+    test: (data: {
+      dbType: string;
+      connectionString: string;
+      query: string;
+    }) => api.post('/integrations/database/test', data),
+  },
+
+  // General Integration Management
+  getAll: () => api.get('/integrations'),
+  getById: (id: string) => api.get(`/integrations/${id}`),
+  delete: (id: string) => api.delete(`/integrations/${id}`),
+};
 
 // Export the main axios instance as apiService for backward compatibility
 export const apiService = api;
+
+export default api;

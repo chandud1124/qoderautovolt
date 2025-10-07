@@ -52,6 +52,9 @@ const boardSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'BoardGroup'
   },
+  piSignageGroupId: {
+    type: String
+  },
   assignedUsers: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
@@ -96,6 +99,42 @@ const boardSchema = new mongoose.Schema({
     noticesDisplayed: { type: Number, default: 0 },
     lastMaintenance: Date,
     uptime: { type: Number, default: 0 } // percentage
+  },
+  offlineSettings: {
+    enabled: { type: Boolean, default: true },
+    maxStorageSize: { type: Number, default: 2 * 1024 * 1024 * 1024 }, // 2GB default
+    contentRetentionDays: { type: Number, default: 30 }, // Keep content for 30 days offline
+    autoSync: { type: Boolean, default: true },
+    syncInterval: { type: Number, default: 300 }, // 5 minutes
+    emergencyContent: {
+      enabled: { type: Boolean, default: true },
+      message: { type: String, default: 'System Offline - Content Unavailable' },
+      displayDuration: { type: Number, default: 60 } // seconds
+    }
+  },
+  syncStatus: {
+    lastSync: Date,
+    nextSync: Date,
+    syncInProgress: { type: Boolean, default: false },
+    localContentCount: { type: Number, default: 0 },
+    localStorageUsed: { type: Number, default: 0 }, // bytes
+    pendingUploads: [{ type: String }], // Content IDs pending upload
+    failedSyncs: { type: Number, default: 0 }
+  },
+  hardwareControl: {
+    tvControlEnabled: { type: Boolean, default: false },
+    cecCommands: {
+      powerOn: { type: String, default: 'cec-client -s -d 1 "standby 0"' },
+      powerOff: { type: String, default: 'cec-client -s -d 1 "standby 1"' }
+    },
+    gpioPins: [{
+      pin: Number,
+      mode: { type: String, enum: ['input', 'output'] },
+      purpose: { type: String, enum: ['power', 'reset', 'status', 'control'] },
+      activeState: { type: String, enum: ['high', 'low'], default: 'high' }
+    }],
+    screenshotEnabled: { type: Boolean, default: false },
+    screenshotInterval: { type: Number, default: 300 } // 5 minutes
   }
 }, {
   timestamps: true

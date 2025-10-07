@@ -74,7 +74,6 @@ const navigationSections = [
     title: 'Operations & Maintenance',
     items: [
       { name: 'Notice Board', icon: FileText, href: '/dashboard/notices', current: false },
-      { name: 'System Health', icon: Server, href: '/dashboard/system-health', current: false, adminOnly: true },
     ]
   },
   {
@@ -182,15 +181,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ className, onNavigateClose }) 
 
             return (
               <div key={section.title} className="space-y-1">
-                {/* Section Header */}
-                {!collapsed && (
-                  <div className="px-2 py-1 min-h-6">
-                    <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider truncate">
-                      {section.title}
-                    </h3>
-                  </div>
-                )}
-
                 {/* Section Items */}
                 <div className="space-y-0.5">
                   {visibleItems.map((item) => {

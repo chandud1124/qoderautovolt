@@ -518,6 +518,13 @@ const contentSchedulerService = require('./services/contentSchedulerService');
 const deviceMonitoringService = require('./services/deviceMonitoringService');
 const EnhancedLoggingService = require('./services/enhancedLoggingService');
 const ESP32CrashMonitor = require('./services/esp32CrashMonitor'); // Import ESP32 crash monitor service
+const offlineCleanupService = require('./services/offlineCleanupService');
+// Import integration services
+const rssService = require('./services/rssService');
+const socialMediaService = require('./services/socialMediaService');
+const weatherService = require('./services/weatherService');
+const webhookService = require('./services/webhookService');
+const databaseService = require('./services/databaseService');
 // Removed legacy DeviceSocketService/TestSocketService/ESP32SocketService for cleanup
 
 // Initialize ESP32 crash monitoring
@@ -900,6 +907,7 @@ apiRouter.use('/role-permissions', apiLimiter, require('./routes/rolePermissions
 apiRouter.use('/notices', apiLimiter, require('./routes/notices'));
 apiRouter.use('/boards', apiLimiter, require('./routes/boards'));
 apiRouter.use('/content', apiLimiter, require('./routes/contentScheduler'));
+apiRouter.use('/integrations', apiLimiter, require('./routes/integrations'));
 
 // Mount all routes under /api
 // Health check endpoint
@@ -914,6 +922,9 @@ app.get('/health', (req, res) => {
 });
 
 app.use('/api', apiRouter);
+
+// Public webhook routes (no authentication required)
+app.use('/webhooks', require('./routes/publicWebhooks'));
 
 // Optional same-origin static serving (set SERVE_FRONTEND=1 after building frontend into ../dist)
 try {
@@ -1235,10 +1246,10 @@ if (io && io.opts) {
     methods: ['GET', 'POST']
   };
 }
-server.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, '127.0.0.1', () => {
   console.log(`[SERVER] Listen callback executed`);
-  console.log(`[DEBUG] Server listening on 0.0.0.0:${PORT}`);
-  const host = '0.0.0.0';
+  console.log(`[DEBUG] Server listening on 127.0.0.1:${PORT}`);
+  const host = '127.0.0.1';
   console.log(`Server running on ${host}:${PORT}`);
   console.log(`Server accessible on localhost:${PORT} and network IPs`);
   console.log(`Environment: ${process.env.NODE_ENV}`);
@@ -1251,7 +1262,7 @@ server.listen(PORT, '0.0.0.0', () => {
   connectDB().catch(() => { });
 
   // Start enhanced services after successful startup
-  setTimeout(() => {
+  setTimeout(async () => {
     // Only initialize metrics if not running tests
     if (process.env.NODE_ENV !== 'test') {
       try {
@@ -1279,6 +1290,50 @@ server.listen(PORT, '0.0.0.0', () => {
       console.log('Content scheduler service disabled for debugging');
     } catch (error) {
       console.error('Error initializing content scheduler service:', error);
+    }
+
+    // Start offline cleanup service
+    try {
+      offlineCleanupService.startCleanupSchedule();
+      console.log('[SERVICES] Offline cleanup service started');
+    } catch (error) {
+      console.error('Error starting offline cleanup service:', error);
+    }
+
+    // Initialize integration services
+    try {
+      await rssService.initialize();
+      console.log('[SERVICES] RSS integration service initialized');
+    } catch (error) {
+      console.error('Error initializing RSS service:', error);
+    }
+
+    try {
+      await socialMediaService.initialize();
+      console.log('[SERVICES] Social media integration service initialized');
+    } catch (error) {
+      console.error('Error initializing social media service:', error);
+    }
+
+    try {
+      await weatherService.initialize();
+      console.log('[SERVICES] Weather integration service initialized');
+    } catch (error) {
+      console.error('Error initializing weather service:', error);
+    }
+
+    try {
+      await webhookService.initialize();
+      console.log('[SERVICES] Webhook integration service initialized');
+    } catch (error) {
+      console.error('Error initializing webhook service:', error);
+    }
+
+    try {
+      await databaseService.initialize();
+      console.log('[SERVICES] Database integration service initialized');
+    } catch (error) {
+      console.error('Error initializing database service:', error);
     }
 
     // console.log('[SERVICES] Enhanced logging and monitoring services started');

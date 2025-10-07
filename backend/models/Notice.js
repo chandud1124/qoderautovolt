@@ -53,6 +53,9 @@ const noticeSchema = new mongoose.Schema({
   publishedAt: {
     type: Date
   },
+  piSignagePlaylistId: {
+    type: String
+  },
   expiryDate: {
     type: Date
   },
