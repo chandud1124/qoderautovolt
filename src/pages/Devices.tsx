@@ -15,7 +15,8 @@ import {
   WifiOff,
   AlertTriangle,
   RefreshCw,
-  Settings
+  Settings,
+  Power
 } from 'lucide-react';
 import { useDevices } from '@/hooks/useDevices';
 import { useToast } from '@/hooks/use-toast';
@@ -28,6 +29,8 @@ import { useSocketConnection, useDeviceNotifications } from '@/hooks/useSocket';
 type ViewMode = 'grid' | 'list';
 type FilterStatus = 'all' | 'online' | 'offline' | 'warning';
 type GroupBy = 'none' | 'classroom' | 'location' | 'status';
+type SortBy = 'name' | 'status' | 'lastSeen' | 'classroom' | 'location';
+type SortOrder = 'asc' | 'desc';
 
 const Devices = () => {
   // Existing state
@@ -40,11 +43,13 @@ const Devices = () => {
   const [showConfigDialog, setShowConfigDialog] = useState(false);
   const [selectedDevice, setSelectedDevice] = useState<Device | undefined>(undefined);
 
-  // New state for improvements
+  // Enhanced state for improvements
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<FilterStatus>('all');
   const [groupBy, setGroupBy] = useState<GroupBy>('none');
+  const [sortBy, setSortBy] = useState<SortBy>('name');
+  const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
 
   // Socket.IO hooks
@@ -73,7 +78,7 @@ const Devices = () => {
     }
   }, [notifications, toast]);
 
-  // Filtered and grouped devices
+  // Filtered, sorted and grouped devices with optimized dependencies
   const filteredAndGroupedDevices = useMemo(() => {
     if (!devices) return { groups: [], totalCount: 0 };
 
@@ -90,9 +95,43 @@ const Devices = () => {
       const matchesStatus = statusFilter === 'all' ||
         (statusFilter === 'online' && device.status === 'online') ||
         (statusFilter === 'offline' && device.status === 'offline') ||
-        (statusFilter === 'warning' && device.status === 'offline'); // Could be enhanced with more warning conditions
+        (statusFilter === 'warning' && device.status === 'offline');
 
       return matchesSearch && matchesStatus;
+    });
+
+    // Sort filtered devices
+    const sorted = [...filtered].sort((a, b) => {
+      let aValue: any, bValue: any;
+
+      switch (sortBy) {
+        case 'name':
+          aValue = a.name.toLowerCase();
+          bValue = b.name.toLowerCase();
+          break;
+        case 'status':
+          aValue = a.status === 'online' ? 1 : 0;
+          bValue = b.status === 'online' ? 1 : 0;
+          break;
+        case 'lastSeen':
+          aValue = a.lastSeen ? new Date(a.lastSeen).getTime() : 0;
+          bValue = b.lastSeen ? new Date(b.lastSeen).getTime() : 0;
+          break;
+        case 'classroom':
+          aValue = a.classroom || '';
+          bValue = b.classroom || '';
+          break;
+        case 'location':
+          aValue = a.location || '';
+          bValue = b.location || '';
+          break;
+        default:
+          return 0;
+      }
+
+      if (aValue < bValue) return sortOrder === 'asc' ? -1 : 1;
+      if (aValue > bValue) return sortOrder === 'asc' ? 1 : -1;
+      return 0;
     });
 
     // Group devices
@@ -102,13 +141,13 @@ const Devices = () => {
       groups.push({
         key: 'all',
         label: 'All Devices',
-        devices: filtered,
-        count: filtered.length
+        devices: sorted,
+        count: sorted.length
       });
     } else if (groupBy === 'status') {
       const statusGroups = {
-        online: filtered.filter(d => d.status === 'online'),
-        offline: filtered.filter(d => d.status === 'offline')
+        online: sorted.filter(d => d.status === 'online'),
+        offline: sorted.filter(d => d.status === 'offline')
       };
 
       Object.entries(statusGroups).forEach(([status, devices]) => {
@@ -123,7 +162,7 @@ const Devices = () => {
       });
     } else if (groupBy === 'classroom') {
       const classroomMap = new Map<string, Device[]>();
-      filtered.forEach(device => {
+      sorted.forEach(device => {
         const key = device.classroom || 'No Classroom';
         if (!classroomMap.has(key)) {
           classroomMap.set(key, []);
@@ -141,7 +180,7 @@ const Devices = () => {
       });
     } else if (groupBy === 'location') {
       const locationMap = new Map<string, Device[]>();
-      filtered.forEach(device => {
+      sorted.forEach(device => {
         const key = device.location || 'No Location';
         if (!locationMap.has(key)) {
           locationMap.set(key, []);
@@ -159,8 +198,8 @@ const Devices = () => {
       });
     }
 
-    return { groups, totalCount: filtered.length };
-  }, [devices, searchQuery, statusFilter, groupBy]);
+    return { groups, totalCount: sorted.length };
+  }, [devices, searchQuery, statusFilter, groupBy, sortBy, sortOrder]);
 
   const handleToggleSwitch = async (deviceId: string, switchId: string) => {
     try {
@@ -305,6 +344,57 @@ const Devices = () => {
           </div>
         </div>
 
+        {/* Device Statistics */}
+        {devices && devices.length > 0 && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <div className="bg-card border rounded-lg p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Total Devices</p>
+                  <p className="text-2xl font-bold">{devices.length}</p>
+                </div>
+                <Settings className="w-8 h-8 text-muted-foreground" />
+              </div>
+            </div>
+
+            <div className="bg-card border rounded-lg p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Online</p>
+                  <p className="text-2xl font-bold text-green-600">
+                    {devices.filter(d => d.status === 'online').length}
+                  </p>
+                </div>
+                <Wifi className="w-8 h-8 text-green-500" />
+              </div>
+            </div>
+
+            <div className="bg-card border rounded-lg p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Offline</p>
+                  <p className="text-2xl font-bold text-red-600">
+                    {devices.filter(d => d.status === 'offline').length}
+                  </p>
+                </div>
+                <WifiOff className="w-8 h-8 text-red-500" />
+              </div>
+            </div>
+
+            <div className="bg-card border rounded-lg p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Active Switches</p>
+                  <p className="text-2xl font-bold text-blue-600">
+                    {devices.reduce((acc, device) => acc + device.switches.filter(s => s.state).length, 0)}
+                  </p>
+                </div>
+                <Power className="w-8 h-8 text-blue-500" />
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Search and Filter Controls */}
         <div className="flex flex-col lg:flex-row gap-4 mb-6">
           {/* Search */}
@@ -318,8 +408,9 @@ const Devices = () => {
             />
           </div>
 
-          {/* Filters */}
-          <div className="flex flex-wrap gap-2">
+          {/* Filters and Controls */}
+          <div className="flex flex-wrap gap-2 items-center">
+
             <Select value={statusFilter} onValueChange={(value: FilterStatus) => setStatusFilter(value)}>
               <SelectTrigger className="w-32">
                 <SelectValue placeholder="Status" />
@@ -341,6 +432,26 @@ const Devices = () => {
                 <SelectItem value="status">Status</SelectItem>
                 <SelectItem value="classroom">Classroom</SelectItem>
                 <SelectItem value="location">Location</SelectItem>
+              </SelectContent>
+            </Select>
+
+            <Select value={`${sortBy}-${sortOrder}`} onValueChange={(value: string) => {
+              const [newSortBy, newSortOrder] = value.split('-') as [SortBy, SortOrder];
+              setSortBy(newSortBy);
+              setSortOrder(newSortOrder);
+            }}>
+              <SelectTrigger className="w-40">
+                <SelectValue placeholder="Sort by" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="name-asc">Name (A-Z)</SelectItem>
+                <SelectItem value="name-desc">Name (Z-A)</SelectItem>
+                <SelectItem value="status-desc">Status (Online First)</SelectItem>
+                <SelectItem value="status-asc">Status (Offline First)</SelectItem>
+                <SelectItem value="lastSeen-desc">Last Seen (Newest)</SelectItem>
+                <SelectItem value="lastSeen-asc">Last Seen (Oldest)</SelectItem>
+                <SelectItem value="classroom-asc">Classroom (A-Z)</SelectItem>
+                <SelectItem value="location-asc">Location (A-Z)</SelectItem>
               </SelectContent>
             </Select>
 
