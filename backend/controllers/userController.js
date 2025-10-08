@@ -1,5 +1,6 @@
 const User = require('../models/User');
 const { logger } = require('../middleware/logger');
+const ActivityLog = require('../models/ActivityLog');
 
 // Helper to sanitize user objects for client
 const toClientUser = (user) => ({
@@ -356,24 +357,106 @@ const deleteUser = async (req, res) => {
       return res.status(403).json({ message: 'Not authorized to delete this user' });
     }
 
-    const user = await User.findByIdAndDelete(req.params.id);
+    const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    // Log activity
-    await ActivityLog.create({
-      action: 'user_deleted',
-      triggeredBy: 'user',
-      userId: req.user._id,
-      userName: req.user.name,
-      classroom: 'system',
-      location: 'user_management',
-      details: `Deleted user ${user.name} (${user.email})`
-    });
+    // Clean up related data before deleting user
+    try {
+      // Delete user's created content
+      const Notice = require('../models/Notice');
+      await Notice.deleteMany({ createdBy: req.params.id });
+      logger.info(`Deleted notices created by user ${user.email}`);
+    } catch (err) {
+      logger.warn('Error deleting user notices:', err);
+    }
 
-    res.json({ message: 'User deleted successfully' });
+    try {
+      // Delete user's tickets
+      const Ticket = require('../models/Ticket');
+      await Ticket.deleteMany({ userId: req.params.id });
+      logger.info(`Deleted tickets for user ${user.email}`);
+    } catch (err) {
+      logger.warn('Error deleting user tickets:', err);
+    }
+
+    try {
+      // Delete user's activity logs
+      await ActivityLog.deleteMany({ userId: req.params.id });
+      logger.info(`Deleted activity logs for user ${user.email}`);
+    } catch (err) {
+      logger.warn('Error deleting user activity logs:', err);
+    }
+
+    try {
+      // Remove user from device assignments
+      const Device = require('../models/Device');
+      await Device.updateMany(
+        { userId: req.params.id },
+        { $unset: { userId: "" } }
+      );
+      logger.info(`Removed user from device assignments`);
+    } catch (err) {
+      logger.warn('Error updating device assignments:', err);
+    }
+
+    // Now delete the user
+    await User.findByIdAndDelete(req.params.id);
+
+    // Log activity
+    try {
+      await ActivityLog.create({
+        action: 'user_deleted',
+        triggeredBy: 'user',
+        userId: req.user._id,
+        userName: req.user.name,
+        classroom: 'system',
+        location: 'user_management',
+        details: `Deleted user ${user.name} (${user.email})`
+      });
+    } catch (err) {
+      logger.warn('Error logging user deletion:', err);
+    }
+
+    // Emit real-time notification to admins about user deletion
+    if (req.app.get('io')) {
+      const io = req.app.get('io');
+      const adminRoles = ['super-admin', 'admin', 'dean'];
+      const admins = await User.find({
+        role: { $in: adminRoles },
+        isActive: true,
+        isApproved: true,
+        _id: { $ne: req.user._id }
+      }).select('_id');
+
+      admins.forEach(admin => {
+        io.to(`user_${admin._id}`).emit('user_deleted', {
+          type: 'user_deleted',
+          deletedUserId: req.params.id,
+          deletedUserName: user.name,
+          deletedUserEmail: user.email,
+          deletedBy: req.user._id,
+          deletedByName: req.user.name,
+          timestamp: new Date()
+        });
+      });
+    }
+
+    res.json({ 
+      success: true,
+      message: 'User deleted successfully',
+      details: {
+        userName: user.name,
+        userEmail: user.email
+      }
+    });
   } catch (error) {
     logger.error('Error deleting user:', error);
-    res.status(500).json({ message: 'Error deleting user' });
+    console.error('[DEBUG] Delete user error:', error);
+    res.status(500).json({ 
+      message: 'Error deleting user',
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 };
 

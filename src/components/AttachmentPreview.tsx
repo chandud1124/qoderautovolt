@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Dialog, DialogContent } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { 
   X, 
@@ -74,6 +74,12 @@ export const AttachmentPreview: React.FC<AttachmentPreviewProps> = ({
   return (
     <Dialog open={true} onOpenChange={onClose}>
       <DialogContent className="max-w-7xl max-h-[90vh] p-0 overflow-hidden">
+        <DialogHeader className="sr-only">
+          <DialogTitle>Attachment Preview</DialogTitle>
+          <DialogDescription>
+            Preview and download attached files
+          </DialogDescription>
+        </DialogHeader>
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b bg-muted/50">
           <div className="flex-1 min-w-0">

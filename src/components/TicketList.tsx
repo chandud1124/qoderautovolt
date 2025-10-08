@@ -5,7 +5,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import {
@@ -406,6 +406,9 @@ const TicketList: React.FC = () => {
                             <Ticket className="w-5 h-5" />
                             {selectedTicket?.ticketId}: {selectedTicket?.title}
                         </DialogTitle>
+                        <DialogDescription>
+                            View and manage ticket details, status, and comments
+                        </DialogDescription>
                     </DialogHeader>
 
                     {selectedTicket && (

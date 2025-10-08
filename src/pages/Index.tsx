@@ -6,7 +6,6 @@ import { MasterSwitchCard } from '@/components/MasterSwitchCard';
 import { DeviceConfigDialog } from '@/components/DeviceConfigDialog';
 import DeleteDeviceDialog from '@/components/DeleteDeviceDialog';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Cpu, Zap, Radar, Activity, Wifi, WifiOff, Search, Filter, Clock } from 'lucide-react';

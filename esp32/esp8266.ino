@@ -3,7 +3,11 @@
 #endif
 
 // --- INCLUDES AND GLOBALS (must be before all function usage) ---
+#ifdef ESP32
 #include <WiFi.h>
+#elif defined(ESP8266)
+#include <ESP8266WiFi.h>
+#endif
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 
@@ -19,9 +23,8 @@
 #endif
 
 #include <map>
-#include "config.h"
+#include "config_esp8266.h"
 
-Preferences prefs;
 
 // --- Connection State Enum and Status LED ---
 enum ConnState {
@@ -65,11 +68,18 @@ struct OfflineEvent {
 std::vector<OfflineEvent> offlineEvents;
 
 // Conditional storage functions for ESP32/ESP8266 compatibility
-void beginStorage(const char* namespace, bool readOnly = true) {
-#ifdef ESP32
-  prefs.begin(namespace, readOnly);
+#ifdef ESP8266
+// EEPROM address mapping for ESP8266
+#define EEPROM_SIZE 512
+#define EEPROM_SWITCH_CFG_START 0    // Switch config data
+#define EEPROM_OFFLINE_EVENTS_START 200  // Offline events data
 #endif
-  // ESP8266 EEPROM doesn't need begin/end calls
+
+void beginStorage(const char* ns, bool readOnly = true) {
+#ifdef ESP32
+  prefs.begin(ns, readOnly);
+#endif
+  // ESP8266 EEPROM doesn't need namespace begin/end calls
 }
 
 void endStorage() {
@@ -83,8 +93,28 @@ int getIntStorage(const char* key, int defaultValue = 0) {
 #ifdef ESP32
   return prefs.getInt(key, defaultValue);
 #elif defined(ESP8266)
-  // Simple EEPROM implementation - in real code, you'd need proper addressing
-  // This is a placeholder - actual implementation would use EEPROM.read()/write()
+  // Deterministic per-switch layout in EEPROM to avoid collisions and garbage
+  // Layout per-switch (block size = 16 bytes):
+  // offset +0 : int relayGpio (4 bytes)
+  // offset +4 : int manualGpio (4 bytes)
+  // offset +8 : uint8_t defaultState
+  // offset +9 : uint8_t savedState
+  // offset +10: uint8_t momentary
+  // Keys expected: "relayN", "manualN", other keys will fall back to defaults
+  if (strncmp(key, "relay", 5) == 0 || strncmp(key, "manual", 6) == 0) {
+    int idx = 0;
+    const char* p = key + ((key[0] == 'r') ? 5 : 6);
+    idx = atoi(p);
+    if (idx < 0 || idx >= NUM_SWITCHES) return defaultValue;
+    int base = EEPROM_SWITCH_CFG_START + idx * 16;
+    int addr = (strncmp(key, "relay", 5) == 0) ? (base + 0) : (base + 4);
+    if (addr < 0 || addr + (int)sizeof(int) > EEPROM_SIZE) return defaultValue;
+    int value = 0;
+    EEPROM.get(addr, value);
+    // EEPROM default is 0xFF; for signed int that becomes -1. Treat -1 as unset.
+    return (value == -1) ? defaultValue : value;
+  }
+  // Fallback: return default for unknown keys
   return defaultValue;
 #endif
 }
@@ -93,8 +123,20 @@ void putIntStorage(const char* key, int value) {
 #ifdef ESP32
   prefs.putInt(key, value);
 #elif defined(ESP8266)
-  // Simple EEPROM implementation - in real code, you'd need proper addressing
-  // This is a placeholder - actual implementation would use EEPROM.write()
+  // Write into deterministic per-switch layout if key matches expected patterns
+  if (strncmp(key, "relay", 5) == 0 || strncmp(key, "manual", 6) == 0) {
+    int idx = 0;
+    const char* p = key + ((key[0] == 'r') ? 5 : 6);
+    idx = atoi(p);
+    if (idx < 0 || idx >= NUM_SWITCHES) return;
+    int base = EEPROM_SWITCH_CFG_START + idx * 16;
+    int addr = (strncmp(key, "relay", 5) == 0) ? (base + 0) : (base + 4);
+    if (addr < 0 || addr + (int)sizeof(int) > EEPROM_SIZE) return;
+    EEPROM.put(addr, value);
+    EEPROM.commit();
+    return;
+  }
+  // Unknown key: ignore for now
 #endif
 }
 
@@ -102,7 +144,21 @@ bool getBoolStorage(const char* key, bool defaultValue = false) {
 #ifdef ESP32
   return prefs.getBool(key, defaultValue);
 #elif defined(ESP8266)
-  // EEPROM implementation
+  // Handle per-switch boolean keys: defN, stateN, momentaryN
+  if (strncmp(key, "def", 3) == 0 || strncmp(key, "state", 5) == 0 || strncmp(key, "momentary", 9) == 0) {
+    int idx = 0;
+    const char* p = key + ((key[0] == 'd') ? 3 : (key[0] == 's' ? 5 : 9));
+    idx = atoi(p);
+    if (idx < 0 || idx >= NUM_SWITCHES) return defaultValue;
+    int base = EEPROM_SWITCH_CFG_START + idx * 16;
+    int addr = base + 8; // defaultState at +8
+    if (strncmp(key, "state", 5) == 0) addr = base + 9;
+    if (strncmp(key, "momentary", 9) == 0) addr = base + 10;
+    if (addr < 0 || addr >= EEPROM_SIZE) return defaultValue;
+    uint8_t value = 0xFF;
+    EEPROM.get(addr, value);
+    return value == 0xFF ? defaultValue : (value != 0);
+  }
   return defaultValue;
 #endif
 }
@@ -111,7 +167,21 @@ void putBoolStorage(const char* key, bool value) {
 #ifdef ESP32
   prefs.putBool(key, value);
 #elif defined(ESP8266)
-  // EEPROM implementation
+  if (strncmp(key, "def", 3) == 0 || strncmp(key, "state", 5) == 0 || strncmp(key, "momentary", 9) == 0) {
+    int idx = 0;
+    const char* p = key + ((key[0] == 'd') ? 3 : (key[0] == 's' ? 5 : 9));
+    idx = atoi(p);
+    if (idx < 0 || idx >= NUM_SWITCHES) return;
+    int base = EEPROM_SWITCH_CFG_START + idx * 16;
+    int addr = base + 8; // defaultState at +8
+    if (strncmp(key, "state", 5) == 0) addr = base + 9;
+    if (strncmp(key, "momentary", 9) == 0) addr = base + 10;
+    if (addr < 0 || addr >= EEPROM_SIZE) return;
+    EEPROM.put(addr, (uint8_t)value);
+    EEPROM.commit();
+    return;
+  }
+  // Unknown key: ignore
 #endif
 }
 
@@ -193,14 +263,14 @@ void loadOfflineEventsFromStorage() {
   Serial.printf("[STORAGE] Loaded %d offline events\n", (int)offlineEvents.size());
 }
 
-#define MQTT_BROKER MQTT_BROKER_IP // Use IP from config.h
-#define MQTT_PORT MQTT_BROKER_PORT  // Use port from config.h
-#define MQTT_USER ""  // Empty for anonymous connection
-#define MQTT_PASSWORD ""  // Empty for anonymous connection
-#define SWITCH_TOPIC "esp32/switches"
-#define STATE_TOPIC "esp32/state"
-#define TELEMETRY_TOPIC "esp32/telemetry"
-#define CONFIG_TOPIC "esp32/config"
+#define MQTT_BROKER "192.168.0.108" // Set to backend IP or broker IP
+#define MQTT_PORT 1883
+#define MQTT_USER ""
+#define MQTT_PASSWORD ""
+#define SWITCH_TOPIC "esp8266/switches"
+#define STATE_TOPIC "esp8266/state"
+#define TELEMETRY_TOPIC "esp8266/telemetry"
+#define CONFIG_TOPIC "esp8266/config"
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
@@ -374,6 +444,11 @@ void loadSwitchConfigFromStorage() {
   }
   endStorage();
   Serial.println("[STORAGE] Loaded switch config and state from storage");
+  // Diagnostic dump to help detect garbage/invalid GPIOs after EEPROM load
+  for (int i = 0; i < NUM_SWITCHES; i++) {
+    Serial.printf("[STORAGE] Switch %d -> relayGpio=%d, manualGpio=%d, state=%d, momentary=%d\n",
+      i, switchesLocal[i].relayGpio, switchesLocal[i].manualGpio, switchesLocal[i].state ? 1 : 0, switchesLocal[i].manualMomentary ? 1 : 0);
+  }
 }
 
 void saveSwitchConfigToStorage() {
@@ -399,8 +474,8 @@ void saveSwitchConfigToStorage() {
 // Initialize switch state array with mapping, loading from storage if available
 void initSwitches() {
   for (int i = 0; i < NUM_SWITCHES; i++) {
-    switchesLocal[i].relayGpio = relayPins[i];
-    switchesLocal[i].manualGpio = manualSwitchPins[i];
+    switchesLocal[i].relayGpio = relayPins[i];  // Use const defaults
+    switchesLocal[i].manualGpio = manualSwitchPins[i];  // Use const defaults
     switchesLocal[i].state = false;
     switchesLocal[i].manualOverride = false;
     switchesLocal[i].manualEnabled = true;
@@ -412,8 +487,8 @@ void initSwitches() {
     switchesLocal[i].lastManualActive = false;
     switchesLocal[i].defaultState = false;
   }
-  loadSwitchConfigFromStorage();
-  // Apply loaded states to relays
+  loadSwitchConfigFromStorage();  // This will override with saved config
+  // Apply loaded/saved states to relays
   for (int i = 0; i < NUM_SWITCHES; i++) {
     pinMode(switchesLocal[i].relayGpio, OUTPUT);
     digitalWrite(switchesLocal[i].relayGpio, switchesLocal[i].state ? (RELAY_ACTIVE_HIGH ? HIGH : LOW) : (RELAY_ACTIVE_HIGH ? LOW : HIGH));
@@ -538,6 +613,7 @@ void sendHeartbeat() {
   lastHeartbeat = now;
   DynamicJsonDocument doc(128);
   doc["mac"] = WiFi.macAddress();
+  doc["userId"] = "default_user"; // Add user ID to heartbeat
   doc["status"] = "heartbeat";
   size_t freeHeap, minFreeHeap;
   getHeapInfo(freeHeap, minFreeHeap);
@@ -602,6 +678,9 @@ void setup_wifi() {
     mac.replace(":", "");
     sprintf(mqttClientId, "ESP_%s", mac.c_str());
     Serial.printf("MQTT Client ID: %s\n", mqttClientId);
+    
+    // Display full connection status
+    displayIPAddress();
   } else {
     Serial.println("\nWiFi connection failed, running in offline mode");
     connState = WIFI_DISCONNECTED;
@@ -645,8 +724,7 @@ void reconnect_mqtt() {
   if (now - lastReconnectAttempt < 5000) return;
   lastReconnectAttempt = now;
   Serial.print("Attempting MQTT connection...");
-  // Connect anonymously (no username/password required since Mosquitto allows anonymous connections)
-  if (mqttClient.connect(mqttClientId)) {
+  if (mqttClient.connect(mqttClientId, MQTT_USER, MQTT_PASSWORD)) {
     Serial.println("connected");
     mqttClient.subscribe(SWITCH_TOPIC);
     mqttClient.subscribe(CONFIG_TOPIC);
@@ -678,26 +756,32 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     if (message.startsWith("{")) {
       DynamicJsonDocument doc(256);
       DeserializationError err = deserializeJson(doc, message);
-      if (!err && doc["mac"].is<const char*>() && doc["secret"].is<const char*>() && doc["gpio"].is<int>() && doc["state"].is<bool>()) {
+      if (!err && doc["mac"].is<const char*>() && doc["secret"].is<const char*>() && doc["userId"].is<const char*>() && doc["gpio"].is<int>() && doc["state"].is<bool>()) {
         String targetMac = doc["mac"];
         String targetSecret = doc["secret"];
+        String targetUserId = doc["userId"];
         String myMac = WiFi.macAddress();
         String normalizedTarget = normalizeMac(targetMac);
         String normalizedMy = normalizeMac(myMac);
         if (normalizedTarget.equalsIgnoreCase(normalizedMy)) {
           if (targetSecret == String(DEVICE_SECRET)) {
-            int gpio = doc["gpio"];
-            bool state = doc["state"];
-            bool validGpio = false;
-            for (int i = 0; i < NUM_SWITCHES; i++) {
-              if (switchesLocal[i].relayGpio == gpio) { validGpio = true; break; }
-            }
-            if (validGpio) {
-              queueSwitchCommand(gpio, state);
-              processCommandQueue();
-              Serial.printf("[MQTT] Processed command for this device: GPIO %d -> %s\n", gpio, state ? "ON" : "OFF");
+            // Check user authorization (you can add more complex logic here)
+            if (targetUserId == "default_user" || targetUserId == "admin") {
+              int gpio = doc["gpio"];
+              bool state = doc["state"];
+              bool validGpio = false;
+              for (int i = 0; i < NUM_SWITCHES; i++) {
+                if (switchesLocal[i].relayGpio == gpio) { validGpio = true; break; }
+              }
+              if (validGpio) {
+                queueSwitchCommand(gpio, state);
+                processCommandQueue();
+                Serial.printf("[MQTT] Processed command for user %s: GPIO %d -> %s\n", targetUserId.c_str(), gpio, state ? "ON" : "OFF");
+              } else {
+                Serial.printf("[MQTT] Invalid GPIO %d, ignoring command\n", gpio);
+              }
             } else {
-              Serial.printf("[MQTT] Invalid GPIO %d, ignoring command\n", gpio);
+              Serial.printf("[MQTT] Unauthorized user %s, ignoring command\n", targetUserId.c_str());
             }
           } else {
             Serial.println("[MQTT] Invalid secret, ignoring command");
@@ -725,45 +809,46 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     if (message.startsWith("{")) {
       DynamicJsonDocument doc(512);
       DeserializationError err = deserializeJson(doc, message);
-      if (!err && doc["mac"].is<const char*>() && doc["secret"].is<const char*>() && doc["switches"].is<JsonArray>()) {
+      if (!err && doc["mac"].is<const char*>() && doc["secret"].is<const char*>() && doc["userId"].is<const char*>() && doc["switches"].is<JsonArray>()) {
         String targetMac = doc["mac"];
         String targetSecret = doc["secret"];
+        String targetUserId = doc["userId"];
         String myMac = WiFi.macAddress();
         String normalizedTarget = normalizeMac(targetMac);
         String normalizedMy = normalizeMac(myMac);
         if (normalizedTarget.equalsIgnoreCase(normalizedMy)) {
           if (targetSecret == String(DEVICE_SECRET)) {
-            JsonArray switches = doc["switches"].as<JsonArray>();
-            int n = switches.size();
-            if (n > 0 && n <= 6) {
-              Serial.printf("[CONFIG] Processing config for %d switches\n", n);
-              for (int i = 0; i < n; i++) {
-                JsonObject sw = switches[i];
-                relayPins[i] = sw["gpio"] | 0;
-                manualSwitchPins[i] = sw.containsKey("manualGpio") ? (int)sw["manualGpio"] : -1;
-                // Handle momentary/maintained mode
-                if (sw.containsKey("manualMode")) {
-                  String mode = sw["manualMode"];
-                  switchesLocal[i].manualMomentary = (mode == "momentary");
-                  Serial.printf("[CONFIG] Switch %d: gpio=%d, manualGpio=%d, manualMode=%s, momentary=%d\n",
-                    i, relayPins[i], manualSwitchPins[i], mode.c_str(), switchesLocal[i].manualMomentary);
-                } else {
-                  Serial.printf("[CONFIG] Switch %d: no manualMode field found\n", i);
+            // Check user authorization for config changes
+            if (targetUserId == "admin") {  // Only admin can change config
+              JsonArray switches = doc["switches"].as<JsonArray>();
+              int n = switches.size();
+              if (n > 0 && n <= 6) {
+                Serial.printf("[CONFIG] Processing config for %d switches by user %s\n", n, targetUserId.c_str());
+                for (int i = 0; i < n; i++) {
+                  JsonObject sw = switches[i];
+                  switchesLocal[i].relayGpio = sw["gpio"] | 0;
+                  switchesLocal[i].manualGpio = sw.containsKey("manualGpio") ? (int)sw["manualGpio"] : -1;
+                  // Handle momentary/maintained mode
+                  if (sw.containsKey("manualMode")) {
+                    String mode = sw["manualMode"];
+                    switchesLocal[i].manualMomentary = (mode == "momentary");
+                    Serial.printf("[CONFIG] Switch %d: gpio=%d, manualGpio=%d, manualMode=%s, momentary=%d\n",
+                      i, switchesLocal[i].relayGpio, switchesLocal[i].manualGpio, mode.c_str(), switchesLocal[i].manualMomentary);
+                  } else {
+                    Serial.printf("[CONFIG] Switch %d: no manualMode field found\n", i);
+                  }
                 }
+                saveSwitchConfigToStorage();
+                // Reinitialize switches with new configuration
+                for (int i = 0; i < NUM_SWITCHES; i++) {
+                  pinMode(switchesLocal[i].relayGpio, OUTPUT);
+                  digitalWrite(switchesLocal[i].relayGpio, switchesLocal[i].state ? (RELAY_ACTIVE_HIGH ? HIGH : LOW) : (RELAY_ACTIVE_HIGH ? LOW : HIGH));
+                  pinSetup[i] = false;  // Force re-setup of manual pins
+                }
+                Serial.println("[CONFIG] Pin configuration and switch modes updated from server and applied.");
               }
-              beginStorage("switch_cfg", false);
-              for (int i = 0; i < n; i++) {
-                char relayKey[16], manualKey[16], momentaryKey[16];
-                sprintf(relayKey, "relay%d", i);
-                sprintf(manualKey, "manual%d", i);
-                sprintf(momentaryKey, "momentary%d", i);
-                putIntStorage(relayKey, relayPins[i]);
-                putIntStorage(manualKey, manualSwitchPins[i]);
-                putBoolStorage(momentaryKey, switchesLocal[i].manualMomentary);
-              }
-              endStorage();
-              initSwitches();
-              Serial.println("[CONFIG] Pin configuration and switch modes updated from server and applied.");
+            } else {
+              Serial.printf("[CONFIG] User %s not authorized for config changes\n", targetUserId.c_str());
             }
           } else {
             Serial.println("[CONFIG] Invalid secret, ignoring config update");
@@ -779,6 +864,7 @@ void publishState() {
   DynamicJsonDocument doc(1024);
   doc["mac"] = WiFi.macAddress();
   doc["secret"] = DEVICE_SECRET; // Include device secret for authentication
+  doc["userId"] = "default_user"; // Add user ID for authentication
   JsonArray arr = doc.createNestedArray("switches");
   for (int i = 0; i < NUM_SWITCHES; i++) {
     JsonObject o = arr.createNestedObject();
@@ -797,6 +883,7 @@ void publishManualSwitchEvent(int gpio, bool state) {
   DynamicJsonDocument doc(128);
   doc["mac"] = WiFi.macAddress();
   doc["secret"] = DEVICE_SECRET; // Include device secret for authentication
+  doc["userId"] = "default_user"; // Add user ID for authentication
   doc["type"] = "manual_switch";
   doc["gpio"] = gpio;
   doc["state"] = state;
@@ -852,9 +939,106 @@ String normalizeMac(String mac) {
   return normalized;
 }
 
+// Function to display ESP8266 IP address and connection status
+void displayIPAddress() {
+  Serial.println("\n=== ESP8266 CONNECTION STATUS ===");
+  
+  // WiFi Status
+  Serial.print("WiFi Status: ");
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("CONNECTED");
+    Serial.print("WiFi SSID: ");
+    Serial.println(WiFi.SSID());
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+    Serial.print("Subnet Mask: ");
+    Serial.println(WiFi.subnetMask());
+    Serial.print("Gateway: ");
+    Serial.println(WiFi.gatewayIP());
+    Serial.print("DNS: ");
+    Serial.println(WiFi.dnsIP());
+    Serial.print("MAC Address: ");
+    Serial.println(WiFi.macAddress());
+    Serial.print("Signal Strength (RSSI): ");
+    Serial.print(WiFi.RSSI());
+    Serial.println(" dBm");
+  } else {
+    Serial.println("DISCONNECTED");
+    Serial.print("WiFi Status Code: ");
+    Serial.println(WiFi.status());
+  }
+  
+  // MQTT Status
+  Serial.print("MQTT Status: ");
+  if (mqttClient.connected()) {
+    Serial.println("CONNECTED");
+    Serial.print("MQTT Broker: ");
+    Serial.print(MQTT_BROKER);
+    Serial.print(":");
+    Serial.println(MQTT_PORT);
+    Serial.print("MQTT Client ID: ");
+    Serial.println(mqttClientId);
+  } else {
+    Serial.println("DISCONNECTED");
+  }
+  
+  // Connection State
+  Serial.print("Connection State: ");
+  switch (connState) {
+    case WIFI_DISCONNECTED:
+      Serial.println("WIFI_DISCONNECTED (No WiFi)");
+      break;
+    case WIFI_ONLY:
+      Serial.println("WIFI_ONLY (WiFi connected, MQTT disconnected)");
+      break;
+    case BACKEND_CONNECTED:
+      Serial.println("BACKEND_CONNECTED (Fully connected)");
+      break;
+  }
+  
+  // Device Info
+  Serial.print("Device: ");
+  #ifdef ESP32
+    Serial.println("ESP32");
+    Serial.print("Chip Model: ");
+    Serial.println(ESP.getChipModel());
+    Serial.print("EFuse MAC: ");
+    {
+      uint64_t mac = ESP.getEfuseMac();
+      char macStr[20];
+      sprintf(macStr, "%04x%08x", (uint16_t)(mac >> 32), (uint32_t)(mac & 0xFFFFFFFF));
+      Serial.println(macStr);
+    }
+    Serial.print("Flash Size: ");
+    Serial.print(ESP.getFlashChipSize() / 1024 / 1024);
+    Serial.println(" MB");
+    Serial.print("Free Heap: ");
+    Serial.print(ESP.getFreeHeap());
+    Serial.println(" bytes");
+  #elif defined(ESP8266)
+    Serial.println("ESP8266");
+    Serial.print("Chip ID (ESP.getChipId is not available on ESP32 builds): ");
+    // On ESP8266 builds, ESP.getChipId() exists. For cross-compilation we avoid calling it on ESP32.
+    Serial.println(ESP.getChipId());
+    Serial.print("Flash Size: ");
+    Serial.print(ESP.getFlashChipSize() / 1024 / 1024);
+    Serial.println(" MB");
+    Serial.print("Free Heap: ");
+    Serial.print(ESP.getFreeHeap());
+    Serial.println(" bytes");
+  #else
+    Serial.println("Unknown MCU");
+  #endif
+  
+  Serial.println("===================================\n");
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.println("\nESP Classroom Automation System (MQTT)");
+#ifdef ESP8266
+  EEPROM.begin(EEPROM_SIZE);
+#endif
   initWatchdog();  // Use conditional watchdog
   initSwitches();
   loadOfflineEventsFromStorage();
@@ -868,6 +1052,23 @@ void setup() {
 
 void loop() {
   resetWatchdog();  // Use conditional watchdog reset
+  
+  // Handle serial commands
+  if (Serial.available()) {
+    String command = Serial.readStringUntil('\n');
+    command.trim();
+    if (command.equalsIgnoreCase("ip") || command.equalsIgnoreCase("status") || command.equalsIgnoreCase("info")) {
+      displayIPAddress();
+    } else if (command.equalsIgnoreCase("help")) {
+      Serial.println("\n=== ESP8266 Serial Commands ===");
+      Serial.println("ip      - Display IP address and connection status");
+      Serial.println("status  - Display IP address and connection status");
+      Serial.println("info    - Display IP address and connection status");
+      Serial.println("help    - Show this help message");
+      Serial.println("===========================\n");
+    }
+  }
+  
   unsigned long now = millis();
   handleManualSwitches();
   updateConnectionStatus();

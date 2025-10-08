@@ -12,6 +12,9 @@ import { GlobalLoadingProvider } from '@/hooks/useGlobalLoading';
 import { GlobalLoadingOverlay } from '@/components/GlobalLoadingOverlay';
 import { DevicesProvider } from '@/hooks/useDevices';
 import { SocketProvider } from '@/context/SocketContext';
+import { ThemeProvider } from '@/components/ThemeProvider';
+import { LogoLoader } from '@/components/Logo';
+import { SkipToContent } from '@/components/SkipToContent';
 
 // Lazy load components for better performance
 const Index = lazy(() => import("./pages/Index"));
@@ -71,25 +74,27 @@ const queryClient = new QueryClient({
 
 // Loading component for Suspense fallback
 const PageLoader = () => (
-  <div className="flex items-center justify-center min-h-screen">
-    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+  <div className="flex items-center justify-center min-h-screen bg-background">
+    <LogoLoader size="lg" />
   </div>
 );
 const App = () => {
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <SocketProvider>
-          <GlobalLoadingProvider>
-            <TooltipProvider>
-              <Toaster />
-              <Sonner />
-              <BrowserRouter future={{
-                v7_startTransition: true,
-                v7_relativeSplatPath: true
-              }}>
-                <Suspense fallback={<PageLoader />}>
-                  <Routes>
+      <ThemeProvider defaultTheme="dark" storageKey="autovolt-ui-theme">
+        <AuthProvider>
+          <SocketProvider>
+            <GlobalLoadingProvider>
+              <TooltipProvider>
+                <SkipToContent />
+                <Toaster />
+                <Sonner />
+                <BrowserRouter future={{
+                  v7_startTransition: true,
+                  v7_relativeSplatPath: true
+                }}>
+                  <Suspense fallback={<PageLoader />}>
+                    <Routes>
                     {/* Root redirect - smart routing based on auth */}
                     <Route index element={<RootRedirect />} />
                     
@@ -143,6 +148,7 @@ const App = () => {
           </GlobalLoadingProvider>
         </SocketProvider>
       </AuthProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   );
 };export default App;

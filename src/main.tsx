@@ -3,31 +3,22 @@ import { StrictMode } from 'react'
 import App from './App.tsx'
 import ErrorBoundary from './components/ErrorBoundary.tsx'
 import './index.css'
+import 'react-grid-layout/css/styles.css'
+import 'react-resizable/css/styles.css'
+import { startPerformanceMonitoring } from './lib/performance'
 
 const container = document.getElementById("root")!;
 const root = createRoot(container);
 
-// Performance monitoring in development
+// Start performance monitoring
 if (import.meta.env.DEV) {
-  // Monitor React performance
-  const reportWebVitals = (metric: any) => {
-    console.log('Web Vitals:', metric);
-  };
+  console.log('[Performance] Starting performance monitoring...');
+  startPerformanceMonitoring();
+}
 
-  // Simple performance observer
-  if ('performance' in window && 'PerformanceObserver' in window) {
-    try {
-      new PerformanceObserver((list) => {
-        for (const entry of list.getEntries()) {
-          if (entry.entryType === 'largest-contentful-paint') {
-            console.log('LCP:', entry.startTime);
-          }
-        }
-      }).observe({ entryTypes: ['largest-contentful-paint'] });
-    } catch (e) {
-      console.warn('Performance monitoring not supported');
-    }
-  }
+// Production performance monitoring (more conservative)
+if (import.meta.env.PROD) {
+  startPerformanceMonitoring(60000); // Every minute
 }
 
 root.render(

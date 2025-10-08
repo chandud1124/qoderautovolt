@@ -708,12 +708,7 @@ void loop() {
   static unsigned long lastRelayCheck = 0;
   if (now - lastRelayCheck > 5000) { // Every 5 seconds
     for (int i = 0; i < NUM_SWITCHES; i++) {
-      bool expectedLevel = switchesLocal[i].state ? (RELAY_ACTIVE_HIGH ? HIGH : LOW) : (RELAY_ACTIVE_HIGH ? LOW : HIGH);
-      digitalWrite(switchesLocal[i].relayGpio, expectedLevel);
-      // Special logging for GPIO 19
-      if (switchesLocal[i].relayGpio == 19) {
-        Serial.printf("[RELAY] Re-applied GPIO 19: state=%d, level=%d\n", switchesLocal[i].state, expectedLevel);
-      }
+      digitalWrite(switchesLocal[i].relayGpio, switchesLocal[i].state ? (RELAY_ACTIVE_HIGH ? HIGH : LOW) : (RELAY_ACTIVE_HIGH ? LOW : HIGH));
     }
     lastRelayCheck = now;
     Serial.println("[RELAY] Re-applied all relay states");

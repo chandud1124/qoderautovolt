@@ -14,6 +14,8 @@ import { navItems } from '@/nav-items';
 import { Sidebar } from './Sidebar';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
+import { ThemeToggle } from '@/components/ThemeToggle';
+import { Logo } from '@/components/Logo';
 
 export function Header() {
   const navigate = useNavigate();
@@ -121,7 +123,7 @@ export function Header() {
         )}
         <div className={cn(isMobile && "max-w-[200px]", "overflow-hidden")}>
           <div className="flex items-center gap-3 mb-1">
-            <img src="/logo.png" alt="AutoVolt Logo" className="h-8 w-auto" />
+            <Logo size="sm" variant="icon-only" animated />
             <h1 className="font-bold truncate">{currentPage.title}</h1>
           </div>
           <p className="text-sm text-muted-foreground truncate">{currentPage.description}</p>
@@ -130,6 +132,9 @@ export function Header() {
 
       {/* Right side */}
       <div className="flex items-center gap-2">
+        {/* Theme Toggle */}
+        <ThemeToggle />
+
         {/* Connection status */}
         <Button variant="ghost" size="icon" onClick={handleRefresh}>
           {isConnected ? (

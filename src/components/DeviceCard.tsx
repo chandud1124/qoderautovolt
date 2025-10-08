@@ -8,7 +8,13 @@ import {
   WifiOff,
   Settings,
   Trash2,
-  AlertCircle
+  AlertCircle,
+  Power,
+  Edit,
+  RefreshCw,
+  Activity,
+  Signal,
+  Zap
 } from 'lucide-react';
 import { SwitchControl } from './SwitchControl';
 import { Device } from '@/types';
@@ -16,232 +22,289 @@ import { Device } from '@/types';
 interface DeviceCardProps {
   device: Device;
   onToggleSwitch: (deviceId: string, switchId: string) => void;
-  onEditDevice?: (device: Device) => void; // request opening shared edit dialog
+  onEditDevice?: (device: Device) => void;
   onDeleteDevice?: (deviceId: string) => void;
+  onRestartDevice?: (deviceId: string) => void; // New: Restart action
   showSwitches?: boolean;
   showActions?: boolean;
-  compact?: boolean; // If true, show only basic details and online/offline
+  compact?: boolean;
+  variant?: 'default' | 'compact' | 'expanded'; // New: Card variants
 }
 
-  export default memo(function DeviceCard({ device, onToggleSwitch, onEditDevice, onDeleteDevice, showSwitches = true, showActions = true, compact = false }: DeviceCardProps) {
-    // In dashboard (showActions === false), highlight card green if online, red if offline
-    const isOnline = device.status === 'online';
-    const dashboardOnline = !showActions && isOnline;
-    const dashboardOffline = !showActions && !isOnline;
-    const deviceOffline = !isOnline; // Apply red styling to offline devices in all views
+export default memo(function DeviceCard({ 
+  device, 
+  onToggleSwitch, 
+  onEditDevice, 
+  onDeleteDevice,
+  onRestartDevice,
+  showSwitches = true, 
+  showActions = true, 
+  compact = false,
+  variant = 'default'
+}: DeviceCardProps) {
+  const [isHovered, setIsHovered] = useState(false);
+  
+  const isOnline = device.status === 'online';
+  const dashboardOnline = !showActions && isOnline;
+  const dashboardOffline = !showActions && !isOnline;
+  const deviceOffline = !isOnline;
 
-    return (
-      <Card
-        style={{
-          minWidth: '250px',
-          maxWidth: '100%',
-          width: '100%',
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'flex-start',
-          padding: '0.75rem',
-          boxSizing: 'border-box',
-          overflow: 'hidden',
-          backgroundColor: dashboardOnline
-            ? '#166534' // Tailwind green-800 for dark online
-            : (dashboardOffline || deviceOffline)
-              ? '#b91c1c' // Tailwind red-700 for offline
-              : undefined,
-          color: (dashboardOffline || deviceOffline) ? '#fff' : undefined,
-          fontWeight: (dashboardOffline || deviceOffline) ? 'bold' : undefined
-        }}
-        className={`shadow-md hover:shadow-lg transition-shadow duration-200 sm:max-w-xs sm:p-2 sm:overflow-hidden relative${dashboardOnline ? ' ring-4 ring-green-600' : ''}${(dashboardOffline || deviceOffline) ? ' opacity-70 grayscale' : ''}`}
-      >
-        {/* Status Indicator - Top Left */}
-        <div className="absolute top-2 left-2 z-10">
-          <Badge
-            variant={isOnline ? 'secondary' : 'destructive'}
-            className={`text-xs ${isOnline
-              ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
-              : 'bg-red-100 text-red-700 border-red-200'
-            } ${!isOnline ? 'bg-white/20 text-white border-white/30' : ''}`}
-          >
-            {isOnline ? (
-              <>
-                <div className="w-2 h-2 bg-emerald-500 rounded-full mr-1 animate-pulse" />
-                Online
-              </>
-            ) : (
-              <>
-                <AlertCircle className="w-3 h-3 mr-1" />
-                Offline
-              </>
-            )}
-          </Badge>
-        </div>
+  // Device type icon
+  const getDeviceIcon = () => {
+    const iconClass = "w-5 h-5";
+    if (device.name.toLowerCase().includes('esp32')) return <Cpu className={iconClass} />;
+    if (device.name.toLowerCase().includes('arduino')) return <Zap className={iconClass} />;
+    return <Activity className={iconClass} />;
+  };
 
-      {/* Settings & Delete Buttons in compact mode - Top Right */}
-      {compact && showActions && (
-        <div className="absolute top-2 right-2 z-10 flex gap-1">
+  // Calculate device health score (example: based on switches)
+  const getHealthScore = () => {
+    if (!isOnline) return 0;
+    const onSwitches = device.switches.filter(sw => sw.state).length;
+    return device.switches.length > 0 ? (onSwitches / device.switches.length) * 100 : 100;
+  };
+
+  const healthScore = getHealthScore();
+
+  return (
+    <Card
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      className={`
+        device-card relative overflow-hidden transition-all duration-300
+        ${isHovered && isOnline ? 'shadow-lg scale-[1.02]' : 'shadow-md'}
+        ${deviceOffline ? 'opacity-70 grayscale' : ''}
+        ${dashboardOnline ? 'ring-2 ring-success' : ''}
+        ${variant === 'compact' ? 'max-w-xs' : 'max-w-md'}
+      `}
+      style={{
+        minWidth: '250px',
+        backgroundColor: dashboardOnline
+          ? 'hsl(var(--success) / 0.1)'
+          : dashboardOffline
+          ? 'hsl(var(--danger) / 0.1)'
+          : undefined,
+      }}
+    >
+      {/* Status Indicator with Animation - Top Left */}
+      <div className="absolute top-3 left-3 z-10">
+        <Badge
+          variant={isOnline ? 'secondary' : 'destructive'}
+          className={`
+            badge-${isOnline ? 'online' : 'offline'}
+            text-xs font-medium transition-all duration-200
+            ${isHovered ? 'scale-110' : ''}
+          `}
+        >
+          {isOnline ? (
+            <>
+              <div className="w-2 h-2 bg-success rounded-full mr-1.5 animate-pulse" />
+              Online
+            </>
+          ) : (
+            <>
+              <WifiOff className="w-3 h-3 mr-1.5" />
+              Offline
+            </>
+          )}
+        </Badge>
+      </div>
+
+      {/* Quick Actions - Top Right (shown on hover or always in compact mode) */}
+      {showActions && (
+        <div 
+          className={`
+            absolute top-3 right-3 z-10 flex gap-1
+            transition-opacity duration-200
+            ${!compact && !isHovered ? 'opacity-0' : 'opacity-100'}
+          `}
+        >
+          {/* Edit Button */}
           <Button
             variant="ghost"
             size="icon"
-            className="h-6 w-6"
+            className="h-8 w-8 bg-background/80 backdrop-blur-sm hover:bg-background"
             onClick={() => onEditDevice && onEditDevice(device)}
             title="Edit Device"
           >
-            <Settings className="h-3 w-3" />
+            <Edit className="h-4 w-4" />
           </Button>
+
+          {/* Restart Button */}
+          {isOnline && onRestartDevice && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 bg-background/80 backdrop-blur-sm hover:bg-background hover:text-primary"
+              onClick={() => onRestartDevice(device.id)}
+              title="Restart Device"
+            >
+              <RefreshCw className="h-4 w-4" />
+            </Button>
+          )}
+
+          {/* Delete Button */}
           {onDeleteDevice && (
             <Button
               variant="ghost"
               size="icon"
-              className="h-6 w-6 text-destructive"
+              className="h-8 w-8 bg-background/80 backdrop-blur-sm hover:bg-background hover:text-danger"
               onClick={() => onDeleteDevice(device.id)}
               title="Delete Device"
             >
-              <Trash2 className="h-3 w-3" />
+              <Trash2 className="h-4 w-4" />
             </Button>
           )}
         </div>
       )}
 
-      <CardHeader className="flex flex-col gap-2 pb-2 px-2">
-        <div className="w-full flex flex-col gap-1 items-center text-center">
-          <CardTitle className="text-lg font-semibold leading-tight truncate mb-1 flex flex-col items-center justify-center" style={{maxWidth: '100%', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}}>
-            <span>
+      <CardHeader className="pb-3 pt-12">
+        <div className="flex items-start gap-3">
+          {/* Device Icon */}
+          <div className={`
+            p-2 rounded-lg transition-colors
+            ${isOnline ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'}
+          `}>
+            {getDeviceIcon()}
+          </div>
+
+          {/* Device Info */}
+          <div className="flex-1 min-w-0">
+            <CardTitle className="text-lg font-semibold mb-1 truncate">
               {device.name}
-              {device.classroom && !device.name.includes(device.classroom) && ` (${device.classroom})`}
-            </span>
-          </CardTitle>
-          <div className="flex flex-col items-center gap-1 w-full">
-            <div className={`text-xs ${deviceOffline ? 'text-white/70' : 'text-muted-foreground'} truncate w-full`} style={{maxWidth: '100%', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}}>
-              {device.classroom ? `Classroom: ${device.classroom}` : `Location: ${device.location}`}
+            </CardTitle>
+            <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+              <div className="flex items-center gap-1.5">
+                <Signal className="w-3 h-3" />
+                <span className="truncate">
+                  {device.classroom || device.location}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Activity className="w-3 h-3" />
+                <span>
+                  {new Date(device.lastSeen).toLocaleString('en-US', {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                  })}
+                </span>
+              </div>
             </div>
           </div>
+
+          {/* Health Indicator */}
+          {isOnline && (
+            <div className="flex flex-col items-center gap-1">
+              <div className={`
+                text-xs font-semibold
+                ${healthScore >= 75 ? 'text-success' : healthScore >= 50 ? 'text-warning' : 'text-danger'}
+              `}>
+                {Math.round(healthScore)}%
+              </div>
+              <div className="text-[10px] text-muted-foreground">Health</div>
+            </div>
+          )}
         </div>
       </CardHeader>
-      { !compact && (
-        <CardContent>
-          {/* ...existing code for details, switches, PIR, actions... */}
-          <div className="grid gap-4 w-full p-0" style={{overflow: 'hidden'}}>
-            {/* Device Details */}
-            <div className={`flex flex-col gap-1 text-xs ${device.status === 'online' ? 'text-muted-foreground' : 'text-white/80'} bg-muted/50 rounded p-2 w-full`}>
-              <div className="flex flex-col gap-1 w-full">
-                <div className="flex items-center gap-2 w-full overflow-hidden">
-                  <span className={`font-medium ${device.status === 'online' ? 'text-primary' : 'text-white'} min-w-[60px]`}>MAC:</span>
-                  <span className={`truncate max-w-[140px] ${device.status === 'online' ? '' : 'text-white/90'}`}>{device.macAddress}</span>
-                </div>
-                <div className="flex items-center gap-2 w-full overflow-hidden">
-                  <span className={`font-medium ${device.status === 'online' ? '' : 'text-white'} min-w-[60px]`}>Location:</span>
-                  <span className={`truncate max-w-[140px] ${device.status === 'online' ? '' : 'text-white/90'}`}>{device.location}</span>
-                </div>
-                {device.classroom && (
-                  <div className="flex items-center gap-2 w-full overflow-hidden">
-                    <span className={`font-medium ${device.status === 'online' ? '' : 'text-white'} min-w-[60px]`}>Classroom:</span>
-                    <span className={`truncate max-w-[140px] ${device.status === 'online' ? '' : 'text-white/90'}`}>{device.classroom}</span>
-                  </div>
-                )}
-                <div className="flex items-center gap-2 w-full overflow-hidden">
-                  <span className={`font-medium ${device.status === 'online' ? '' : 'text-white'} min-w-[60px]`}>Last seen:</span>
-                  <span className={`truncate max-w-[140px] ${device.status === 'online' ? '' : 'text-white/90'}`}>{new Date(device.lastSeen).toLocaleString()}</span>
-                </div>
+      {!compact && (
+        <CardContent className="space-y-4">
+          {/* Device Details - Cleaner Layout */}
+          <div className="space-y-2">
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="flex flex-col gap-0.5">
+                <span className="text-muted-foreground">MAC Address</span>
+                <span className="font-mono text-[10px] truncate">
+                  {device.macAddress}
+                </span>
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <span className="text-muted-foreground">Location</span>
+                <span className="font-medium truncate">
+                  {device.location}
+                </span>
               </div>
             </div>
-            {/* Switches Table (conditionally rendered) */}
-            {showSwitches && (
-              <div className="mt-4">
-                <div className={`font-semibold text-sm mb-1 px-0 ${device.status === 'online' ? '' : 'text-white'}`}>Switches ({device.switches.length})</div>
-                {device.switches.length === 0 ? (
-                  <div className={`text-xs ${device.status === 'online' ? 'text-muted-foreground' : 'text-white/70'} px-0`}>No switches configured</div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full text-xs">
-                      <thead>
-                        <tr>
-                          <th className={`px-2 py-1 text-left ${device.status === 'online' ? '' : 'text-white'}`}>Name</th>
-                          <th className={`px-2 py-1 text-left ${device.status === 'online' ? '' : 'text-white'}`}>GPIO</th>
-                          <th className={`px-2 py-1 text-left ${device.status === 'online' ? '' : 'text-white'}`}>Type</th>
-                          <th className={`px-2 py-1 text-left ${device.status === 'online' ? '' : 'text-white'}`}>Manual</th>
-                          <th className={`px-2 py-1 text-left ${device.status === 'online' ? '' : 'text-white'}`}>Action</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {device.switches.map((sw, i) => {
-                          const isOn = sw.state;
-                          return (
-                            <tr
-                              key={sw.id || `${sw.name}-${sw.gpio ?? sw.relayGpio ?? i}`}
-                              className={
-                                `${device.status !== 'online' ? 'opacity-60' : ''} ${isOn ? (device.status === 'online' ? 'bg-green-100 text-green-900' : 'bg-red-200 text-red-900') : ''}`
-                              }
-                            >
-                              <td className={`truncate px-2 py-1 min-w-[70px] max-w-[120px] ${isOn ? 'font-semibold' : ''} ${device.status === 'online' ? '' : 'text-white/90'}`}>{sw.name}</td>
-                              <td className={`truncate px-2 py-1 min-w-[40px] max-w-[60px] ${isOn ? 'font-semibold' : ''} ${device.status === 'online' ? '' : 'text-white/90'}`}>{sw.gpio ?? sw.relayGpio}</td>
-                              <td className={`truncate px-2 py-1 min-w-[60px] max-w-[100px] ${isOn ? 'font-semibold' : ''} ${device.status === 'online' ? '' : 'text-white/90'}`}>{sw.type}</td>
-                              <td className={`truncate px-2 py-1 min-w-[40px] max-w-[60px] ${isOn ? 'font-semibold' : ''} ${device.status === 'online' ? '' : 'text-white/90'}`}>{sw.manualSwitchEnabled ? 'Yes' : 'No'}</td>
-                              <td className="px-2 py-1">
-                                <Button
-                                  size="sm"
-                                  variant={isOn ? 'default' : 'outline'}
-                                  onClick={() => {
-                                    const sid = sw.id;
-                                    if (sid) onToggleSwitch(device.id, sid);
-                                    else console.warn('Switch missing id when toggling', sw);
-                                  }}
-                                  disabled={device.status !== 'online'}
-                                  title={isOn ? 'Turn Off' : 'Turn On'}
-                                >
-                                  {isOn ? 'On' : 'Off'}
-                                </Button>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* PIR Sensor Info */}
-            {device.pirEnabled && (
-              <div className="mt-2 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className={`font-medium ${device.status === 'online' ? '' : 'text-white'}`}>PIR Sensor</span>
-                  <Badge variant="outline" className={device.pirEnabled ? (device.status === 'online' ? 'bg-green-500/10' : 'bg-white/20 text-white border-white/30') : 'bg-muted'}>
-                    {device.pirEnabled ? 'Active' : 'Disabled'}
-                  </Badge>
-                </div>
-                <div className={`text-xs ${device.status === 'online' ? 'text-muted-foreground' : 'text-white/70'}`}>
-                  {device.pirGpio && `GPIO ${device.pirGpio} • `}
-                  Auto-off delay: {device.pirAutoOffDelay || 30}s
-                </div>
-              </div>
-            )}
-
-            {/* Settings & Delete Buttons at the very bottom (conditionally rendered) */}
-            {showActions && (
-              <div className="flex justify-end items-center gap-2 w-full mt-6">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
-                  onClick={() => onEditDevice && onEditDevice(device)}
-                  title="Edit Device"
-                >
-                  <Settings className="h-4 w-4" />
-                </Button>
-                {onDeleteDevice && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 text-destructive"
-                    onClick={() => onDeleteDevice(device.id)}
-                    title="Delete Device"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                )}
-              </div>
-            )}
           </div>
+
+          {/* Switches Section with Better Styling */}
+          {showSwitches && device.switches.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-semibold">
+                  Switches ({device.switches.length})
+                </span>
+                <Badge variant="outline" className="text-xs">
+                  {device.switches.filter(sw => sw.state).length} Active
+                </Badge>
+              </div>
+              
+              <div className="space-y-2">
+                {device.switches.map((sw, i) => {
+                  const isOn = sw.state;
+                  return (
+                    <div
+                      key={sw.id || `${sw.name}-${sw.gpio ?? sw.relayGpio ?? i}`}
+                      className={`
+                        flex items-center justify-between p-2 rounded-lg border
+                        transition-all duration-200
+                        ${isOn 
+                          ? 'bg-success/10 border-success/20' 
+                          : 'bg-muted/50 border-border'
+                        }
+                      `}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <Power className={`w-3 h-3 ${isOn ? 'text-success' : 'text-muted-foreground'}`} />
+                          <span className={`text-sm font-medium truncate ${isOn ? 'text-success' : ''}`}>
+                            {sw.name}
+                          </span>
+                        </div>
+                        <div className="flex gap-2 mt-1 text-xs text-muted-foreground">
+                          <span>GPIO {sw.gpio ?? sw.relayGpio}</span>
+                          <span>•</span>
+                          <span>{sw.type}</span>
+                        </div>
+                      </div>
+
+                      <Button
+                        size="sm"
+                        variant={isOn ? 'default' : 'outline'}
+                        onClick={() => {
+                          const sid = sw.id;
+                          if (sid) onToggleSwitch(device.id, sid);
+                        }}
+                        disabled={!isOnline}
+                        className={`ml-2 min-w-[60px] ${isOn ? 'switch-on' : ''}`}
+                      >
+                        {isOn ? 'ON' : 'OFF'}
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* PIR Sensor Info - Enhanced */}
+          {device.pirEnabled && (
+            <div className="flex items-center justify-between p-3 bg-primary/5 rounded-lg border border-primary/20">
+              <div className="flex items-center gap-2">
+                <Activity className="w-4 h-4 text-primary" />
+                <div>
+                  <div className="text-sm font-medium">PIR Sensor</div>
+                  <div className="text-xs text-muted-foreground">
+                    GPIO {device.pirGpio} • {device.pirAutoOffDelay || 30}s delay
+                  </div>
+                </div>
+              </div>
+              <Badge className="badge-info">
+                Active
+              </Badge>
+            </div>
+          )}
         </CardContent>
       )}
     </Card>
