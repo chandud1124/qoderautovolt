@@ -212,14 +212,47 @@ const Register: React.FC = () => {
       setTimeout(() => navigate('/login'), 5000);
     } catch (err: unknown) {
       let message = 'Failed to connect to the server. Please try again.';
-      if (err && typeof err === 'object' && 'response' in err && err.response && typeof err.response === 'object' && 'data' in err.response && err.response.data && typeof err.response.data === 'object' && 'message' in err.response.data) {
-        message = (err.response.data as { message?: string }).message || message;
+      let validationErrors: string[] = [];
+      
+      console.error('Registration error (raw):', err);
+      
+      // The API interceptor rejects with error.response?.data directly
+      // So we need to check if err itself has the error structure
+      let errorData: { message?: string; errors?: Array<{ field: string; message: string; value?: string }> } | null = null;
+      
+      if (err && typeof err === 'object') {
+        // Check if it's the direct error data from interceptor
+        if ('errors' in err || 'message' in err) {
+          errorData = err as { message?: string; errors?: Array<{ field: string; message: string; value?: string }> };
+        }
+        // Check if it's still wrapped in response.data
+        else if ('response' in err && err.response && typeof err.response === 'object' && 'data' in err.response && err.response.data && typeof err.response.data === 'object') {
+          errorData = err.response.data as { message?: string; errors?: Array<{ field: string; message: string; value?: string }> };
+        }
       }
+      
+      if (errorData) {
+        // Check for validation errors array (backend format)
+        if (errorData.errors && Array.isArray(errorData.errors)) {
+          validationErrors = errorData.errors.map((e: { field: string; message: string; value?: string }) => 
+            `• ${e.field}: ${e.message}${e.value !== undefined ? ` (got: "${e.value}")` : ''}`
+          );
+          message = validationErrors.join('\n');
+        } else if (errorData.message) {
+          message = errorData.message;
+        }
+      }
+      
       toast({
-        title: 'Error',
+        title: 'Validation Error',
         description: message,
-        variant: 'destructive'
+        variant: 'destructive',
+        duration: 10000 // Show longer for validation errors
       });
+      
+      // Log for debugging
+      console.error('Registration validation errors:', validationErrors.length > 0 ? validationErrors : message);
+      console.error('Parsed error data:', errorData);
     }
     setLoading(false);
   };

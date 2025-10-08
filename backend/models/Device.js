@@ -227,9 +227,12 @@ deviceSchema.index({ lastSeen: -1 }); // Index for recent device queries
 
 // Pre-save middleware to ensure switches have unique names and normalize MAC address
 deviceSchema.pre('save', function(next) {
-  // Normalize MAC address: remove colons/dashes, lowercase
+  // Normalize MAC address: ensure proper colon formatting (AA:BB:CC:DD:EE:FF)
   if (this.macAddress) {
-    this.macAddress = this.macAddress.replace(/[^a-fA-F0-9]/g, '').toLowerCase();
+    // Remove all non-alphanumeric characters first
+    const cleanMac = this.macAddress.replace(/[^a-fA-F0-9]/g, '').toLowerCase();
+    // Format with colons: every 2 characters, separated by colons
+    this.macAddress = cleanMac.replace(/(.{2})(?=.)/g, '$1:');
   }
 
   const deviceType = this.deviceType || 'esp32';

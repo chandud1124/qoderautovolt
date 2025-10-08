@@ -263,14 +263,13 @@ void loadOfflineEventsFromStorage() {
   Serial.printf("[STORAGE] Loaded %d offline events\n", (int)offlineEvents.size());
 }
 
-#define MQTT_BROKER "192.168.0.108" // Set to backend IP or broker IP
-#define MQTT_PORT 1883
+// MQTT Topics - using esp32 topics for backend compatibility
+#define SWITCH_TOPIC "esp32/switches"
+#define STATE_TOPIC "esp32/state"
+#define TELEMETRY_TOPIC "esp32/telemetry"
+#define CONFIG_TOPIC "esp32/config"
 #define MQTT_USER ""
 #define MQTT_PASSWORD ""
-#define SWITCH_TOPIC "esp8266/switches"
-#define STATE_TOPIC "esp8266/state"
-#define TELEMETRY_TOPIC "esp8266/telemetry"
-#define CONFIG_TOPIC "esp8266/config"
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
@@ -973,13 +972,19 @@ void displayIPAddress() {
   if (mqttClient.connected()) {
     Serial.println("CONNECTED");
     Serial.print("MQTT Broker: ");
-    Serial.print(MQTT_BROKER);
+    Serial.print(MQTT_BROKER_IP);
     Serial.print(":");
-    Serial.println(MQTT_PORT);
+    Serial.println(MQTT_BROKER);
     Serial.print("MQTT Client ID: ");
     Serial.println(mqttClientId);
   } else {
     Serial.println("DISCONNECTED");
+    Serial.print("MQTT Broker Config: ");
+    Serial.print(MQTT_BROKER_IP);
+    Serial.print(":");
+    Serial.println(MQTT_BROKER);
+    Serial.print("MQTT State Code: ");
+    Serial.println(mqttClient.state());
   }
   
   // Connection State
@@ -1044,7 +1049,8 @@ void setup() {
   loadOfflineEventsFromStorage();
   setup_wifi();
   Serial.println("WiFi setup complete, initializing MQTT...");
-  mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
+  Serial.printf("MQTT Broker: %s:%d\n", MQTT_BROKER_IP, MQTT_BROKER);
+  mqttClient.setServer(MQTT_BROKER_IP, MQTT_BROKER);
   mqttClient.setBufferSize(256);  // Reduced for ESP8266 memory
   mqttClient.setCallback(mqttCallback);
   mqttClient.subscribe(CONFIG_TOPIC);

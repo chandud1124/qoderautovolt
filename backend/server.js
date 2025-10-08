@@ -1240,18 +1240,18 @@ app.use('*', (req, res) => {
 
 // Start the server (single attempt)
 const PORT = process.env.PORT || 3001;
+const HOST = '0.0.0.0'; // Listen on all network interfaces (allows network access)
 if (io && io.opts) {
   io.opts.cors = {
     origin: '*', // You can restrict this to your frontend URLs
     methods: ['GET', 'POST']
   };
 }
-server.listen(PORT, '127.0.0.1', () => {
+server.listen(PORT, HOST, () => {
   console.log(`[SERVER] Listen callback executed`);
-  console.log(`[DEBUG] Server listening on 127.0.0.1:${PORT}`);
-  const host = '127.0.0.1';
-  console.log(`Server running on ${host}:${PORT}`);
-  console.log(`Server accessible on localhost:${PORT} and network IPs`);
+  console.log(`[DEBUG] Server listening on ${HOST}:${PORT}`);
+  console.log(`Server running on ${HOST}:${PORT}`);
+  console.log(`Server accessible on localhost:${PORT} and all network interfaces`);
   console.log(`Environment: ${process.env.NODE_ENV}`);
 
   // Debug: Check if server is actually listening

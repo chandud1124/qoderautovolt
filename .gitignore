@@ -121,6 +121,52 @@ ssl/
 # ESP32 build files
 esp32/build/
 esp32/.pio/
+.pio/
+
+# Test and debug scripts
+test_*.js
+test_*.cjs
+test_*.mjs
+test-*.js
+test-*.cjs
+check_*.js
+check_*.cjs
+check_*.mjs
+debug_*.js
+debug_*.cjs
+diagnose_*.cjs
+analyze_*.cjs
+simple_*.js
+*diagnostic*.js
+*diagnostic*.ps1
+*diagnostic*.bat
+verify_*.cjs
+update_*.cjs
+fix-*.ps1
+fix_*.cjs
+find_*.js
+monitor.js
+
+# Unused folders
+piSignage/
+raspberry_pi_display/
+
+# Temporary query files
+query
+
+# Temporary text files
+server_error.txt
+server_output.txt
+server_*.txt
+
+# Sample files
+sample_*.csv
+sample_*.json
+
+# Old setup scripts
+configure-ip.bat
+configure-ip.sh
+setup-windows.bat
 
 # OS generated files
 Thumbs.db

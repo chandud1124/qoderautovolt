@@ -102,11 +102,27 @@ class SocketService {
       console.log('[Socket.IO] Starting connection attempt');
 
       try {
-        // In development, connect directly to backend (port 3001)
-        // In production, connect to the backend origin
+        // Use smart backend detection for both development and production
+        // In development with Vite proxy, socket.io needs direct backend connection
         const isDevelopment = import.meta.env.DEV;
-        const backendUrl = isDevelopment ? 'http://localhost:3001' : getBackendOrigin();
-        console.log('[Socket.IO] Connecting to:', backendUrl, 'Development mode:', isDevelopment);
+        let backendUrl: string;
+        
+        if (isDevelopment) {
+          // Check if we're accessing from localhost or a network IP
+          const currentHost = window.location.hostname;
+          if (currentHost === 'localhost' || currentHost === '127.0.0.1') {
+            // Local development: use localhost
+            backendUrl = 'http://localhost:3001';
+          } else {
+            // Network access: use current host IP with backend port
+            backendUrl = `http://${currentHost}:3001`;
+          }
+        } else {
+          // Production: use the detected backend origin
+          backendUrl = getBackendOrigin();
+        }
+        
+        console.log('[Socket.IO] Connecting to:', backendUrl, 'Development mode:', isDevelopment, 'Current host:', window.location.hostname);
 
         this.socket = io(backendUrl, {
           transports: ['polling', 'websocket'],

@@ -11,6 +11,7 @@ import { AlertCircle, Plus, Edit, Trash2, Monitor, Tv, Smartphone, Settings, Cpu
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { toast } from 'sonner';
 import api from '@/services/api';
+import { MacAddressInput } from '@/components/ui/mac-address-input';
 
 const getStatusBadge = (status: string) => {
   const variants = {
@@ -451,9 +452,8 @@ const BoardForm: React.FC<BoardFormProps> = ({
 
   const validateMacAddress = (mac: string) => {
     if (!mac.trim()) return ''; // MAC is optional
-    const macRegex = /^([0-9A-F]{2}[:-]){5}([0-9A-F]{2})$/i;
-    if (!macRegex.test(mac)) return 'MAC address must be in format XX:XX:XX:XX:XX:XX';
-    return '';
+    // The MacAddressInput component already formats and validates, so we just check if it's not empty
+    return mac.length === 17 ? '' : 'MAC address must be in format AA:BB:CC:DD:EE:FF';
   };
 
   const validateIpAddress = (ip: string) => {
@@ -580,10 +580,10 @@ const BoardForm: React.FC<BoardFormProps> = ({
         <div className="grid grid-cols-2 gap-4">
           <div>
             <Label htmlFor="macAddress">MAC Address</Label>
-            <Input
+            <MacAddressInput
               id="macAddress"
               value={formData.macAddress}
-              onChange={(e) => handleInputChange('macAddress', e.target.value)}
+              onChange={(value) => handleInputChange('macAddress', value)}
               placeholder="B8:27:EB:XX:XX:XX"
               className={validationErrors.macAddress ? 'border-red-500' : ''}
             />

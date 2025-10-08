@@ -102,27 +102,21 @@ const createDevice = async (req, res) => {
       });
     }
 
-    // Accept any non-empty string for MAC address (let normalization handle it)
+    // Accept any non-empty string for MAC address (let model normalization handle it)
     if (!macAddress || typeof macAddress !== 'string' || macAddress.length < 6) {
       return res.status(400).json({
         error: 'Validation failed',
         details: 'MAC address is required.'
       });
     }
-    // Normalize MAC address: remove colons/dashes, lowercase
-    function normalizeMac(mac) {
-      return mac.replace(/[^a-fA-F0-9]/g, '').toLowerCase();
-    }
-    const normalizedMac = normalizeMac(macAddress);
     // Check for existing device with same MAC address (any format)
     const existingDevice = await Device.findOne({
       $or: [
         { macAddress },
         { macAddress: macAddress.toUpperCase() },
         { macAddress: macAddress.toLowerCase() },
-        { macAddress: normalizedMac },
-        { macAddress: normalizedMac.toUpperCase() },
-        { macAddress: normalizedMac.toLowerCase() }
+        { macAddress: macAddress.replace(/[^a-fA-F0-9]/g, '').toLowerCase() },
+        { macAddress: macAddress.replace(/[^a-fA-F0-9]/g, '').toUpperCase() }
       ]
     });
     if (existingDevice) {
@@ -183,7 +177,7 @@ const createDevice = async (req, res) => {
 
     const device = new Device({
       name,
-  macAddress: normalizedMac,
+  macAddress,
       ipAddress,
       location,
       classroom,
@@ -384,7 +378,7 @@ const updateDevice = async (req, res) => {
 
     // Update device
     device.name = name || device.name;
-  device.macAddress = normalizedMac || device.macAddress;
+  device.macAddress = macAddress || device.macAddress;
     device.ipAddress = ipAddress || device.ipAddress;
     device.location = location || device.location;
     device.classroom = classroom || device.classroom;

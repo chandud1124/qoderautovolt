@@ -14,6 +14,7 @@ import { Copy, Check, Eye, EyeOff, Shield, AlertTriangle, CheckCircle, XCircle, 
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { MacAddressInput } from '@/components/ui/mac-address-input';
 
 const switchTypes = ['relay', 'light', 'fan', 'outlet', 'projector', 'ac'] as const;
 const blocks = ['A', 'B', 'C', 'D'];
@@ -61,7 +62,7 @@ const switchSchema = z.object({
 
 const formSchema = z.object({
   name: z.string().min(1, 'Required'),
-  macAddress: z.string().regex(/^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/, 'Invalid MAC'),
+  macAddress: z.string().min(1, 'Required'),
   ipAddress: z.string().regex(/^(\d{1,3}\.){3}\d{1,3}$/, 'Invalid IP').refine(v => v.split('.').every(o => +o >= 0 && +o <= 255), 'Octets 0-255'),
   location: z.string().min(1),
   classroom: z.string().optional(),
@@ -336,7 +337,7 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
           <form onSubmit={form.handleSubmit(submit)} className="space-y-6">
             <div className="space-y-4">
               <FormField control={form.control} name="name" render={({ field }) => (<FormItem><FormLabel>Device Name</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>)} />
-              <FormField control={form.control} name="macAddress" render={({ field }) => (<FormItem><FormLabel>MAC Address</FormLabel><FormControl><Input {...field} placeholder="00:11:22:33:44:55" /></FormControl><FormMessage /></FormItem>)} />
+              <FormField control={form.control} name="macAddress" render={({ field }) => (<FormItem><FormLabel>MAC Address</FormLabel><FormControl><MacAddressInput {...field} placeholder="AA:BB:CC:DD:EE:FF" /></FormControl><FormMessage /></FormItem>)} />
               <FormField control={form.control} name="ipAddress" render={({ field }) => (<FormItem><FormLabel>IP Address</FormLabel><FormControl><Input {...field} placeholder="192.168.1.100" /></FormControl><FormMessage /></FormItem>)} />
               <div className="grid grid-cols-2 gap-4">
                 <FormItem><FormLabel>Block</FormLabel><Select value={block || ''} onValueChange={v => setBlock(v)}><FormControl><SelectTrigger><SelectValue placeholder="Block" /></SelectTrigger></FormControl><SelectContent>{blocks.map(b => <SelectItem key={b} value={b}>{b}</SelectItem>)}</SelectContent></Select></FormItem>
@@ -864,9 +865,42 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
                   </div>
                 );
               })}
-              <Button type="button" variant="outline" onClick={() => { const sw = form.getValues('switches') || []; form.setValue('switches', [...sw, { id: `switch-${Date.now()}-${Math.floor(Math.random()*10000)}`, name: '', gpio: 0, relayGpio: 0, type: 'relay', icon: 'lightbulb', state: false, manualSwitchEnabled: false, manualMode: 'maintained', manualActiveLow: true, usePir: false, dontAutoOff: false }]); }}>Add Switch</Button>
-              {/* Added manualMode/manualActiveLow defaults when adding a new switch */}
-              {/* NOTE: Above Add Switch handler updated to include them if needed */}
+              <Button type="button" variant="outline" onClick={() => { 
+                const sw = form.getValues('switches') || []; 
+                const deviceType = form.getValues('deviceType') || 'esp32';
+                const switchIndex = sw.length;
+                
+                // ESP8266 GPIO pin mapping (matches esp8266_config.h)
+                const esp8266RelayPins = [4, 5, 12, 13];
+                const esp8266ManualPins = [14, 16, 0, 2];
+                
+                // ESP32 default GPIO pin mapping
+                const esp32RelayPins = [16, 17, 18, 19, 21, 22];
+                const esp32ManualPins = [25, 26, 27, 32, 33, 23];
+                
+                const relayPins = deviceType === 'esp8266' ? esp8266RelayPins : esp32RelayPins;
+                const manualPins = deviceType === 'esp8266' ? esp8266ManualPins : esp32ManualPins;
+                
+                const suggestedRelayGpio = relayPins[switchIndex] || relayPins[0] || 16;
+                const suggestedManualGpio = manualPins[switchIndex] || manualPins[0] || 25;
+                
+                form.setValue('switches', [...sw, { 
+                  id: `switch-${Date.now()}-${Math.floor(Math.random()*10000)}`, 
+                  name: '', 
+                  gpio: suggestedRelayGpio, 
+                  relayGpio: suggestedRelayGpio, 
+                  type: 'relay', 
+                  icon: 'lightbulb', 
+                  state: false, 
+                  manualSwitchEnabled: false, 
+                  manualSwitchGpio: suggestedManualGpio,
+                  manualMode: 'maintained', 
+                  manualActiveLow: true, 
+                  usePir: false, 
+                  dontAutoOff: false 
+                }]); 
+              }}>Add Switch</Button>
+              {/* Auto-assigns correct GPIO pins based on device type (ESP8266/ESP32) */}
             </div>
             <DialogFooter className="sticky bottom-0 bg-transparent py-4 z-10"><Button type="submit" className="w-full">Save</Button></DialogFooter>
           </form>
