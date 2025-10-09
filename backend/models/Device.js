@@ -11,11 +11,30 @@ const switchSchema = new mongoose.Schema({
   },
   gpio: {
     type: Number,
-    required: [true, 'GPIO pin number is required'],
+    required: false, // Make GPIO optional for flexible device configuration
     min: [0, 'GPIO pin must be >= 0'],
     max: [39, 'GPIO pin must be <= 39'], // Will be validated in pre-save
     validate: {
       validator: function(v) {
+        if (v === undefined || v === null) return true; // Allow undefined GPIOs
+        // Allow problematic pins for existing devices during updates to prevent bulk toggle failures
+        // Only enforce strict validation for new devices
+        return gpioUtils.validateGpioPin(v, true, 'esp32'); // Default to ESP32, will be re-validated in pre-save
+      },
+      message: function(props) {
+        const status = gpioUtils.getGpioPinStatus(props.value, 'esp32');
+        return status.reason;
+      }
+    }
+  },
+  relayGpio: {
+    type: Number,
+    // Not required for backward compatibility - will be set to gpio value if missing
+    min: [0, 'GPIO pin must be >= 0'],
+    max: [39, 'GPIO pin must be <= 39'], // Will be validated in pre-save
+    validate: {
+      validator: function(v) {
+        if (v === undefined || v === null) return true; // Allow undefined for backward compatibility
         // Allow problematic pins for existing devices during updates to prevent bulk toggle failures
         // Only enforce strict validation for new devices
         return gpioUtils.validateGpioPin(v, true, 'esp32'); // Default to ESP32, will be re-validated in pre-save
@@ -153,12 +172,15 @@ const deviceSchema = new mongoose.Schema({
       },
       {
         validator: function(switches) {
-          const gpios = switches.map(s => s.gpio);
-          const manual = switches.filter(s => s.manualSwitchEnabled && s.manualSwitchGpio !== undefined).map(s => s.manualSwitchGpio);
-          const all = [...gpios, ...manual];
+          const gpios = switches.map(s => s.gpio).filter(g => g !== undefined && g !== null);
+          const relayGpios = switches.map(s => s.relayGpio).filter(g => g !== undefined && g !== null);
+          const manual = switches.filter(s => s.manualSwitchEnabled && s.manualSwitchGpio !== undefined && s.manualSwitchGpio !== null).map(s => s.manualSwitchGpio);
+          // Only check uniqueness if relayGpio is different from gpio
+          const uniqueRelayGpios = relayGpios.filter(g => !gpios.includes(g));
+          const all = [...gpios, ...uniqueRelayGpios, ...manual];
           return new Set(all).size === all.length;
         },
-        message: 'Each switch (including manual switch GPIOs) must use a unique GPIO pin'
+        message: 'Each switch (including relay GPIOs and manual switch GPIOs) must use a unique GPIO pin'
       }
     ],
     required: true
@@ -188,6 +210,26 @@ const deviceSchema = new mongoose.Schema({
     type: Number,
     min: 0,
     default: 30 // 30 seconds default
+  },
+  notificationSettings: {
+    afterTime: {
+      type: String,
+      match: [/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/, 'Time must be in HH:MM format (24-hour)']
+    },
+    daysOfWeek: [{
+      type: Number,
+      min: 0,
+      max: 6,
+      enum: [0, 1, 2, 3, 4, 5, 6] // 0 = Sunday, 1 = Monday, etc.
+    }],
+    enabled: {
+      type: Boolean,
+      default: false
+    },
+    lastTriggered: {
+      type: Date,
+      default: null
+    }
   },
   assignedUsers: [{
     type: mongoose.Schema.Types.ObjectId,
@@ -238,26 +280,54 @@ deviceSchema.pre('save', function(next) {
   const deviceType = this.deviceType || 'esp32';
   const maxPin = deviceType === 'esp8266' ? 16 : 39;
 
+  // Ensure relayGpio is set for backward compatibility
+  for (const sw of this.switches) {
+    if (sw.relayGpio === undefined || sw.relayGpio === null) {
+      sw.relayGpio = sw.gpio;
+    }
+  }
+
   // Validate GPIO pins based on device type
   for (const sw of this.switches) {
-    if (sw.gpio > maxPin) {
-      next(new Error(`GPIO pin ${sw.gpio} exceeds maximum for ${deviceType.toUpperCase()} (${maxPin})`));
-      return;
+    // Skip GPIO validation if gpio is undefined (optional for flexible configuration)
+    if (sw.gpio !== undefined && sw.gpio !== null) {
+      if (sw.gpio > maxPin) {
+        next(new Error(`GPIO pin ${sw.gpio} exceeds maximum for ${deviceType.toUpperCase()} (${maxPin})`));
+        return;
+      }
+      // Validate pin safety
+      if (!gpioUtils.validateGpioPin(sw.gpio, true, deviceType)) {
+        const status = gpioUtils.getGpioPinStatus(sw.gpio, deviceType);
+        next(new Error(`Switch GPIO ${sw.gpio}: ${status.reason}`));
+        return;
+      }
     }
-    if (sw.manualSwitchGpio !== undefined && sw.manualSwitchGpio > maxPin) {
-      next(new Error(`Manual switch GPIO pin ${sw.manualSwitchGpio} exceeds maximum for ${deviceType.toUpperCase()} (${maxPin})`));
-      return;
+
+    // Skip relay GPIO validation if relayGpio is undefined
+    if (sw.relayGpio !== undefined && sw.relayGpio !== null) {
+      if (sw.relayGpio > maxPin) {
+        next(new Error(`Relay GPIO pin ${sw.relayGpio} exceeds maximum for ${deviceType.toUpperCase()} (${maxPin})`));
+        return;
+      }
+      // Validate pin safety
+      if (!gpioUtils.validateGpioPin(sw.relayGpio, true, deviceType)) {
+        const status = gpioUtils.getGpioPinStatus(sw.relayGpio, deviceType);
+        next(new Error(`Switch relay GPIO ${sw.relayGpio}: ${status.reason}`));
+        return;
+      }
     }
-    // Validate pin safety
-    if (!gpioUtils.validateGpioPin(sw.gpio, true, deviceType)) {
-      const status = gpioUtils.getGpioPinStatus(sw.gpio, deviceType);
-      next(new Error(`Switch GPIO ${sw.gpio}: ${status.reason}`));
-      return;
-    }
-    if (sw.manualSwitchEnabled && sw.manualSwitchGpio !== undefined && !gpioUtils.validateGpioPin(sw.manualSwitchGpio, true, deviceType)) {
-      const status = gpioUtils.getGpioPinStatus(sw.manualSwitchGpio, deviceType);
-      next(new Error(`Manual switch GPIO ${sw.manualSwitchGpio}: ${status.reason}`));
-      return;
+
+    // Skip manual switch GPIO validation if not enabled or undefined
+    if (sw.manualSwitchEnabled && sw.manualSwitchGpio !== undefined && sw.manualSwitchGpio !== null) {
+      if (sw.manualSwitchGpio > maxPin) {
+        next(new Error(`Manual switch GPIO pin ${sw.manualSwitchGpio} exceeds maximum for ${deviceType.toUpperCase()} (${maxPin})`));
+        return;
+      }
+      if (!gpioUtils.validateGpioPin(sw.manualSwitchGpio, true, deviceType)) {
+        const status = gpioUtils.getGpioPinStatus(sw.manualSwitchGpio, deviceType);
+        next(new Error(`Manual switch GPIO ${sw.manualSwitchGpio}: ${status.reason}`));
+        return;
+      }
     }
   }
 

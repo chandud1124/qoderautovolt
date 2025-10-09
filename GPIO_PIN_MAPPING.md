@@ -144,6 +144,21 @@ const int manualSwitchPins[] = {14, 16, 0, 2};
 #define NUM_SWITCHES 4
 ```
 
+### **Backend Config** (`backend/utils/gpioUtils.js`)
+```javascript
+// ESP8266 recommended pins (matches firmware config)
+ESP8266_RECOMMENDED_PINS = {
+  relay: {
+    primary: [4, 5, 12, 13],    // Matches esp8266_config.h
+    secondary: [14, 16]         // Alternative pins
+  },
+  manual: {
+    primary: [14, 16, 0, 2],    // Matches esp8266_config.h
+    secondary: [13, 1, 3]       // Alternative pins
+  }
+}
+```
+
 ### **Frontend Config** (`src/components/DeviceConfigDialog.tsx`)
 ```typescript
 // ESP8266 GPIO pin mapping (matches esp8266_config.h)
@@ -249,7 +264,7 @@ You can manually change GPIO pins in the device configuration:
 
 ---
 
-**Date Updated:** October 8, 2025  
+**Date Updated:** October 9, 2025  
 **Configuration Source:** `esp32/esp8266_config.h`  
 **Frontend Implementation:** `src/components/DeviceConfigDialog.tsx`  
 **Backend Handler:** `backend/server.js` (MQTT config publish)

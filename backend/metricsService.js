@@ -134,6 +134,19 @@ const anomalySeverity = new promClient.Gauge({
   labelNames: ['device_id', 'device_name', 'classroom']
 });
 
+// Time limit exceeded metrics
+const timeLimitExceededCount = new promClient.Counter({
+  name: 'switch_time_limit_exceeded_total',
+  help: 'Total number of switch time limit exceeded events',
+  labelNames: ['device_id', 'device_name', 'switch_id', 'switch_name', 'classroom']
+});
+
+const switchTimeOnMinutes = new promClient.Gauge({
+  name: 'switch_time_on_minutes',
+  help: 'Current time a switch has been ON in minutes',
+  labelNames: ['device_id', 'device_name', 'switch_id', 'switch_name', 'classroom']
+});
+
 // Register all metrics
 register.registerMetric(deviceOnCount);
 register.registerMetric(deviceOffCount);
@@ -149,6 +162,8 @@ register.registerMetric(deviceUptimeHours);
 register.registerMetric(deviceDowntimeHours);
 register.registerMetric(anomalyCount);
 register.registerMetric(anomalySeverity);
+register.registerMetric(timeLimitExceededCount);
+register.registerMetric(switchTimeOnMinutes);
 
 // Real device data from database - no mock data used
 

@@ -53,11 +53,19 @@ const validateDevice = [
                 if (!sw.name) {
                     throw new Error(`Switch ${index + 1} name is required`);
                 }
-                if (typeof sw.gpio !== 'number' || sw.gpio < 0 || sw.gpio > 39) {
+                // GPIO is optional for switches
+                if (sw.gpio !== undefined && (typeof sw.gpio !== 'number' || sw.gpio < 0 || sw.gpio > 39)) {
                     throw new Error(`Switch ${index + 1} has invalid GPIO pin`);
                 }
-                if ([6, 7, 8, 9, 10, 11].includes(sw.gpio)) {
+                if (sw.gpio !== undefined && [6, 7, 8, 9, 10, 11].includes(sw.gpio)) {
                     throw new Error(`Switch ${index + 1} uses reserved GPIO pin`);
+                }
+                // manualSwitchGpio is also optional
+                if (sw.manualSwitchGpio !== undefined && (typeof sw.manualSwitchGpio !== 'number' || sw.manualSwitchGpio < 0 || sw.manualSwitchGpio > 39)) {
+                    throw new Error(`Switch ${index + 1} has invalid manual switch GPIO pin`);
+                }
+                if (sw.manualSwitchGpio !== undefined && [6, 7, 8, 9, 10, 11].includes(sw.manualSwitchGpio)) {
+                    throw new Error(`Switch ${index + 1} uses reserved manual switch GPIO pin`);
                 }
             });
             return true;
@@ -133,11 +141,19 @@ const validateDeviceUpdate = [
                 if (!sw.name) {
                     throw new Error(`Switch ${index + 1} name is required`);
                 }
-                if (typeof sw.gpio !== 'number' || sw.gpio < 0 || sw.gpio > 39) {
+                // GPIO is optional for switches
+                if (sw.gpio !== undefined && (typeof sw.gpio !== 'number' || sw.gpio < 0 || sw.gpio > 39)) {
                     throw new Error(`Switch ${index + 1} has invalid GPIO pin`);
                 }
-                if ([6, 7, 8, 9, 10, 11].includes(sw.gpio)) {
+                if (sw.gpio !== undefined && [6, 7, 8, 9, 10, 11].includes(sw.gpio)) {
                     throw new Error(`Switch ${index + 1} uses reserved GPIO pin`);
+                }
+                // manualSwitchGpio is also optional
+                if (sw.manualSwitchGpio !== undefined && (typeof sw.manualSwitchGpio !== 'number' || sw.manualSwitchGpio < 0 || sw.manualSwitchGpio > 39)) {
+                    throw new Error(`Switch ${index + 1} has invalid manual switch GPIO pin`);
+                }
+                if (sw.manualSwitchGpio !== undefined && [6, 7, 8, 9, 10, 11].includes(sw.manualSwitchGpio)) {
+                    throw new Error(`Switch ${index + 1} uses reserved manual switch GPIO pin`);
                 }
             });
             return true;

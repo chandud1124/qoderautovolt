@@ -540,7 +540,8 @@ const useDevicesInternal = () => {
       if (deviceData.switches) {
         mapped.switches = deviceData.switches.map(sw => ({
           name: sw.name,
-          gpio: (sw as any).relayGpio ?? (sw as any).gpio ?? 0,
+          gpio: (sw as any).gpio ?? 0,
+          relayGpio: (sw as any).relayGpio ?? (sw as any).gpio ?? 0,
           type: sw.type || 'relay'
         }));
       }
@@ -581,7 +582,8 @@ const useDevicesInternal = () => {
       if (updates.switches) {
         outbound.switches = updates.switches.map(sw => ({
           ...sw,
-          gpio: (sw as any).relayGpio ?? (sw as any).gpio
+          gpio: (sw as any).gpio,
+          relayGpio: (sw as any).relayGpio ?? (sw as any).gpio
         }));
       }
       const response = await deviceAPI.updateDevice(deviceId, outbound);
@@ -589,6 +591,8 @@ const useDevicesInternal = () => {
         prev.map(device =>
           device.id === deviceId ? {
             ...response.data.data,
+            // Preserve deviceType from updates if backend doesn't return it
+            deviceType: response.data.data.deviceType ?? updates.deviceType ?? device.deviceType,
             switches: response.data.data.switches.map((sw: any) => ({
               ...sw,
               id: sw.id || sw._id?.toString(),

@@ -88,6 +88,7 @@ const createDevice = async (req, res) => {
       ipAddress,
       location,
       classroom,
+      deviceType = 'esp32',
       pirEnabled = false,
       pirGpio,
       pirAutoOffDelay = 300, // 5 minutes default
@@ -109,14 +110,21 @@ const createDevice = async (req, res) => {
         details: 'MAC address is required.'
       });
     }
-    // Check for existing device with same MAC address (any format)
+    // Check for existing device with same MAC address (normalize to colon format for comparison)
+    const normalizeMacForCheck = (mac) => {
+      const cleanMac = mac.replace(/[^a-fA-F0-9]/g, '').toLowerCase();
+      return cleanMac.replace(/(.{2})(?=.)/g, '$1:');
+    };
+    const normalizedMacForCheck = normalizeMacForCheck(macAddress);
+    
     const existingDevice = await Device.findOne({
       $or: [
         { macAddress },
         { macAddress: macAddress.toUpperCase() },
         { macAddress: macAddress.toLowerCase() },
         { macAddress: macAddress.replace(/[^a-fA-F0-9]/g, '').toLowerCase() },
-        { macAddress: macAddress.replace(/[^a-fA-F0-9]/g, '').toUpperCase() }
+        { macAddress: macAddress.replace(/[^a-fA-F0-9]/g, '').toUpperCase() },
+        { macAddress: normalizedMacForCheck }
       ]
     });
     if (existingDevice) {
@@ -181,12 +189,14 @@ const createDevice = async (req, res) => {
       ipAddress,
       location,
       classroom,
+      deviceType,
       pirEnabled,
       pirGpio,
       pirAutoOffDelay,
       switches: switches.map(sw => ({
         name: sw.name,
         gpio: sw.gpio,
+        relayGpio: sw.relayGpio ?? sw.gpio, // Ensure relayGpio is set
         type: sw.type || 'relay',
         state: false, // force default off; ignore provided state
         icon: sw.icon || 'lightbulb',
@@ -329,6 +339,7 @@ const updateDevice = async (req, res) => {
       ipAddress,
       location,
       classroom,
+      deviceType,
       pirEnabled,
       pirGpio,
       pirAutoOffDelay,
@@ -341,7 +352,11 @@ const updateDevice = async (req, res) => {
     }
 
     function normalizeMac(mac) {
-      return mac.replace(/[^a-fA-F0-9]/g, '').toLowerCase();
+      // Normalize MAC address: ensure proper colon formatting (AA:BB:CC:DD:EE:FF)
+      // Remove all non-alphanumeric characters first
+      const cleanMac = mac.replace(/[^a-fA-F0-9]/g, '').toLowerCase();
+      // Format with colons: every 2 characters, separated by colons
+      return cleanMac.replace(/(.{2})(?=.)/g, '$1:');
     }
     let normalizedMac = macAddress ? normalizeMac(macAddress) : undefined;
     if (macAddress && (typeof macAddress !== 'string' || macAddress.length < 6)) {
@@ -357,9 +372,9 @@ const updateDevice = async (req, res) => {
           { macAddress },
           { macAddress: macAddress.toUpperCase() },
           { macAddress: macAddress.toLowerCase() },
-          { macAddress: normalizedMac },
-          { macAddress: normalizedMac.toUpperCase() },
-          { macAddress: normalizedMac.toLowerCase() }
+          { macAddress: macAddress.replace(/[^a-fA-F0-9]/g, '').toLowerCase() },
+          { macAddress: macAddress.replace(/[^a-fA-F0-9]/g, '').toUpperCase() },
+          { macAddress: normalizedMac }
         ],
         _id: { $ne: deviceId }
       });
@@ -382,6 +397,7 @@ const updateDevice = async (req, res) => {
     device.ipAddress = ipAddress || device.ipAddress;
     device.location = location || device.location;
     device.classroom = classroom || device.classroom;
+    device.deviceType = deviceType || device.deviceType;
     device.pirEnabled = pirEnabled !== undefined ? pirEnabled : device.pirEnabled;
     device.pirGpio = pirGpio || device.pirGpio;
     device.pirAutoOffDelay = pirAutoOffDelay || device.pirAutoOffDelay;
@@ -389,15 +405,17 @@ const updateDevice = async (req, res) => {
     let removedSwitches = [];
     const oldSwitchesSnapshot = device.switches ? device.switches.map(sw => sw.toObject ? sw.toObject() : { ...sw }) : [];
     if (switches && Array.isArray(switches)) {
-      // Validate GPIO configuration using comprehensive validation
-      const gpioConfig = {
-        switches,
-        pirEnabled: pirEnabled !== undefined ? pirEnabled : device.pirEnabled,
-        pirGpio: pirGpio !== undefined ? pirGpio : device.pirGpio
-      };
-      const gpioValidation = gpioUtils.validateGpioConfiguration(gpioConfig);
-
-      if (!gpioValidation.valid) {
+    // Validate GPIO configuration using comprehensive validation
+    const gpioConfig = {
+      switches,
+      pirEnabled: pirEnabled !== undefined ? pirEnabled : device.pirEnabled,
+      pirGpio: pirGpio !== undefined ? pirGpio : device.pirGpio,
+      deviceType: device.deviceType || 'esp32',
+      isUpdate: true, // Allow existing problematic pins for updates
+      existingConfig: device.switches, // Pass existing config for comparison
+      existingPirGpio: device.pirGpio // Pass existing PIR GPIO
+    };
+    const gpioValidation = gpioUtils.validateGpioConfiguration(gpioConfig);      if (!gpioValidation.valid) {
         return res.status(400).json({
           error: 'GPIO Validation Failed',
           details: 'Invalid GPIO pin configuration',
@@ -425,6 +443,7 @@ const updateDevice = async (req, res) => {
         return {
           name: sw.name,
           gpio: sw.gpio,
+          relayGpio: sw.relayGpio ?? sw.gpio, // Ensure relayGpio is set
           type: sw.type || (existing && existing.type) || 'relay',
           state,
           icon: sw.icon || (existing && existing.icon) || 'lightbulb',
@@ -630,14 +649,14 @@ const toggleSwitch = async (req, res) => {
     const updatedSwitch = updated.switches.find(sw => sw._id.toString() === switchId) || updated.switches[switchIndex];
     const activityLogStart = Date.now();
     
-    // Check if this is a manual switch operation
-    const isManualSwitch = updatedSwitch?.manualSwitchEnabled === true;
-    const logTriggeredBy = isManualSwitch ? 'manual_switch' : triggeredBy;
-    const logAction = isManualSwitch ? (desiredState ? 'manual_on' : 'manual_off') : (desiredState ? 'on' : 'off');
-    const logUserId = isManualSwitch ? null : req.user.id;
-    const logUserName = isManualSwitch ? 'Manual Switch' : req.user.name;
-    const logIp = isManualSwitch ? 'UI Manual' : req.ip;
-    const logUserAgent = isManualSwitch ? 'UI Manual Switch' : req.get('User-Agent');
+    // Determine triggeredBy based on how the switch was actually triggered
+    // Web switches are triggered by 'user', manual switches are handled via MQTT telemetry
+    const logTriggeredBy = 'user'; // Web interface switches are always triggered by user
+    const logAction = desiredState ? 'on' : 'off';
+    const logUserId = req.user.id;
+    const logUserName = req.user.name;
+    const logIp = req.ip;
+    const logUserAgent = req.get('User-Agent');
     
     await ActivityLog.create({
       deviceId: updated._id,
@@ -1462,79 +1481,21 @@ const getGpioPinInfo = async (req, res) => {
 // Validate GPIO pin configuration
 const validateGpioConfig = async (req, res) => {
   try {
-    const { switches = [], pirEnabled = false, pirGpio, deviceType = 'esp32' } = req.body;
+    const { switches = [], pirEnabled = false, pirGpio, deviceType = 'esp32', isUpdate = false, existingConfig = [], existingPirGpio } = req.body;
 
-    const errors = [];
-    const warnings = [];
-    const usedPins = new Set();
-
-    // Validate switches
-    switches.forEach((sw, index) => {
-      const switchNum = index + 1;
-
-      // Check relay GPIO
-      if (sw.gpio !== undefined) {
-        if (usedPins.has(sw.gpio)) {
-          errors.push(`Switch ${switchNum}: GPIO ${sw.gpio} is already used`);
-        } else {
-          usedPins.add(sw.gpio);
-          const status = gpioUtils.getGpioPinStatus(sw.gpio, deviceType);
-          if (!status.safe) {
-            if (status.status === 'problematic') {
-              warnings.push(`Switch ${switchNum}: GPIO ${sw.gpio} may cause ${deviceType.toUpperCase()} boot issues`);
-            } else {
-              errors.push(`Switch ${switchNum}: GPIO ${sw.gpio} is ${status.status} (${status.reason})`);
-            }
-          }
-        }
-      }
-
-      // Check manual switch GPIO
-      if (sw.manualSwitchEnabled && sw.manualSwitchGpio !== undefined) {
-        if (usedPins.has(sw.manualSwitchGpio)) {
-          errors.push(`Switch ${switchNum}: Manual GPIO ${sw.manualSwitchGpio} is already used`);
-        } else {
-          usedPins.add(sw.manualSwitchGpio);
-          const status = gpioUtils.getGpioPinStatus(sw.manualSwitchGpio, deviceType);
-          if (!status.safe) {
-            if (status.status === 'problematic') {
-              warnings.push(`Switch ${switchNum}: Manual GPIO ${sw.manualSwitchGpio} may cause ${deviceType.toUpperCase()} boot issues`);
-            } else {
-              errors.push(`Switch ${switchNum}: Manual GPIO ${sw.manualSwitchGpio} is ${status.status} (${status.reason})`);
-            }
-          }
-        }
-      }
-    });
-
-    // Validate PIR GPIO
-    if (pirEnabled && pirGpio !== undefined) {
-      if (usedPins.has(pirGpio)) {
-        errors.push(`PIR: GPIO ${pirGpio} is already used`);
-      } else {
-        const status = gpioUtils.getGpioPinStatus(pirGpio, deviceType);
-        if (!status.safe) {
-          if (status.status === 'problematic') {
-            warnings.push(`PIR: GPIO ${pirGpio} may cause ${deviceType.toUpperCase()} boot issues`);
-          } else {
-            errors.push(`PIR: GPIO ${pirGpio} is ${status.status} (${status.reason})`);
-          }
-        }
-      }
-    }
+    const result = gpioUtils.validateGpioConfiguration({
+      switches,
+      pirEnabled,
+      pirGpio,
+      deviceType,
+      isUpdate,
+      existingConfig,
+      existingPirGpio
+    }, deviceType);
 
     res.json({
       success: true,
-      data: {
-        valid: errors.length === 0,
-        errors,
-        warnings,
-        summary: {
-          totalSwitches: switches.length,
-          errors: errors.length,
-          warnings: warnings.length
-        }
-      }
+      data: result
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });

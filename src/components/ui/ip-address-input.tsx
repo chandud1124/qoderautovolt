@@ -138,7 +138,7 @@ export const IpAddressInput: React.FC<IpAddressInputProps> = ({
    * Handle input change
    */
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    let inputValue = e.target.value;
+    const inputValue = e.target.value;
     const cursorPosition = e.target.selectionStart || 0;
     
     // Format the value

@@ -33,14 +33,14 @@ const ESP32_RECOMMENDED_PINS = {
 // Pin purpose recommendations for ESP8266
 const ESP8266_RECOMMENDED_PINS = {
   relay: {
-    primary: [4, 5, 12, 14], // Most stable for relay control (avoid GPIO13,16 for relays)
-    secondary: [13, 16], // Alternative relay pins if needed
-    description: 'GPIO pins 4, 5, 12, 14 are most stable for relay control on ESP8266'
+    primary: [4, 5, 12, 13], // Matches firmware config and documentation
+    secondary: [14, 16], // Alternative relay pins if needed
+    description: 'GPIO pins 4, 5, 12, 13 are used in firmware config for relay control on ESP8266'
   },
   manual: {
-    primary: [13, 1, 3], // Safe pins for manual switches (GPIO13, TX, RX)
-    secondary: [0, 2, 15, 16], // Problematic pins as fallback (with warnings)
-    description: 'GPIO pins 13, 1, 3 are safest for manual switches; 0, 2, 15, 16 available with caution'
+    primary: [14, 16, 0, 2], // Matches firmware config and documentation
+    secondary: [13, 1, 3], // Alternative manual pins
+    description: 'GPIO pins 14, 16, 0, 2 are used in firmware config for manual switches; 0, 2 require pull-ups'
   },
   pir: {
     primary: [4, 5, 12, 13, 14, 16], // Safe pins for PIR sensors
@@ -226,80 +226,134 @@ function getRecommendedPins(purpose, priority = 'primary', deviceType = 'esp32')
  * @param {Array} config.switches - Array of switch configurations
  * @param {boolean} config.pirEnabled - Whether PIR is enabled
  * @param {number} config.pirGpio - PIR GPIO pin
- * @param {string} deviceType - Device type ('esp32' or 'esp8266', default: 'esp32')
+ * @param {string} config.deviceType - Device type ('esp32' or 'esp8266', default: 'esp32')
+ * @param {boolean} config.isUpdate - Whether this is an update operation (more lenient)
+ * @param {Array} config.existingConfig - Existing switch configuration for comparison
  * @returns {object} - Validation result
  */
 function validateGpioConfiguration(config, deviceType = 'esp32') {
-  const { switches = [], pirEnabled = false, pirGpio } = config;
+  const {
+    switches = [],
+    pirEnabled = false,
+    pirGpio,
+    isUpdate = false,
+    existingConfig = [],
+    existingPirGpio // Add this parameter for existing PIR GPIO
+  } = config;
+
+  // If this is an update and deviceType wasn't passed in config, use default
+  const actualDeviceType = config.deviceType || deviceType;
+
   const errors = [];
   const warnings = [];
   const usedPins = new Set();
+
+  // For updates, create a set of all existing pins to allow keeping current configs
+  const existingPins = new Set();
+  if (isUpdate && existingConfig) {
+    existingConfig.forEach((sw) => {
+      if (sw.gpio !== undefined) {
+        existingPins.add(sw.gpio);
+      }
+      if (sw.manualSwitchEnabled && sw.manualSwitchGpio !== undefined) {
+        existingPins.add(sw.manualSwitchGpio);
+      }
+    });
+    // Add existing PIR GPIO if it exists
+    if (existingPirGpio !== undefined) {
+      existingPins.add(existingPirGpio);
+    }
+  }
 
   // Validate switches
   switches.forEach((sw, index) => {
     const switchNum = index + 1;
 
-    // Check relay GPIO
-    if (sw.gpio !== undefined) {
-      if (usedPins.has(sw.gpio)) {
-        errors.push({
-          type: 'duplicate_pin',
-          switch: switchNum,
-          pin: sw.gpio,
-          message: `GPIO ${sw.gpio} is already used by another component`
-        });
-      } else {
-        usedPins.add(sw.gpio);
-        const status = getGpioPinStatus(sw.gpio, deviceType);
-        if (!status.safe) {
-          if (status.status === 'problematic') {
-            warnings.push({
-              type: 'problematic_pin',
-              switch: switchNum,
-              pin: sw.gpio,
-              message: status.reason,
-              alternatives: getRecommendedPins('relay', 'primary', deviceType)
-            });
-          } else {
-            errors.push({
-              type: 'invalid_pin',
-              switch: switchNum,
-              pin: sw.gpio,
-              message: status.reason
-            });
+      // Check relay GPIO
+      if (sw.gpio !== undefined && sw.gpio !== null) {
+        // For updates, allow existing pins even if they're problematic
+        const isExistingPin = isUpdate && existingPins.has(sw.gpio);
+
+        if (usedPins.has(sw.gpio)) {
+          errors.push({
+            type: 'duplicate_pin',
+            switch: switchNum,
+            pin: sw.gpio,
+            field: `switches.${index}.gpio`,
+            message: `Switch ${switchNum} (Relay): GPIO ${sw.gpio} is already used by another component. Each GPIO pin can only be used once.`,
+            suggestion: `Choose a different GPIO pin for this relay switch. Available pins: ${getRecommendedPins('relay', 'primary', actualDeviceType).join(', ')}`
+          });
+        } else {
+          usedPins.add(sw.gpio);
+          const status = getGpioPinStatus(sw.gpio, actualDeviceType);
+          if (!status.safe) {
+            // Allow existing problematic configurations during updates
+            if (!isExistingPin) {
+              if (status.status === 'problematic') {
+                warnings.push({
+                  type: 'problematic_pin',
+                  switch: switchNum,
+                  pin: sw.gpio,
+                  field: `switches.${index}.gpio`,
+                  message: `Switch ${switchNum} (Relay): GPIO ${sw.gpio} may cause ${actualDeviceType.toUpperCase()} boot issues - ${status.reason}`,
+                  suggestion: `Use recommended relay pins instead: GPIO ${getRecommendedPins('relay', 'primary', actualDeviceType).join(', ')}`,
+                  alternatives: getRecommendedPins('relay', 'primary', actualDeviceType)
+                });
+              } else {
+                errors.push({
+                  type: 'invalid_pin',
+                  switch: switchNum,
+                  pin: sw.gpio,
+                  field: `switches.${index}.gpio`,
+                  message: `Switch ${switchNum} (Relay): GPIO ${sw.gpio} is ${status.status} - ${status.reason}`,
+                  suggestion: `Choose a safe GPIO pin for relay control. Recommended: GPIO ${getRecommendedPins('relay', 'primary', actualDeviceType).join(', ')}`
+                });
+              }
+            }
           }
         }
-      }
-    }
+      }    // Check manual switch GPIO
+    if (sw.manualSwitchEnabled && sw.manualSwitchGpio !== undefined && sw.manualSwitchGpio !== null) {
+      // For updates, allow existing pins even if they're problematic
+      const isExistingPin = isUpdate && existingPins.has(sw.manualSwitchGpio);
 
-    // Check manual switch GPIO
-    if (sw.manualSwitchEnabled && sw.manualSwitchGpio !== undefined) {
       if (usedPins.has(sw.manualSwitchGpio)) {
         errors.push({
           type: 'duplicate_pin',
           switch: switchNum,
           pin: sw.manualSwitchGpio,
-          message: `Manual GPIO ${sw.manualSwitchGpio} is already used by another component`
+          field: `switches.${index}.manualSwitchGpio`,
+          message: `Switch ${switchNum} (Manual): GPIO ${sw.manualSwitchGpio} is already used by another component. Each GPIO pin can only be used once.`,
+          suggestion: `Choose a different GPIO pin for this manual switch. Available pins: ${getRecommendedPins('manual', 'primary', actualDeviceType).join(', ')}`
         });
       } else {
         usedPins.add(sw.manualSwitchGpio);
-        const status = getGpioPinStatus(sw.manualSwitchGpio, deviceType);
+        const status = getGpioPinStatus(sw.manualSwitchGpio, actualDeviceType);
         if (!status.safe) {
-          if (status.status === 'problematic') {
-            warnings.push({
-              type: 'problematic_pin',
-              switch: switchNum,
-              pin: sw.manualSwitchGpio,
-              message: `Manual switch: ${status.reason}`,
-              alternatives: getRecommendedPins('manual', 'primary', deviceType)
-            });
-          } else {
-            errors.push({
-              type: 'invalid_pin',
-              switch: switchNum,
-              pin: sw.manualSwitchGpio,
-              message: `Manual switch: ${status.reason}`
-            });
+          // Allow existing problematic configurations during updates, especially for ESP8266 manual pins
+          if (!isExistingPin) {
+            if (status.status === 'problematic') {
+              warnings.push({
+                type: 'problematic_pin',
+                switch: switchNum,
+                pin: sw.manualSwitchGpio,
+                field: `switches.${index}.manualSwitchGpio`,
+                message: `Switch ${switchNum} (Manual): GPIO ${sw.manualSwitchGpio} may cause ${actualDeviceType.toUpperCase()} issues - ${status.reason}`,
+                suggestion: actualDeviceType === 'esp8266' ? 
+                  `For ESP8266, GPIO 0, 2, 15, 16 can be used for manual switches but may affect boot/serial communication. Recommended safe pins: GPIO ${getRecommendedPins('manual', 'primary', actualDeviceType).join(', ')}` :
+                  `Use recommended manual switch pins instead: GPIO ${getRecommendedPins('manual', 'primary', actualDeviceType).join(', ')}`,
+                alternatives: getRecommendedPins('manual', 'primary', actualDeviceType)
+              });
+            } else {
+              errors.push({
+                type: 'invalid_pin',
+                switch: switchNum,
+                pin: sw.manualSwitchGpio,
+                field: `switches.${index}.manualSwitchGpio`,
+                message: `Switch ${switchNum} (Manual): GPIO ${sw.manualSwitchGpio} is ${status.status} - ${status.reason}`,
+                suggestion: `Choose a safe GPIO pin for manual switch. Recommended: GPIO ${getRecommendedPins('manual', 'primary', actualDeviceType).join(', ')}`
+              });
+            }
           }
         }
       }
@@ -307,29 +361,41 @@ function validateGpioConfiguration(config, deviceType = 'esp32') {
   });
 
   // Validate PIR GPIO
-  if (pirEnabled && pirGpio !== undefined) {
+  if (pirEnabled && pirGpio !== undefined && pirGpio !== null) {
+    // For updates, allow existing pins even if they're problematic
+    const isExistingPin = isUpdate && existingPins.has(pirGpio);
+
     if (usedPins.has(pirGpio)) {
       errors.push({
         type: 'duplicate_pin',
         pin: pirGpio,
-        message: `PIR GPIO ${pirGpio} is already used by another component`
+        field: 'pirGpio',
+        message: `PIR Sensor: GPIO ${pirGpio} is already used by another component. Each GPIO pin can only be used once.`,
+        suggestion: `Choose a different GPIO pin for the PIR sensor. Recommended pins: GPIO ${getRecommendedPins('pir', 'primary', actualDeviceType).join(', ')}`
       });
     } else {
-      const status = getGpioPinStatus(pirGpio, deviceType);
+      const status = getGpioPinStatus(pirGpio, actualDeviceType);
       if (!status.safe) {
-        if (status.status === 'problematic') {
-          warnings.push({
-            type: 'problematic_pin',
-            pin: pirGpio,
-            message: `PIR sensor: ${status.reason}`,
-            alternatives: getRecommendedPins('pir', 'primary', deviceType)
-          });
-        } else {
-          errors.push({
-            type: 'invalid_pin',
-            pin: pirGpio,
-            message: `PIR sensor: ${status.reason}`
-          });
+        // Allow existing problematic configurations during updates
+        if (!isExistingPin) {
+          if (status.status === 'problematic') {
+            warnings.push({
+              type: 'problematic_pin',
+              pin: pirGpio,
+              field: 'pirGpio',
+              message: `PIR Sensor: GPIO ${pirGpio} may cause ${actualDeviceType.toUpperCase()} boot issues - ${status.reason}`,
+              suggestion: `Use recommended PIR sensor pins instead: GPIO ${getRecommendedPins('pir', 'primary', actualDeviceType).join(', ')}`,
+              alternatives: getRecommendedPins('pir', 'primary', actualDeviceType)
+            });
+          } else {
+            errors.push({
+              type: 'invalid_pin',
+              pin: pirGpio,
+              field: 'pirGpio',
+              message: `PIR Sensor: GPIO ${pirGpio} is ${status.status} - ${status.reason}`,
+              suggestion: `Choose a safe GPIO pin for PIR sensor. Recommended: GPIO ${getRecommendedPins('pir', 'primary', actualDeviceType).join(', ')}`
+            });
+          }
         }
       }
     }
@@ -360,9 +426,9 @@ function getAvailablePins(deviceId = null, existingConfig = [], deviceType = 'es
 
   // Mark existing pins as used
   existingConfig.forEach(item => {
-    if (item.gpio !== undefined) usedPins.add(item.gpio);
-    if (item.manualSwitchGpio !== undefined) usedPins.add(item.manualSwitchGpio);
-    if (item.pirGpio !== undefined) usedPins.add(item.pirGpio);
+    if (item.gpio !== undefined && item.gpio !== null) usedPins.add(item.gpio);
+    if (item.manualSwitchGpio !== undefined && item.manualSwitchGpio !== null) usedPins.add(item.manualSwitchGpio);
+    if (item.pirGpio !== undefined && item.pirGpio !== null) usedPins.add(item.pirGpio);
   });
 
   const available = {

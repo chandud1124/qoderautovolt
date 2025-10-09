@@ -4,10 +4,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch as UiSwitch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
-import { z } from 'zod';
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from '@/components/ui/form';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
+import * as z from 'zod';
 import { Device } from '@/types';
 import { deviceAPI } from '@/services/api';
 import { Copy, Check, Eye, EyeOff, Shield, AlertTriangle, CheckCircle, XCircle, Info } from 'lucide-react';
@@ -44,8 +44,8 @@ interface GpioValidationResult {
 const switchSchema = z.object({
   id: z.string(),
   name: z.string().min(1),
-  gpio: z.number().min(0).max(39),
-  relayGpio: z.number().min(0).max(39),
+  gpio: z.number().min(0).max(39).optional(),
+  relayGpio: z.number().min(0).max(39).optional(),
   type: z.enum(switchTypes),
   icon: z.string().optional(),
   state: z.boolean().default(false),
@@ -60,6 +60,21 @@ const switchSchema = z.object({
   path: ['manualSwitchGpio']
 });
 
+const scheduledNotificationSchema = z.object({
+  time: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/, 'Invalid time format (HH:MM)'),
+  message: z.string().min(1, 'Message is required').max(200, 'Message too long'),
+  enabled: z.boolean().default(true),
+  daysOfWeek: z.array(z.number().min(0).max(6)).min(1, 'At least one day required'),
+  lastTriggered: z.date().optional()
+});
+
+const deviceNotificationSchema = z.object({
+  afterTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/, 'Invalid time format (HH:MM)'),
+  enabled: z.boolean().default(true),
+  daysOfWeek: z.array(z.number().min(0).max(6)).min(1, 'At least one day required'),
+  lastTriggered: z.date().optional()
+});
+
 const formSchema = z.object({
   name: z.string().min(1, 'Required'),
   macAddress: z.string().min(1, 'Required'),
@@ -70,12 +85,20 @@ const formSchema = z.object({
   pirEnabled: z.boolean().default(false),
   pirGpio: z.number().min(0).max(39).optional(),
   pirAutoOffDelay: z.number().min(0).default(30),
+  deviceNotifications: deviceNotificationSchema.optional(),
   switches: z.array(switchSchema).min(1).max(8).refine(sw => {
     const prim = sw.map(s => s.gpio);
     const man = sw.filter(s => s.manualSwitchEnabled && s.manualSwitchGpio !== undefined).map(s => s.manualSwitchGpio as number);
     const all = [...prim, ...man];
     return new Set(all).size === all.length;
   }, { message: 'GPIO pins (including manual) must be unique' })
+}).refine((data) => {
+  // Device-specific switch limits
+  const maxSwitches = data.deviceType === 'esp8266' ? 4 : 8;
+  return data.switches.length <= maxSwitches;
+}, {
+  message: 'ESP8266 devices support maximum 4 switches',
+  path: ['switches']
 });
 
 type FormValues = z.infer<typeof formSchema>;
@@ -88,13 +111,13 @@ const parseLocation = (loc?: string) => {
   return { block: b, floor: f };
 };
 
-// ESP8266 NodeMCU pin mapping (GPIO to board pin names)
-const getEsp8266BoardPinName = (gpio: number): string => {
-  const pinMap: { [key: number]: string } = {
-    0: 'D3', 1: 'TX', 2: 'D4', 3: 'RX', 4: 'D2', 5: 'D1',
-    12: 'D6', 13: 'D7', 14: 'D5', 15: 'D8', 16: 'D0'
-  };
-  return pinMap[gpio] || `GPIO${gpio}`;
+// Helper function to format MAC address with colons
+const formatMacAddress = (mac: string): string => {
+  if (!mac) return '';
+  // Remove all non-alphanumeric characters first
+  const cleanMac = mac.replace(/[^a-fA-F0-9]/g, '').toUpperCase();
+  // Format with colons: every 2 characters, separated by colons
+  return cleanMac.replace(/(.{2})(?=.)/g, '$1:');
 };
 
 // Get display name for GPIO pin based on device type
@@ -106,6 +129,24 @@ const getPinDisplayName = (gpio: number, deviceType: string): string => {
   return `GPIO ${gpio}`;
 };
 
+// ESP8266 board pin name mapping
+const getEsp8266BoardPinName = (gpio: number): string => {
+  const esp8266PinMap: { [key: number]: string } = {
+    0: 'D3',   // GPIO0 - can cause boot issues
+    1: 'D10',  // GPIO1 - TX pin, avoid for relays
+    2: 'D4',   // GPIO2 - can cause boot issues
+    3: 'D9',   // GPIO3 - RX pin, avoid for relays
+    4: 'D2',   // GPIO4 - safe for relays
+    5: 'D1',   // GPIO5 - safe for relays
+    12: 'D6',  // GPIO12 - safe for relays
+    13: 'D7',  // GPIO13 - safe for relays
+    14: 'D5',  // GPIO14 - safe for relays
+    15: 'D8',  // GPIO15 - can cause boot issues
+    16: 'D0'   // GPIO16 - safe for relays
+  };
+  return esp8266PinMap[gpio] || `GPIO${gpio}`;
+};
+
 export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubmit, initialData }) => {
   const locParts = parseLocation(initialData?.location);
   const [block, setBlock] = useState(locParts.block);
@@ -115,35 +156,19 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
   const [loadingGpio, setLoadingGpio] = useState(false);
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
-    defaultValues: initialData ? {
-      name: initialData.name,
-      macAddress: initialData.macAddress,
-      ipAddress: initialData.ipAddress,
-      location: initialData.location || `Block ${locParts.block} Floor ${locParts.floor}`,
-      classroom: initialData.classroom || '',
-      deviceType: (initialData.deviceType === 'esp32' || initialData.deviceType === 'esp8266') ? initialData.deviceType : 'esp32',
-      pirEnabled: initialData.pirEnabled || false,
-      pirGpio: initialData.pirGpio,
-      pirAutoOffDelay: initialData.pirAutoOffDelay || 30,
-  switches: initialData.switches.map((sw: import('@/types').Switch) => ({
-    id: sw.id,
-    relayGpio: sw.gpio ?? sw.relayGpio ?? 0,
-        name: sw.name,
-        gpio: sw.relayGpio ?? sw.gpio ?? 0,
-        type: sw.type || 'relay',
-        icon: sw.icon,
-        state: !!sw.state,
-        manualSwitchEnabled: sw.manualSwitchEnabled || false,
-        manualSwitchGpio: sw.manualSwitchGpio,
-        manualMode: sw.manualMode || 'maintained',
-        manualActiveLow: sw.manualActiveLow !== undefined ? sw.manualActiveLow : true,
-        usePir: sw.usePir || false,
-        dontAutoOff: sw.dontAutoOff || false
-      }))
-    } : {
-      name: '', macAddress: '', ipAddress: '', location: `Block ${locParts.block} Floor ${locParts.floor}`, classroom: '', deviceType: 'esp32', pirEnabled: false, pirGpio: undefined, pirAutoOffDelay: 30,
-  switches: [{ id: `switch-${Date.now()}-0`, name: '', gpio: 0, relayGpio: 0, type: 'relay', icon: 'lightbulb', state: false, manualSwitchEnabled: false, manualMode: 'maintained', manualActiveLow: true, usePir: false, dontAutoOff: false }]
-    }
+      defaultValues: {
+        name: '',
+        macAddress: '',
+        ipAddress: '',
+        location: `Block ${locParts.block} Floor ${locParts.floor}`,
+        classroom: '',
+        deviceType: 'esp32',
+        pirEnabled: false,
+        pirGpio: undefined,
+        pirAutoOffDelay: 30,
+        deviceNotifications: undefined,
+        switches: [{ id: `switch-${Date.now()}-0`, name: '', gpio: undefined, relayGpio: undefined, type: 'relay', icon: 'lightbulb', state: false, manualSwitchEnabled: false, manualMode: 'maintained', manualActiveLow: true, usePir: false, dontAutoOff: false }]
+      }
   });
   // When switching between devices, reset the form with new defaults so fields are populated
   useEffect(() => {
@@ -153,7 +178,7 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
       fetchGpioInfo(); // Fetch GPIO info when dialog opens with existing device
       form.reset({
         name: initialData.name,
-        macAddress: initialData.macAddress,
+        macAddress: formatMacAddress(initialData.macAddress),
         ipAddress: initialData.ipAddress,
         location: initialData.location || `Block ${lp.block} Floor ${lp.floor}`,
         classroom: initialData.classroom || '',
@@ -161,11 +186,12 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
         pirEnabled: initialData.pirEnabled || false,
         pirGpio: initialData.pirGpio,
         pirAutoOffDelay: initialData.pirAutoOffDelay || 30,
+        deviceNotifications: initialData.notificationSettings,
     switches: initialData.switches.map((sw: import('@/types').Switch) => ({
     id: sw.id,
           name: sw.name,
-          gpio: sw.relayGpio ?? sw.gpio ?? 0,
-          relayGpio: sw.gpio ?? sw.relayGpio ?? 0,
+          gpio: sw.gpio,
+          relayGpio: sw.relayGpio,
           type: sw.type || 'relay',
           icon: sw.icon,
           state: !!sw.state,
@@ -181,8 +207,8 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
       const lp = parseLocation(undefined);
       fetchGpioInfo(); // Fetch GPIO info when creating new device
       form.reset({
-        name: '', macAddress: '', ipAddress: '', location: `Block ${lp.block} Floor ${lp.floor}`, classroom: '', deviceType: 'esp32', pirEnabled: false, pirGpio: undefined, pirAutoOffDelay: 30,
-  switches: [{ id: `switch-${Date.now()}-0`, name: '', gpio: 0, relayGpio: 0, type: 'relay', icon: 'lightbulb', state: false, manualSwitchEnabled: false, manualMode: 'maintained', manualActiveLow: true, usePir: false, dontAutoOff: false }]
+        name: '', macAddress: '', ipAddress: '', location: `Block ${lp.block} Floor ${lp.floor}`, classroom: '', deviceType: 'esp32', pirEnabled: false, pirGpio: undefined, pirAutoOffDelay: 30, deviceNotifications: undefined,
+  switches: [{ id: `switch-${Date.now()}-0`, name: '', gpio: undefined, relayGpio: undefined, type: 'relay', icon: 'lightbulb', state: false, manualSwitchEnabled: false, manualMode: 'maintained', manualActiveLow: true, usePir: false, dontAutoOff: false }]
       });
     }
   }, [initialData, open]);
@@ -190,30 +216,30 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
 
   // Refetch GPIO info when deviceType changes
   const prevDeviceTypeRef = React.useRef<string>();
+  const watchedDeviceType = form.watch('deviceType');
   useEffect(() => {
-    const currentDeviceType = form.getValues('deviceType');
-    if (open && currentDeviceType !== prevDeviceTypeRef.current) {
-      prevDeviceTypeRef.current = currentDeviceType;
+    if (open && watchedDeviceType !== prevDeviceTypeRef.current) {
+      prevDeviceTypeRef.current = watchedDeviceType;
       fetchGpioInfo();
     }
-  }, [open]);
+  }, [open, watchedDeviceType]);
 
-  // Keep gpio and relayGpio synchronized for each switch
-  useEffect(() => {
-    const subscription = form.watch((value, { name, type }) => {
-      if (name && name.includes('gpio') && !name.includes('manual') && !name.includes('pir') && type === 'change') {
-        const pathParts = name.split('.');
-        if (pathParts.length === 3 && pathParts[1] === 'switches') {
-          const switchIndex = parseInt(pathParts[2]);
-          const gpioValue = form.getValues(`switches.${switchIndex}.gpio`);
-          if (gpioValue !== undefined) {
-            form.setValue(`switches.${switchIndex}.relayGpio`, gpioValue, { shouldValidate: false });
-          }
-        }
-      }
-    });
-    return () => subscription.unsubscribe();
-  }, [form]);
+  // Keep gpio and relayGpio synchronized for each switch (removed - they should be separate fields)
+  // useEffect(() => {
+  //   const subscription = form.watch((value, { name, type }) => {
+  //     if (name && name.includes('gpio') && !name.includes('manual') && !name.includes('pir') && type === 'change') {
+  //       const pathParts = name.split('.');
+  //       if (pathParts.length === 3 && pathParts[1] === 'switches') {
+  //         const switchIndex = parseInt(pathParts[2]);
+  //         const gpioValue = form.getValues(`switches.${switchIndex}.gpio`);
+  //         if (gpioValue !== undefined) {
+  //           form.setValue(`switches.${switchIndex}.relayGpio`, gpioValue, { shouldValidate: false });
+  //         }
+  //       }
+  //     }
+  //   });
+  //   return () => subscription.unsubscribe();
+  // }, [form]);
 
   // Secret reveal state
   const [secretPin, setSecretPin] = useState('');
@@ -239,14 +265,55 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
   };
 
   // Validate GPIO configuration
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [generalErrors, setGeneralErrors] = useState<string[]>([]);
+
   const validateGpioConfig = async (config: { switches: import('@/types').Switch[]; pirEnabled: boolean; pirGpio?: number }) => {
     try {
       const deviceType = form.getValues('deviceType') || 'esp32';
-      const response = await deviceAPI.validateGpioConfig({ ...config, deviceType });
-      setGpioValidation(response.data.data);
-      return response.data.data;
-    } catch (error) {
+      const isUpdate = !!initialData; // True if editing existing device
+      const existingConfig = initialData?.switches || []; // Existing switch configuration
+      
+      const response = await deviceAPI.validateGpioConfig({ 
+        ...config, 
+        deviceType,
+        isUpdate,
+        existingConfig,
+        existingPirGpio: initialData?.pirGpio // Pass existing PIR GPIO
+      });
+      const validation = response.data.data;
+      setGpioValidation(validation);
+
+      // Set field-specific errors
+      const newFieldErrors: Record<string, string> = {};
+      const newGeneralErrors: string[] = [];
+
+      if (validation.errors) {
+        validation.errors.forEach((error: any) => {
+          if (error.field) {
+            newFieldErrors[error.field] = `${error.message}\n\nSuggestion: ${error.suggestion}`;
+          } else {
+            newGeneralErrors.push(`${error.message}\n\nSuggestion: ${error.suggestion || 'Please review your GPIO configuration.'}`);
+          }
+        });
+      }
+
+      setFieldErrors(newFieldErrors);
+      setGeneralErrors(newGeneralErrors);
+
+      return validation;
+    } catch (error: any) {
       console.error('GPIO validation failed:', error);
+      // Show error if validation API fails
+      const errorMessage = error.response?.data?.message || error.message || 'GPIO validation failed';
+      const validationError = {
+        valid: false,
+        errors: [{ type: 'validation_api', pin: 0, message: `Validation check failed: ${errorMessage}`, suggestion: 'Please check your network connection and try again.' }],
+        warnings: []
+      };
+      setGpioValidation(validationError);
+      setFieldErrors({});
+      setGeneralErrors([`Validation failed: ${errorMessage}\n\nSuggestion: Check your network connection and try again.`]);
       return null;
     }
   };
@@ -298,8 +365,8 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
       id: typeof sw.id === 'string' && sw.id.length > 0 ? sw.id : `switch-${Date.now()}-${Math.floor(Math.random()*10000)}`,
       name: sw.name || 'Unnamed Switch',
       type: sw.type || 'relay',
-      gpio: sw.gpio ?? sw.relayGpio ?? 0,
-      relayGpio: sw.gpio ?? sw.relayGpio ?? 0,
+      gpio: sw.gpio, // Keep as undefined if not set, don't default to 0
+      relayGpio: sw.relayGpio ?? sw.gpio, // relayGpio can default to gpio if set
       state: sw.state ?? false,
       manualSwitchEnabled: sw.manualSwitchEnabled ?? false,
       manualSwitchGpio: sw.manualSwitchGpio,
@@ -317,9 +384,8 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
       pirGpio: data.pirGpio
     });
 
-    if (validation && !validation.valid) {
-      // Show validation errors
-      setGpioValidation(validation);
+    if (!validation || !validation.valid) {
+      // Validation failed or API error occurred - errors are already displayed
       return;
     }
 
@@ -469,6 +535,14 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
                             ))}
                           </SelectContent>
                         </Select>
+                        {fieldErrors.pirGpio && (
+                          <Alert className="mt-2 border-danger/70 bg-danger/20">
+                            <XCircle className="h-4 w-4 text-danger" />
+                            <AlertDescription className="text-foreground whitespace-pre-line">
+                              {fieldErrors.pirGpio}
+                            </AlertDescription>
+                          </Alert>
+                        )}
                         {field.value !== undefined && gpioInfo.find(p => p.pin === field.value)?.status === 'problematic' && (
                           <Alert className="mt-2 border-warning/70 bg-warning/20">
                             <AlertTriangle className="h-4 w-4 text-warning" />
@@ -515,8 +589,79 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
               )}
             </div>
             <Separator />
+            <div className="space-y-3">
+              <h5 className="text-sm font-medium">Device Notifications</h5>
+              <p className="text-xs text-muted-foreground">Configure intelligent time-based notifications for this device. Notifications will be sent after the specified time if any switches are still on (naming specific switches) or if all switches are on.</p>
+              
+              <FormField control={form.control} name="deviceNotifications.enabled" render={({ field }) => (
+                <FormItem className="flex items-center gap-2">
+                  <FormControl>
+                    <UiSwitch checked={!!field.value} onCheckedChange={field.onChange} />
+                  </FormControl>
+                  <FormLabel className="!mt-0">Enable device notifications</FormLabel>
+                </FormItem>
+              )} />
+
+              {form.watch('deviceNotifications.enabled') && (
+                <div className="grid gap-3 p-3 border rounded-md">
+                  <FormField
+                    control={form.control}
+                    name="deviceNotifications.afterTime"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Notification Time (HH:MM)</FormLabel>
+                        <FormControl>
+                          <Input {...field} placeholder="17:00" />
+                        </FormControl>
+                        <FormDescription>
+                          Time after which to check if switches are still on and send notifications
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="deviceNotifications.daysOfWeek"
+                    render={({ field }) => {
+                      const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+                      return (
+                        <FormItem>
+                          <FormLabel>Days of Week</FormLabel>
+                          <div className="flex flex-wrap gap-2">
+                            {days.map((day, dayIdx) => (
+                              <Button
+                                key={day}
+                                type="button"
+                                variant={(field.value || []).includes(dayIdx) ? "default" : "outline"}
+                                size="sm"
+                                onClick={() => {
+                                  const current = field.value || [];
+                                  const newValue = current.includes(dayIdx)
+                                    ? current.filter(d => d !== dayIdx)
+                                    : [...current, dayIdx];
+                                  field.onChange(newValue);
+                                }}
+                              >
+                                {day}
+                              </Button>
+                            ))}
+                          </div>
+                          <FormDescription>
+                            Select days when notifications should be active
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      );
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+            <Separator />
             <div className="space-y-4">
-                            <div className="flex items-start gap-3 p-4 bg-card border border-border rounded-md">
+              <div className="flex items-start gap-3 p-4 bg-card border border-border rounded-md">
                 <Info className="h-5 w-5 text-success mt-0.5 flex-shrink-0" />
                 <div className="text-sm text-muted-foreground">
                   <strong>GPIO Pin Safety:</strong> Only safe GPIO pins are available for selection. These pins are recommended for reliable {form.watch('deviceType') === 'esp8266' ? 'ESP8266' : 'ESP32'} operation and avoid boot issues or system instability.
@@ -556,7 +701,7 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
                       
                       // Device-specific recommended relay pins
                       const recommendedRelayPins = deviceType === 'esp8266' 
-                        ? [4, 5, 12, 14, 13, 16]  // ESP8266: primary (4,5,12,14), secondary (13,16)
+                        ? [4, 5, 12, 13]  // ESP8266: matches firmware config and documentation
                         : [16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33]; // ESP32 pins
                       
                       const availablePins = gpioInfo.filter(p =>
@@ -594,8 +739,8 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
 
                       const getPinRecommendation = (pin: GpioPinInfo) => {
                         if (deviceType === 'esp8266') {
-                          if ([4, 5, 12, 14].includes(pin.pin)) return 'Primary (Most Stable)';
-                          if ([13, 16].includes(pin.pin)) return 'Secondary (Alternative)';
+                          if ([4, 5, 12, 13].includes(pin.pin)) return 'Primary (Most Stable)';
+                          if ([14, 16].includes(pin.pin)) return 'Secondary (Alternative)';
                           return 'Not Recommended';
                         }
                         const primaryRelayPins = [16, 17, 18, 19, 21, 22];
@@ -608,7 +753,7 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
                       return (
                         <FormItem>
                           <FormLabel>GPIO Pin (Relay Control)</FormLabel>
-                          <Select value={String(field.value)} onValueChange={v => field.onChange(Number(v))}>
+                          <Select value={field.value !== undefined ? String(field.value) : ''} onValueChange={v => field.onChange(v === '' ? undefined : Number(v))}>
                             <FormControl>
                               <SelectTrigger>
                                 <SelectValue placeholder="Select recommended GPIO pin for relay" />
@@ -646,6 +791,14 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
                               ))}
                             </SelectContent>
                           </Select>
+                          {fieldErrors[`switches.${idx}.gpio`] && (
+                            <Alert className="mt-2 border-danger/70 bg-danger/20">
+                              <XCircle className="h-4 w-4 text-danger" />
+                              <AlertDescription className="text-foreground whitespace-pre-line">
+                                {fieldErrors[`switches.${idx}.gpio`]}
+                              </AlertDescription>
+                            </Alert>
+                          )}
                           {gpioInfo.find(p => p.pin === field.value)?.status === 'problematic' && (
                             <Alert className="mt-2 border-warning/70 bg-warning/20">
                               <AlertTriangle className="h-4 w-4 text-warning" />
@@ -679,7 +832,7 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
                                 <strong>Note:</strong> This pin is safe but not recommended for relay control.
                                 <div className="mt-2">
                                   <strong>Recommended relay pins:</strong> {deviceType === 'esp8266' 
-                                    ? 'GPIO 4, 5, 12, 14 (Primary/Most Stable) or 13, 16 (Secondary/Alternative)' 
+                                    ? 'GPIO 4, 5, 12, 13 (Primary/Most Stable) or 14, 16 (Secondary/Alternative)' 
                                     : 'GPIO 16, 17, 18, 19, 21, 22 (Primary) or 23, 25, 26, 27, 32, 33 (Secondary)'}
                                 </div>
                               </AlertDescription>
@@ -699,7 +852,7 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
                           
                           // Device-specific recommended manual pins
                           const recommendedManualPins = deviceType === 'esp8266' 
-                            ? [13, 1, 3, 0, 2, 15, 16]  // ESP8266: safe pins first (13,1,3), then problematic (0,2,15,16)
+                            ? [14, 16, 0, 2]  // ESP8266: 4 pins for manual switches
                             : [16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33]; // ESP32 pins
                           
                           // For ESP8266, allow problematic pins for manual switches
@@ -795,6 +948,14 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
                                   ))}
                                 </SelectContent>
                               </Select>
+                              {fieldErrors[`switches.${idx}.manualSwitchGpio`] && (
+                                <Alert className="mt-2 border-danger/70 bg-danger/20">
+                                  <XCircle className="h-4 w-4 text-danger" />
+                                  <AlertDescription className="text-foreground whitespace-pre-line">
+                                    {fieldErrors[`switches.${idx}.manualSwitchGpio`]}
+                                  </AlertDescription>
+                                </Alert>
+                              )}
                               {field.value !== undefined && gpioInfo.find(p => p.pin === field.value)?.status === 'problematic' && (
                                 <Alert className="mt-2 border-warning/70 bg-warning/20">
                                   <AlertTriangle className="h-4 w-4 text-warning" />
@@ -868,15 +1029,21 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
               <Button type="button" variant="outline" onClick={() => { 
                 const sw = form.getValues('switches') || []; 
                 const deviceType = form.getValues('deviceType') || 'esp32';
+                const maxSwitches = deviceType === 'esp8266' ? 4 : 8;
+                
+                if (sw.length >= maxSwitches) {
+                  return; // Don't add more switches than allowed
+                }
+                
                 const switchIndex = sw.length;
                 
-                // ESP8266 GPIO pin mapping (matches esp8266_config.h)
+                // ESP8266 GPIO pin mapping (matches esp8266_config.h and documentation)
                 const esp8266RelayPins = [4, 5, 12, 13];
                 const esp8266ManualPins = [14, 16, 0, 2];
                 
                 // ESP32 default GPIO pin mapping
-                const esp32RelayPins = [16, 17, 18, 19, 21, 22];
-                const esp32ManualPins = [25, 26, 27, 32, 33, 23];
+                const esp32RelayPins = [16, 17, 18, 19, 21, 22, 23, 25, 26, 27];
+                const esp32ManualPins = [32, 33, 14, 12, 13, 15, 2, 4];
                 
                 const relayPins = deviceType === 'esp8266' ? esp8266RelayPins : esp32RelayPins;
                 const manualPins = deviceType === 'esp8266' ? esp8266ManualPins : esp32ManualPins;
@@ -887,22 +1054,68 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
                 form.setValue('switches', [...sw, { 
                   id: `switch-${Date.now()}-${Math.floor(Math.random()*10000)}`, 
                   name: '', 
-                  gpio: suggestedRelayGpio, 
-                  relayGpio: suggestedRelayGpio, 
+                  gpio: undefined, 
+                  relayGpio: undefined, 
                   type: 'relay', 
                   icon: 'lightbulb', 
                   state: false, 
                   manualSwitchEnabled: false, 
-                  manualSwitchGpio: suggestedManualGpio,
+                  manualSwitchGpio: undefined,
                   manualMode: 'maintained', 
                   manualActiveLow: true, 
                   usePir: false, 
-                  dontAutoOff: false 
+                  dontAutoOff: false
                 }]); 
-              }}>Add Switch</Button>
+              }} disabled={(form.watch('switches') || []).length >= (form.watch('deviceType') === 'esp8266' ? 4 : 8)}>
+                Add Switch ({(form.watch('switches') || []).length}/{(form.watch('deviceType') === 'esp8266' ? 4 : 8)})
+              </Button>
               {/* Auto-assigns correct GPIO pins based on device type (ESP8266/ESP32) */}
             </div>
-            <DialogFooter className="sticky bottom-0 bg-transparent py-4 z-10"><Button type="submit" className="w-full">Save</Button></DialogFooter>
+            {/* GPIO Validation Errors */}
+            {gpioValidation && !gpioValidation.valid && (
+              <Alert className="border-danger/70 bg-danger/20">
+                <XCircle className="h-4 w-4 text-danger" />
+                <AlertDescription className="text-foreground">
+                  <strong>GPIO Configuration Errors:</strong>
+                  <ul className="mt-2 space-y-1">
+                    {gpioValidation.errors.map((error, idx) => (
+                      <li key={idx} className="text-sm">
+                        • {error.message}
+                      </li>
+                    ))}
+                  </ul>
+                  {gpioValidation.warnings.length > 0 && (
+                    <div className="mt-3">
+                      <strong>Warnings:</strong>
+                      <ul className="mt-1 space-y-1">
+                        {gpioValidation.warnings.map((warning, idx) => (
+                          <li key={idx} className="text-sm text-warning">
+                            • {warning.message}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </AlertDescription>
+              </Alert>
+            )}
+            {/* General Validation Errors */}
+            {generalErrors.length > 0 && (
+              <Alert className="border-danger/70 bg-danger/20">
+                <XCircle className="h-4 w-4 text-danger" />
+                <AlertDescription className="text-foreground">
+                  <strong>Configuration Issues:</strong>
+                  <ul className="mt-2 space-y-1">
+                    {generalErrors.map((error, idx) => (
+                      <li key={idx} className="text-sm whitespace-pre-line">
+                        • {error}
+                      </li>
+                    ))}
+                  </ul>
+                </AlertDescription>
+              </Alert>
+            )}
+            <DialogFooter className="sticky bottom-0 bg-transparent py-4 z-10"><Button type="submit" className="w-full" disabled={gpioValidation && !gpioValidation.valid}>Save</Button></DialogFooter>
           </form>
         </Form>
       </DialogContent>

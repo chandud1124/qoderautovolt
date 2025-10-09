@@ -146,3 +146,12 @@ groups:
         annotations:
           summary: "Abnormal energy consumption"
           description: "Energy consumption increased by more than 5000Wh in the last hour."
+
+      - alert: SwitchTimeLimitExceeded
+        expr: switch_time_limit_exceeded_total > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Switch time limit exceeded"
+          description: "One or more switches have exceeded their configured time limits."

@@ -26,7 +26,7 @@ export interface SwitchResult {
 }
 
 export interface DeviceNotification {
-  type: 'device_connected' | 'device_disconnected' | 'device_updated' | 'device_deleted' | 'device_created' | 'switch_changed' | 'bulk_operation' | 'schedule_executed' | 'schedule_created' | 'schedule_updated' | 'device_error' | 'system_alert';
+  type: 'device_connected' | 'device_disconnected' | 'device_updated' | 'device_deleted' | 'device_created' | 'switch_changed' | 'bulk_operation' | 'schedule_executed' | 'schedule_created' | 'schedule_updated' | 'device_error' | 'system_alert' | 'switch_time_limit_exceeded' | 'device_notification';
   message: string;
   deviceId?: string;
   deviceName?: string;
@@ -40,6 +40,13 @@ export interface DeviceNotification {
   scheduleName?: string;
   severity?: string;
   timestamp: Date;
+  timeOnMinutes?: number;
+  timeLimitMinutes?: number;
+  classroom?: string;
+  notificationTime?: string;
+  customMessage?: string;
+  activeSwitches?: Array<{ id: string; name: string }>;
+  totalSwitches?: number;
 }
 
 class SocketService {
@@ -223,6 +230,18 @@ class SocketService {
       this.emitToListeners('device_notification', data);
     });
 
+    // Switch time limit exceeded notifications
+    this.socket.on('switch_time_limit_exceeded', (data) => {
+      console.log('[Socket.IO] Switch time limit exceeded:', data);
+      this.emitToListeners('switch_time_limit_exceeded', data);
+    });
+
+    // Scheduled device notifications
+    this.socket.on('device_notification', (data) => {
+      console.log('Device notification received:', data);
+      this.emitToListeners('device_notification', data);
+    });
+
     // Bulk operations
     this.socket.on('bulk_switch_intent', (data) => {
       console.log('[Socket.IO] Bulk switch intent:', data);
@@ -396,6 +415,14 @@ class SocketService {
 
   public onDeviceToggleBlocked(callback: (data: { deviceId: string; switchId: string; reason: string; requestedState?: boolean; timestamp: number }) => void) {
     this.on('device_toggle_blocked', callback);
+  }
+
+  public onSwitchTimeLimitExceeded(callback: (data: { deviceId: string; deviceName: string; switchId: string; switchName: string; classroom?: string; location?: string; timeOnMinutes: number; timeLimitMinutes: number; timestamp: Date }) => void) {
+    this.on('switch_time_limit_exceeded', callback);
+  }
+
+  public onDeviceNotification(callback: (data: DeviceNotification) => void) {
+    this.on('device_notification', callback);
   }
 }
 

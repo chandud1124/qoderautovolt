@@ -16,6 +16,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { Logo } from '@/components/Logo';
+import { DeviceNotificationAlert } from '@/components/ScheduledNotificationAlert';
 
 export function Header() {
   const navigate = useNavigate();
@@ -199,6 +200,11 @@ export function Header() {
               </CardContent>
             </Card>
           )}
+        </div>
+
+        {/* Time Limit Alerts */}
+        <div className="hidden md:block">
+          <DeviceNotificationAlert />
         </div>
 
         {/* User menu */}

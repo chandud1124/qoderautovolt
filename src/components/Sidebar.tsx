@@ -64,10 +64,11 @@ const navigationSections = [
   {
     title: 'Analytics & Monitoring',
     items: [
-      { name: 'Analytics & Monitoring', icon: BarChart3, href: '/dashboard/analytics', current: false, adminOnly: true },
-      { name: 'AI/ML Insights', icon: Brain, href: '/dashboard/aiml', current: false, adminOnly: true },
-      { name: 'Grafana Analytics', icon: BarChart3, href: '/dashboard/grafana', current: false, adminOnly: true },
-      { name: 'Prometheus Metrics', icon: Monitor, href: '/dashboard/prometheus', current: false, adminOnly: true },
+      { name: 'System Health', icon: Server, href: '/dashboard/system-health', adminOnly: true },
+      { name: 'Analytics & Monitoring', icon: BarChart3, href: '/dashboard/analytics', adminOnly: true },
+      { name: 'AI/ML Insights', icon: Brain, href: '/dashboard/aiml', adminOnly: true },
+      { name: 'Grafana Analytics', icon: BarChart3, href: '/dashboard/grafana', adminOnly: true },
+      { name: 'Prometheus Metrics', icon: Monitor, href: '/dashboard/prometheus', adminOnly: true },
     ]
   },
   {
@@ -137,15 +138,15 @@ export const Sidebar: React.FC<SidebarProps> = ({ className, onNavigateClose }) 
       className
     )}>
       {/* Logo/Brand */}
-      <div className="p-2 flex-shrink-0 h-16 relative z-10 glass">
+      <div className="p-3 flex-shrink-0 h-16 relative z-10 glass border-b border-border/40">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0">
-            <img src="/logo.png" alt="Logo" className="w-8 h-8 object-contain" />
+          <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0 ring-1 ring-primary/20">
+            <img src="/logo.png" alt="Logo" className="w-6 h-6 object-contain" />
           </div>
           {!collapsed && (
             <div className="min-w-0 flex-1">
-              <h1 className="font-bold text-lg truncate">AutoVolt</h1>
-              <p className="text-xs text-muted-foreground truncate">Power Management</p>
+              <h1 className="font-bold text-base truncate tracking-tight">AutoVolt</h1>
+              <p className="text-[11px] text-muted-foreground truncate font-medium">Power Management</p>
             </div>
           )}
         </div>
@@ -160,7 +161,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ className, onNavigateClose }) 
           maxHeight: 'calc(100vh - 8rem)'
         }}
       >
-        <div className="p-2 space-y-2">
+        <div className="p-2 space-y-4">
           {navigationSections.map((section, sectionIndex) => {
             // Filter items based on permissions
             const visibleItems = section.items.filter((item: any) => {
@@ -180,26 +181,70 @@ export const Sidebar: React.FC<SidebarProps> = ({ className, onNavigateClose }) 
             }
 
             return (
-              <div key={section.title} className="space-y-1">
+              <div key={section.title} className="space-y-2">
+                {/* Section Header */}
+                {!collapsed && (
+                  <div className="px-3 py-2">
+                    <h3 className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest">
+                      {section.title}
+                    </h3>
+                  </div>
+                )}
+
                 {/* Section Items */}
                 <div className="space-y-0.5">
                   {visibleItems.map((item) => {
                     const Icon = item.icon;
                     const isCurrentPage = location.pathname === item.href;
+                    const isAdminItem = 'adminOnly' in item && item.adminOnly;
+                    const isPermissionItem = 'requiresPermission' in item && item.requiresPermission;
 
                     return (
                       <Button
                         key={item.name}
-                        variant={isCurrentPage ? "default" : "ghost"}
+                        variant="ghost"
                         className={cn(
-                          "w-full justify-start gap-3 h-9 px-3 text-left overflow-hidden",
-                          isCurrentPage && "bg-primary text-primary-foreground shadow-lg",
-                          collapsed && "px-3 justify-center"
+                          "w-full justify-start gap-3 h-10 px-3 text-left overflow-hidden transition-all duration-200 relative group",
+                          isCurrentPage && "bg-primary text-primary-foreground font-semibold shadow-sm",
+                          !isCurrentPage && "hover:bg-accent/50 hover:shadow-sm",
+                          collapsed && "px-2 justify-center tooltip-trigger"
                         )}
                         onClick={() => handleNavigation(item.href)}
+                        title={collapsed ? item.name : undefined}
                       >
-                        <Icon className="w-4 h-4 flex-shrink-0" />
-                        {!collapsed && <span className="text-sm truncate">{item.name}</span>}
+                        {/* Active indicator bar */}
+                        {isCurrentPage && (
+                          <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-primary-foreground rounded-r-full" />
+                        )}
+                        
+                        <Icon className={cn(
+                          "w-5 h-5 flex-shrink-0 transition-transform duration-200",
+                          isCurrentPage && "text-primary-foreground",
+                          !isCurrentPage && "text-muted-foreground group-hover:text-foreground group-hover:scale-110"
+                        )} />
+                        
+                        {!collapsed && (
+                          <div className="flex-1 flex items-center justify-between min-w-0">
+                            <span className={cn(
+                              "text-sm truncate transition-colors duration-200",
+                              isCurrentPage && "font-semibold text-primary-foreground",
+                              !isCurrentPage && "font-medium text-foreground group-hover:text-foreground"
+                            )}>
+                              {item.name}
+                            </span>
+                            
+                            {/* Subtle badges for special items */}
+                            {(isAdminItem || isPermissionItem) && (
+                              <span className={cn(
+                                "text-[10px] font-medium px-1.5 py-0.5 rounded-md ml-2 flex-shrink-0",
+                                isCurrentPage && "bg-primary-foreground/20 text-primary-foreground",
+                                !isCurrentPage && "bg-muted text-muted-foreground"
+                              )}>
+                                {isAdminItem ? "Admin" : "Auth"}
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </Button>
                     );
                   })}
@@ -207,7 +252,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ className, onNavigateClose }) 
 
                 {/* Section Divider (except for last section) */}
                 {sectionIndex < navigationSections.length - 1 && (
-                  <div className="mx-2" />
+                  <div className="mx-3 my-3 border-t border-border/40" />
                 )}
               </div>
             );
@@ -216,18 +261,24 @@ export const Sidebar: React.FC<SidebarProps> = ({ className, onNavigateClose }) 
       </div>
 
       {/* Collapse Toggle */}
-      <div className="p-2 flex-shrink-0 relative z-10 glass">
+      <div className="p-2 flex-shrink-0 relative z-10 glass border-t border-border/40">
         <Button
           variant="ghost"
           size="sm"
           onClick={() => setCollapsed(!collapsed)}
-          className="w-full justify-center h-8 hover:bg-primary/10 hover:text-primary focus:ring-0 focus:ring-offset-0 focus-visible:ring-0 focus-visible:ring-offset-0 border-0"
+          className="w-full justify-center h-9 hover:bg-accent transition-all duration-200 rounded-lg group"
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
-          {collapsed ? (
-            <ChevronRight className="w-4 h-4" />
-          ) : (
-            <ChevronLeft className="w-4 h-4" />
-          )}
+          <div className="flex items-center gap-2">
+            {collapsed ? (
+              <ChevronRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
+            ) : (
+              <>
+                <ChevronLeft className="w-4 h-4 group-hover:-translate-x-0.5 transition-transform" />
+                {!collapsed && <span className="text-xs font-medium">Collapse</span>}
+              </>
+            )}
+          </div>
         </Button>
       </div>
     </div>

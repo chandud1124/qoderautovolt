@@ -57,7 +57,7 @@ const getCleanMacAddress = (value: string): string => {
   return value.replace(/[^0-9A-Fa-f]/g, '').toUpperCase();
 };
 
-export const MacAddressInput: React.FC<MacAddressInputProps> = ({
+export const MacAddressInput = React.forwardRef<HTMLInputElement, MacAddressInputProps>(({
   value = '',
   onChange,
   onValidChange,
@@ -69,10 +69,13 @@ export const MacAddressInput: React.FC<MacAddressInputProps> = ({
   autoFocus = false,
   name,
   id,
-}) => {
+}, ref) => {
   const [internalValue, setInternalValue] = useState(value);
   const inputRef = useRef<HTMLInputElement>(null);
   const [isValid, setIsValid] = useState(false);
+
+  // Handle external ref
+  React.useImperativeHandle(ref, () => inputRef.current!, []);
 
   /**
    * Handle input change
@@ -209,6 +212,6 @@ export const MacAddressInput: React.FC<MacAddressInputProps> = ({
       )}
     </div>
   );
-};
+});
 
 export default MacAddressInput;

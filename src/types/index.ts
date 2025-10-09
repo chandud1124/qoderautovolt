@@ -1,4 +1,19 @@
 
+export interface ScheduledNotification {
+  time: string; // HH:MM format
+  message: string;
+  enabled: boolean;
+  daysOfWeek: number[]; // 0-6, Sunday to Saturday
+  lastTriggered?: Date;
+}
+
+export interface DeviceNotificationSettings {
+  afterTime: string; // HH:MM format - notify after this time
+  daysOfWeek: number[]; // 0-6, Sunday to Saturday
+  enabled: boolean;
+  lastTriggered?: Date;
+}
+
 export interface Device {
   id: string;
   name: string;
@@ -15,6 +30,7 @@ export interface Device {
   classroom?: string;
   assignedUsers?: string[];
   deviceType?: 'esp32' | 'esp8266' | 'raspberry_pi'; // Device type for filtering
+  notificationSettings?: DeviceNotificationSettings;
 }
 
 export interface Switch {

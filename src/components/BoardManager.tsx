@@ -83,7 +83,7 @@ const BoardManager: React.FC = () => {
     name: '',
     description: '',
     location: '',
-    type: 'raspberry_pi' as 'raspberry_pi',
+    type: 'raspberry_pi' as const,
     displaySettings: {
       resolution: '1920x1080',
       orientation: 'landscape' as 'landscape' | 'portrait',

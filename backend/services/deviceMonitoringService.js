@@ -3,8 +3,8 @@ const PowerConsumptionLog = require('../models/PowerConsumptionLog');
 const EnhancedLoggingService = require('./enhancedLoggingService');
 const DeviceStatusLog = require('../models/DeviceStatusLog');
 
-// Import power calculation functions from metricsService
-const { getBasePowerConsumption, calculateDevicePowerConsumption } = require('../metricsService');
+// Import metrics functions from metricsService
+const { timeLimitExceededCount, switchTimeOnMinutes } = require('../metricsService');
 
 class DeviceMonitoringService {
   constructor() {
@@ -328,6 +328,108 @@ class DeviceMonitoringService {
         severity: 'medium',
         timestamp: now
       });
+    }
+
+    // Check for device notifications
+    const deviceAlerts = await this.checkDeviceNotifications(device);
+    alerts.push(...deviceAlerts);
+
+    return alerts;
+  }
+
+  // Check for device-level notifications based on time and switch states
+  async checkDeviceNotifications(device) {
+    const alerts = [];
+    const now = new Date();
+    const currentTime = now.toTimeString().slice(0, 5); // HH:MM format
+    const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
+
+    try {
+      const settings = device.notificationSettings;
+      if (!settings || !settings.enabled || !settings.afterTime) {
+        return alerts;
+      }
+
+      // Check if current day is included
+      if (settings.daysOfWeek && settings.daysOfWeek.length > 0) {
+        if (!settings.daysOfWeek.includes(currentDay)) {
+          return alerts;
+        }
+      }
+
+      // Check if current time is after the notification time
+      if (currentTime <= settings.afterTime) {
+        return alerts;
+      }
+
+      // Check if we already triggered this notification today
+      const lastTriggered = settings.lastTriggered;
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const lastTriggeredDate = lastTriggered ? new Date(lastTriggered.getFullYear(), lastTriggered.getMonth(), lastTriggered.getDate()) : null;
+
+      // Only trigger if not already triggered today
+      if (lastTriggeredDate && lastTriggeredDate >= today) {
+        return alerts;
+      }
+
+      // Get active switches (switches that are currently on)
+      const activeSwitches = device.switches.filter(sw => sw.state);
+      const totalSwitches = device.switches.length;
+
+      let message = '';
+      let shouldNotify = false;
+
+      if (activeSwitches.length === 0) {
+        // No switches are on - no notification needed
+        return alerts;
+      } else if (activeSwitches.length === totalSwitches) {
+        // All switches are on
+        message = `All ${totalSwitches} switches are still ON in ${device.name}${device.classroom ? ` (${device.classroom})` : ''}`;
+        shouldNotify = true;
+      } else if (activeSwitches.length === 1) {
+        // Only one switch is on
+        const switchName = activeSwitches[0].name;
+        message = `Switch "${switchName}" is still ON in ${device.name}${device.classroom ? ` (${device.classroom})` : ''}`;
+        shouldNotify = true;
+      } else {
+        // Multiple switches are on (but not all)
+        const switchNames = activeSwitches.map(sw => sw.name).join(', ');
+        message = `${activeSwitches.length} switches (${switchNames}) are still ON in ${device.name}${device.classroom ? ` (${device.classroom})` : ''}`;
+        shouldNotify = true;
+      }
+
+      if (shouldNotify) {
+        alerts.push({
+          type: 'device_notification',
+          message: message,
+          severity: 'warning',
+          timestamp: now,
+          notificationTime: settings.afterTime,
+          customMessage: message
+        });
+
+        // Send real-time notification
+        if (global.io) {
+          global.io.emit('device_notification', {
+            deviceId: device._id.toString(),
+            deviceName: device.name,
+            classroom: device.classroom,
+            location: device.location,
+            message: message,
+            notificationTime: settings.afterTime,
+            timestamp: now,
+            activeSwitches: activeSwitches.map(sw => ({ id: sw.id, name: sw.name })),
+            totalSwitches: totalSwitches
+          });
+        }
+
+        // Update last triggered time
+        await Device.findByIdAndUpdate(device._id, {
+          $set: { 'notificationSettings.lastTriggered': now }
+        });
+      }
+    } catch (error) {
+      console.error(`[DEVICE-NOTIFICATIONS] Error checking device notifications for device ${device.name}:`, error);
     }
 
     return alerts;
