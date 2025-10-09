@@ -27,11 +27,27 @@ export const DeviceNotificationAlert: React.FC<DeviceNotificationAlertProps> = (
   const { toast } = useToast();
 
   useEffect(() => {
-    const handleDeviceNotification = (data: DeviceNotificationData) => {
-      console.log('Device notification received:', data);
+    const handleDeviceNotification = (data: Partial<DeviceNotificationData>) => {
+      // Defensive normalization: ensure arrays and timestamps exist
+      const normalized: DeviceNotificationData = {
+        deviceId: data.deviceId || 'unknown',
+        deviceName: data.deviceName || 'Unknown Device',
+        classroom: data.classroom,
+        location: data.location,
+        message: data.message || 'No message',
+        notificationTime: data.notificationTime || new Date().toLocaleTimeString(),
+        timestamp: data.timestamp ? new Date(data.timestamp) : new Date(),
+        activeSwitches: Array.isArray(data.activeSwitches) ? data.activeSwitches : [],
+        totalSwitches: typeof data.totalSwitches === 'number' ? data.totalSwitches : (Array.isArray(data.activeSwitches) ? data.activeSwitches.length : 0)
+      };
+      console.log('Device notification received (normalized):', normalized);
 
-      // Add new notification to the list
-      setNotifications(prev => [data, ...prev].slice(0, 10)); // Keep only the 10 most recent notifications
+      // Deduplicate: ignore if we already have the same deviceId + timestamp + message
+      setNotifications(prev => {
+        const exists = prev.some(n => n.deviceId === normalized.deviceId && (n.timestamp?.getTime?.() ?? new Date(n.timestamp).getTime()) === (normalized.timestamp?.getTime?.() ?? new Date(normalized.timestamp).getTime()) && n.message === normalized.message);
+        if (exists) return prev;
+        return [normalized, ...prev].slice(0, 10); // Keep only the 10 most recent notifications
+      });
 
       // Show toast notification
       toast({
@@ -111,9 +127,9 @@ export const DeviceNotificationAlert: React.FC<DeviceNotificationAlertProps> = (
                 )}
                 <div className="flex items-center gap-2">
                   <Zap className="w-3 h-3" />
-                  <span><strong>Active Switches:</strong> {notification.activeSwitches.length}/{notification.totalSwitches}</span>
+                  <span><strong>Active Switches:</strong> {notification.activeSwitches?.length ?? 0}/{notification.totalSwitches ?? 0}</span>
                 </div>
-                {notification.activeSwitches.length > 0 && notification.activeSwitches.length < 3 && (
+                {notification.activeSwitches && notification.activeSwitches.length > 0 && notification.activeSwitches.length < 3 && (
                   <div><strong>Switches ON:</strong> {notification.activeSwitches.map(sw => sw.name).join(', ')}</div>
                 )}
                 <div className="text-xs opacity-75">

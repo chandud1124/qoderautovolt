@@ -1,4 +1,4 @@
-import React, { useState, useRef, KeyboardEvent, ClipboardEvent } from 'react';
+import React, { useState, useRef, KeyboardEvent, ClipboardEvent, useEffect } from 'react';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 
@@ -73,6 +73,15 @@ export const MacAddressInput = React.forwardRef<HTMLInputElement, MacAddressInpu
   const [internalValue, setInternalValue] = useState(value);
   const inputRef = useRef<HTMLInputElement>(null);
   const [isValid, setIsValid] = useState(false);
+
+  // Sync internal value and validity when external `value` or separator changes
+  useEffect(() => {
+    const formatted = formatMacAddress(value || '', separator);
+    setInternalValue(formatted);
+    const valid = isValidMacAddress(formatted);
+    setIsValid(valid);
+    if (onValidChange) onValidChange(formatted, valid);
+  }, [value, separator]);
 
   // Handle external ref
   React.useImperativeHandle(ref, () => inputRef.current!, []);

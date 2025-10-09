@@ -65,19 +65,31 @@ const scheduledNotificationSchema = z.object({
   message: z.string().min(1, 'Message is required').max(200, 'Message too long'),
   enabled: z.boolean().default(true),
   daysOfWeek: z.array(z.number().min(0).max(6)).min(1, 'At least one day required'),
-  lastTriggered: z.date().optional()
+  lastTriggered: z.date().nullable().optional()
 });
 
 const deviceNotificationSchema = z.object({
-  afterTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/, 'Invalid time format (HH:MM)'),
-  enabled: z.boolean().default(true),
-  daysOfWeek: z.array(z.number().min(0).max(6)).min(1, 'At least one day required'),
-  lastTriggered: z.date().optional()
+  afterTime: z.string().optional(),
+  enabled: z.boolean().default(false),
+  daysOfWeek: z.array(z.number().min(0).max(6)).optional(),
+  lastTriggered: z.date().nullable().optional()
+}).refine((d) => {
+  // Only require afterTime and daysOfWeek when notifications are enabled
+  if (!d.enabled) return true;
+  if (!d.afterTime) return false;
+  if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(d.afterTime)) return false;
+  if (!Array.isArray(d.daysOfWeek) || d.daysOfWeek.length < 1) return false;
+  return true;
+}, {
+  message: 'When notifications are enabled, set a valid time (HH:MM) and at least one day',
+  path: ['enabled']
 });
 
 const formSchema = z.object({
   name: z.string().min(1, 'Required'),
-  macAddress: z.string().min(1, 'Required'),
+  macAddress: z.string()
+    .min(1, 'MAC address is required')
+    .regex(/^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/, 'Invalid MAC address format (use XX:XX:XX:XX:XX:XX or XX-XX-XX-XX-XX-XX)'),
   ipAddress: z.string().regex(/^(\d{1,3}\.){3}\d{1,3}$/, 'Invalid IP').refine(v => v.split('.').every(o => +o >= 0 && +o <= 255), 'Octets 0-255'),
   location: z.string().min(1),
   classroom: z.string().optional(),
@@ -176,6 +188,17 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
       const lp = parseLocation(initialData.location);
       setBlock(lp.block); setFloor(lp.floor);
       fetchGpioInfo(); // Fetch GPIO info when dialog opens with existing device
+      // Normalize incoming notification settings to avoid partial objects that fail validation
+      let notifSettings = initialData.notificationSettings as any;
+      if (notifSettings && notifSettings.enabled) {
+        const missingAfterTime = !notifSettings.afterTime || typeof notifSettings.afterTime !== 'string';
+        const missingDays = !Array.isArray(notifSettings.daysOfWeek) || notifSettings.daysOfWeek.length === 0;
+        if (missingAfterTime || missingDays) {
+          // If enabled but missing required fields, fall back to disabled to avoid blocking edits
+          notifSettings = { enabled: false };
+        }
+      }
+
       form.reset({
         name: initialData.name,
         macAddress: formatMacAddress(initialData.macAddress),
@@ -186,7 +209,7 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
         pirEnabled: initialData.pirEnabled || false,
         pirGpio: initialData.pirGpio,
         pirAutoOffDelay: initialData.pirAutoOffDelay || 30,
-        deviceNotifications: initialData.notificationSettings,
+        deviceNotifications: notifSettings,
     switches: initialData.switches.map((sw: import('@/types').Switch) => ({
     id: sw.id,
           name: sw.name,
@@ -360,6 +383,7 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
     }
   };
   const submit = async (data: FormValues) => {
+    console.log('[DeviceConfigDialog] submit() called', { initialDataId: initialData?.id });
     // Ensure every switch has a string id before validation and submission
     const switchesWithId = data.switches.map(sw => ({
       id: typeof sw.id === 'string' && sw.id.length > 0 ? sw.id : `switch-${Date.now()}-${Math.floor(Math.random()*10000)}`,
@@ -378,19 +402,46 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
     }));
 
     // Validate GPIO configuration before submitting
-    const validation = await validateGpioConfig({
-      switches: switchesWithId,
-      pirEnabled: data.pirEnabled,
-      pirGpio: data.pirGpio
-    });
+    // Normalize MAC address to backend expected format (colon-separated, lowercase)
+    try {
+      if (data.macAddress) {
+        data.macAddress = formatMacAddress(data.macAddress).toLowerCase();
+        form.setValue('macAddress', data.macAddress, { shouldValidate: false });
+        console.log('[DeviceConfigDialog] normalized macAddress ->', data.macAddress);
+      }
 
-    if (!validation || !validation.valid) {
-      // Validation failed or API error occurred - errors are already displayed
+      console.log('[DeviceConfigDialog] calling validateGpioConfig with switches:', switchesWithId.map(s => ({ id: s.id, gpio: s.gpio, manual: s.manualSwitchGpio })));
+      const validation = await validateGpioConfig({
+        switches: switchesWithId,
+        pirEnabled: data.pirEnabled,
+        pirGpio: data.pirGpio
+      });
+      console.log('[DeviceConfigDialog] validateGpioConfig result:', validation);
+
+      if (!validation) {
+        console.warn('[DeviceConfigDialog] validation API returned null/failed; aborting submit');
+        return;
+      }
+
+      if (!validation.valid) {
+        console.warn('[DeviceConfigDialog] validation failed, not submitting. Errors:', validation.errors);
+        return;
+      }
+
+      try {
+        onSubmit({ ...data, switches: switchesWithId });
+        onOpenChange(false);
+        console.log('[DeviceConfigDialog] onSubmit called successfully');
+      } catch (err) {
+        console.error('[DeviceConfigDialog] onSubmit threw an error:', err);
+        throw err;
+      }
+    } catch (err: any) {
+      console.error('[DeviceConfigDialog] unexpected error during submit:', err && (err.message || err));
+      // Surface a general message in the UI as a fallback
+      setGeneralErrors([`Submission failed: ${err?.message || String(err)}`]);
       return;
     }
-
-    onSubmit({ ...data, switches: switchesWithId });
-    onOpenChange(false);
   };
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -400,7 +451,36 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
           <DialogDescription>{initialData ? 'Update device configuration' : 'Enter device details and at least one switch.'}</DialogDescription>
         </DialogHeader>
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(submit)} className="space-y-6">
+          <form onSubmit={async (e) => {
+            console.log('[DeviceConfigDialog] native form onSubmit event');
+            // Prevent default here and run programmatic validation to inspect results
+            try {
+              e.preventDefault();
+            } catch (err) {
+              // older browsers may not allow preventDefault on synthetic events
+            }
+            try {
+              const valid = await form.trigger();
+              console.log('[DeviceConfigDialog] form.trigger() result:', valid, 'errors:', form.formState.errors);
+              if (valid) {
+                // Call handleSubmit without passing the raw event because we've already prevented default
+                await form.handleSubmit(submit)();
+              } else {
+                // Provide more targeted debug info for nested deviceNotifications validation
+                try {
+                  const notifVals = form.getValues('deviceNotifications');
+                  const notifError = (form.formState.errors as any)?.deviceNotifications;
+                  const errSummary = notifError ? (notifError.message || JSON.stringify({ type: notifError.type, ...notifError })) : null;
+                  console.warn('[DeviceConfigDialog] Validation failed, not calling submit. deviceNotifications values:', notifVals, 'deviceNotifications error:', errSummary);
+                } catch (e) {
+                  console.warn('[DeviceConfigDialog] Validation failed, failed to read deviceNotifications debug info', e);
+                }
+                console.warn('[DeviceConfigDialog] Validation failed, not calling submit.');
+              }
+            } catch (err) {
+              console.error('[DeviceConfigDialog] error during programmatic validation/submit:', err);
+            }
+          }} className="space-y-6">
             <div className="space-y-4">
               <FormField control={form.control} name="name" render={({ field }) => (<FormItem><FormLabel>Device Name</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>)} />
               <FormField control={form.control} name="macAddress" render={({ field }) => (<FormItem><FormLabel>MAC Address</FormLabel><FormControl><MacAddressInput {...field} placeholder="AA:BB:CC:DD:EE:FF" /></FormControl><FormMessage /></FormItem>)} />
@@ -893,8 +973,8 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
 
                           const getPinRecommendation = (pin: GpioPinInfo) => {
                             if (deviceType === 'esp8266') {
-                              if ([13, 1, 3].includes(pin.pin)) return 'Primary (Safe)';
-                              if ([0, 2, 15, 16].includes(pin.pin)) return 'Secondary (Caution)';
+                              if ([14, 16, 0, 2].includes(pin.pin)) return 'Primary (Safe)';
+                              if ([13, 1, 3].includes(pin.pin)) return 'Secondary (Caution)';
                               return 'Available';
                             }
                             const primaryManualPins = [23, 25, 26, 27, 32, 33];
@@ -991,7 +1071,7 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
                                     <strong>Note:</strong> This pin is safe but not recommended for manual switches.
                                     <div className="mt-2">
                                       <strong>Recommended manual switch pins:</strong> {deviceType === 'esp8266' 
-                                        ? 'GPIO 13, 1, 3 (Primary/Safe) or 0, 2, 15, 16 (Secondary/Caution)' 
+                                        ? 'GPIO 14, 16, 0, 2 (Primary/Safe) or 13, 1, 3 (Secondary/Caution)' 
                                         : 'GPIO 23, 25, 26, 27, 32, 33 (Primary) or 16, 17, 18, 19, 21, 22 (Secondary)'}
                                     </div>
                                   </AlertDescription>
@@ -1115,7 +1195,41 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
                 </AlertDescription>
               </Alert>
             )}
-            <DialogFooter className="sticky bottom-0 bg-transparent py-4 z-10"><Button type="submit" className="w-full" disabled={gpioValidation && !gpioValidation.valid}>Save</Button></DialogFooter>
+            <DialogFooter className="sticky bottom-0 bg-transparent py-4 z-10">
+              <Button
+                type="submit"
+                className="w-full"
+                disabled={gpioValidation && !gpioValidation.valid}
+                onClick={(e) => {
+                  try {
+                    const btn = e.currentTarget as HTMLButtonElement;
+                    // Build a safe, shallow snapshot to avoid circular refs (DOM nodes, fibers)
+                    const values = form.getValues();
+                    const snapshot: any = {
+                      isSubmitting: form.formState.isSubmitting,
+                      errorKeys: Object.keys(form.formState.errors || {}),
+                      // Provide small, helpful value hints instead of entire deep object
+                      values: {
+                        name: values.name,
+                        macAddress: values.macAddress,
+                        ipAddress: values.ipAddress,
+                        deviceType: values.deviceType,
+                        switchesCount: Array.isArray(values.switches) ? values.switches.length : 0
+                      },
+                      buttonTag: btn.tagName,
+                      buttonTypeAttr: btn.getAttribute('type'),
+                      hasAssociatedForm: !!btn.form,
+                      associatedFormName: btn.form?.name || btn.form?.id || null
+                    };
+                    console.log('[DeviceConfigDialog] Save button clicked (detailed):', snapshot);
+                  } catch (err) {
+                    console.log('[DeviceConfigDialog] Save button click logging failed', err);
+                  }
+                }}
+              >
+                Save
+              </Button>
+            </DialogFooter>
           </form>
         </Form>
       </DialogContent>
