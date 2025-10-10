@@ -273,11 +273,20 @@ class BulkOperations {
                                 continue;
                             }
 
+                            // Ensure we include the device secret and userId so firmware accepts the command
                             const command = {
                                 mac: esp32Id, // Use ESP32 ID (MAC address) as target
                                 gpio: gpio, // GPIO pin number
                                 state: switchInfo.targetState // Desired state
                             };
+
+                            // Try to include device secret if available on the device object
+                            if (device && device.deviceSecret) {
+                                command.secret = device.deviceSecret;
+                            }
+
+                            // Include a userId so firmware will accept the command
+                            command.userId = process.env.MQTT_COMMAND_USER || 'default_user';
 
                             const message = JSON.stringify(command);
                             const result = mqttClient.publish('esp32/switches', message);

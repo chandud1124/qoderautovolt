@@ -141,7 +141,13 @@ mqttClient.on('message', (topic, message) => {
                   lastSeen: device.lastSeen
                 });
                 // 2. device_state_changed for React UI (with debouncing)
-                // emitDeviceStateChanged(device, { source: 'mqtt_online' }); // TEMPORARILY DISABLED
+                // Re-enable the debounced, sequence-aware device state emitter so the UI reflects
+                // changes when the ESP publishes updated switch states.
+                try {
+                  emitDeviceStateChanged(device, { source: 'mqtt_online' });
+                } catch (e) {
+                  logger.error('[emitDeviceStateChanged] error', e && e.message ? e.message : e);
+                }
                 // 3. device_connected event for real-time UI feedback
                 global.io.emit('device_connected', {
                   deviceId: device.id || device._id?.toString(),
@@ -238,10 +244,14 @@ mqttClient.on('message', (topic, message) => {
                       newState: data.state,
                       source: 'mqtt_manual_switch'
                     });
-                    // emitDeviceStateChanged(updatedDevice, {
-                    //   source: 'mqtt_manual_switch',
-                    //   note: `Manual switch ${switchInfo.name} changed to ${data.state ? 'ON' : 'OFF'}`
-                    // }); // TEMPORARILY DISABLED
+                    try {
+                      emitDeviceStateChanged(updatedDevice, {
+                        source: 'mqtt_manual_switch',
+                        note: `Manual switch ${switchInfo.name} changed to ${data.state ? 'ON' : 'OFF'}`
+                      });
+                    } catch (e) {
+                      logger.error('[emitDeviceStateChanged] manual switch emit error', e && e.message ? e.message : e);
+                    }
                     console.log(`[MQTT] Emitted device_state_changed for manual switch: ${device.name}`);
                   } else {
                     console.log(`[DEBUG] NOT emitting - global.io: ${!!global.io}, updatedDevice: ${!!updatedDevice}`);
@@ -401,7 +411,10 @@ function sendMqttSwitchCommand(macAddress, gpio, state) {
       mac: macAddress, // Include MAC address to target specific device
       secret: device.deviceSecret, // Include device secret for authentication
       gpio: gpio,
-      state: state
+      state: state,
+      // Include a userId so firmware will accept the command. Use default_user to
+      // match the lightweight firmware auth check (it accepts 'default_user' or 'admin').
+      userId: process.env.MQTT_COMMAND_USER || 'default_user'
     };
     const message = JSON.stringify(command);
     
@@ -427,6 +440,9 @@ function sendDeviceConfigToESP32(macAddress) {
         const config = {
           mac: macAddress,
           secret: device.deviceSecret,
+          // Include userId 'admin' for configuration pushes so the firmware
+          // accepts and applies configuration updates.
+          userId: process.env.MQTT_CONFIG_USER || 'admin',
           switches: device.switches.map(sw => ({
             gpio: sw.relayGpio || sw.gpio,
             manualGpio: sw.manualSwitchGpio,
@@ -1086,19 +1102,14 @@ io.on('connection', (socket) => {
         return;
       }
 
-      // Send MQTT command to ESP32 (JSON format)
-      const command = {
-        mac: device.macAddress, // Include MAC address
-        secret: device.deviceSecret, // Include device secret for authentication
-        gpio: gpio,
-        state: desiredState
-      };
-
-      const message = JSON.stringify(command);
-      console.log('[DEBUG] About to publish MQTT message:', message);
-      const result = mqttClient.publish('esp32/switches', message);
-      console.log('[DEBUG] MQTT publish result:', result);
-      console.log('[MQTT] Sent switch command to ESP32:', device.macAddress, command);
+      // Use centralized helper so the published payload includes required fields
+      // (mac, secret, userId) and consistent logging.
+      try {
+        sendMqttSwitchCommand(device.macAddress, gpio, desiredState);
+        console.log('[MQTT] Sent switch command (via helper) to ESP32:', device.macAddress, { gpio, state: desiredState });
+      } catch (err) {
+        console.error('[MQTT] Error sending switch command via helper:', err && err.message ? err.message : err);
+      }
 
     } catch (error) {
       console.error('[SOCKET] Error processing switch_intent:', error.message);
@@ -1145,19 +1156,17 @@ io.on('connection', (socket) => {
           switchesToToggle = device.switches;
         }
 
-        // Send MQTT command for each switch
+        // Send MQTT command for each switch, using helper so required fields are included
         for (const switchInfo of switchesToToggle) {
-          const command = {
-            mac: device.macAddress, // Include MAC address
-            secret: device.deviceSecret, // Include device secret for authentication
-            gpio: switchInfo.gpio,
-            state: desiredState
-          };
-
-          const message = JSON.stringify(command);
-          mqttClient.publish('esp32/switches', message);
-          commandCount++;
-          console.log('[MQTT] Sent bulk switch command to ESP32:', device.macAddress, command);
+          try {
+            const gpio = switchInfo.gpio;
+            // Use centralized helper that will attach secret and userId
+            sendMqttSwitchCommand(device.macAddress, gpio, desiredState);
+            commandCount++;
+            console.log('[MQTT] Sent bulk switch command (via helper) to ESP32:', device.macAddress, { gpio, state: desiredState });
+          } catch (err) {
+            console.error('[MQTT] Error sending bulk switch command via helper:', err && err.message ? err.message : err);
+          }
         }
       }
 
