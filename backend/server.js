@@ -124,8 +124,65 @@ mqttClient.on('message', (topic, message) => {
           }
 
           // Save device
-          device.save().then(() => {
+          device.save().then(async () => {
             console.log(`[MQTT] Marked device ${device.macAddress} as online`);
+
+            // Log ESP32 status update to database
+            try {
+              const DeviceStatusLog = require('./models/DeviceStatusLog');
+              
+              // Prepare switch states for logging
+              const switchStates = [];
+              if (data.switches && Array.isArray(data.switches)) {
+                data.switches.forEach(esp32Switch => {
+                  const deviceSwitch = device.switches.find(s => (s.relayGpio || s.gpio) === esp32Switch.gpio);
+                  if (deviceSwitch) {
+                    switchStates.push({
+                      switchId: deviceSwitch._id.toString(),
+                      switchName: deviceSwitch.name,
+                      physicalPin: esp32Switch.gpio,
+                      expectedState: deviceSwitch.state,
+                      actualState: esp32Switch.state,
+                      isMatch: deviceSwitch.state === esp32Switch.state,
+                      lastChanged: deviceSwitch.lastStateChange || new Date(),
+                      changeReason: esp32Switch.manual_override ? 'manual' : 'esp32_status'
+                    });
+                  }
+                });
+              }
+
+              // Calculate summary
+              const totalSwitchesOn = switchStates.filter(s => s.actualState).length;
+              const totalSwitchesOff = switchStates.length - totalSwitchesOn;
+
+              // Create status log entry
+              const logEntry = await DeviceStatusLog.create({
+                deviceId: device._id,
+                deviceName: device.name,
+                deviceMac: device.macAddress,
+                checkType: 'scheduled_check',
+                switchStates: switchStates,
+                deviceStatus: {
+                  isOnline: true,
+                  lastSeen: device.lastSeen,
+                  freeHeap: data.heap || 0,
+                  responseTime: 0 // Could be calculated if needed
+                },
+                summary: {
+                  totalSwitchesOn: totalSwitchesOn,
+                  totalSwitchesOff: totalSwitchesOff,
+                  inconsistenciesFound: switchStates.filter(s => !s.isMatch).length
+                },
+                classroom: device.classroom,
+                location: device.location,
+                timestamp: new Date()
+              });
+
+              console.log(`[MQTT] ✅ Successfully logged ESP32 status update for device ${device.macAddress}: ${totalSwitchesOn} ON, ${totalSwitchesOff} OFF (Log ID: ${logEntry._id})`);
+            } catch (logError) {
+              console.error('[MQTT] ❌ Error logging ESP32 status update:', logError.message);
+              console.error('[MQTT] Log error details:', logError);
+            }
 
             // Send current configuration to ESP32
             sendDeviceConfigToESP32(device.macAddress);
@@ -288,9 +345,42 @@ mqttClient.on('message', (topic, message) => {
               }
             },
             { new: true }
-          ).then(device => {
+          ).then(async (device) => {
             if (device) {
               console.log(`[MQTT] Updated heartbeat for device: ${device.name} (${device.macAddress})`);
+
+              // Log ESP32 heartbeat to database
+              try {
+                const DeviceStatusLog = require('./models/DeviceStatusLog');
+
+                // Create heartbeat log entry
+                const logEntry = await DeviceStatusLog.create({
+                  deviceId: device._id,
+                  deviceName: device.name,
+                  deviceMac: device.macAddress,
+                  checkType: 'heartbeat',
+                  deviceStatus: {
+                    isOnline: true,
+                    lastSeen: device.lastSeen,
+                    freeHeap: data.heap || 0,
+                    uptime: data.uptime || 0
+                  },
+                  summary: {
+                    totalSwitchesOn: device.switches ? device.switches.filter(s => s.state).length : 0,
+                    totalSwitchesOff: device.switches ? device.switches.filter(s => !s.state).length : 0,
+                    inconsistenciesFound: 0
+                  },
+                  classroom: device.classroom,
+                  location: device.location,
+                  timestamp: new Date()
+                });
+
+                console.log(`[MQTT] ✅ Successfully logged ESP32 heartbeat for device ${device.macAddress} (Log ID: ${logEntry._id})`);
+              } catch (logError) {
+                console.error('[MQTT] ❌ Error logging ESP32 heartbeat:', logError.message);
+                console.error('[MQTT] Heartbeat log error details:', logError);
+              }
+
               // Emit real-time update if status was previously offline
               if (global.io && device.status !== 'online') {
                 // emitDeviceStateChanged(device, { source: 'mqtt_heartbeat' }); // TEMPORARILY DISABLED
@@ -920,6 +1010,68 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 // (removed duplicate simple health route; see consolidated one below)
+
+// Public stats endpoint for landing page (no auth required)
+app.get('/api/public/stats', async (req, res) => {
+  try {
+    const Device = require('./models/Device');
+    
+    // Get all devices count
+    const totalDevices = await Device.countDocuments();
+    const onlineDevices = await Device.countDocuments({ status: 'online' });
+    
+    // Get all switches count from devices
+    const devices = await Device.find().select('switches');
+    let totalSwitches = 0;
+    let switchesOn = 0;
+    
+    devices.forEach(device => {
+      if (device.switches && Array.isArray(device.switches)) {
+        totalSwitches += device.switches.length;
+        switchesOn += device.switches.filter(sw => sw.state === true).length;
+      }
+    });
+    
+    // Calculate energy savings (example calculation)
+    // Assuming average switch is 100W, and automation saves 40% of unnecessary usage
+    const estimatedEnergySaved = Math.round((switchesOn * 0.1 * 24 * 365 * 0.4) / 1000); // kWh per year
+    const energySavedPercentage = 40; // Fixed percentage as per AutoVolt value proposition
+    
+    // System uptime (example - can be calculated from server start time)
+    const uptime = process.uptime();
+    const uptimePercentage = 99.9; // Can be calculated from actual monitoring data
+    
+    res.json({
+      success: true,
+      data: {
+        totalDevices,
+        onlineDevices,
+        totalSwitches,
+        switchesOn,
+        energySavedPercentage,
+        estimatedEnergySaved,
+        uptimePercentage,
+        timestamp: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching public stats:', error);
+    // Return default values on error
+    res.json({
+      success: false,
+      data: {
+        totalDevices: 0,
+        onlineDevices: 0,
+        totalSwitches: 0,
+        switchesOn: 0,
+        energySavedPercentage: 40,
+        estimatedEnergySaved: 0,
+        uptimePercentage: 99.9,
+        timestamp: new Date().toISOString()
+      }
+    });
+  }
+});
 
 // Mount routes with rate limiting
 const apiRouter = express.Router();

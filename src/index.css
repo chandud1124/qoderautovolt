@@ -423,7 +423,8 @@
   body {
     @apply bg-background text-foreground font-sans antialiased;
     min-height: 100vh;
-    overflow: hidden;
+    overflow-x: hidden;
+    overflow-y: auto;
     transition: background-color 0.3s ease, color 0.3s ease;
   }
 
