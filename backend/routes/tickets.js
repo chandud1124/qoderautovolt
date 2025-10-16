@@ -13,7 +13,7 @@ const {
 console.log('DEBUG: Tickets routes loaded');
 
 // All routes require authentication
-// router.use(auth);
+router.use(auth);
 
 // Validation middleware
 const createTicketValidation = [
@@ -36,7 +36,7 @@ const updateTicketValidation = [
 // Routes
 router.post('/', createTicketValidation, require('../middleware/validationHandler').handleValidationErrors, createTicket);
 router.get('/', getTickets);
-router.get('/stats', authorize('admin', 'super-admin'), getTicketStats);
+router.get('/stats', authorize('admin', 'super-admin', 'dean', 'hod'), getTicketStats);
 router.get('/:id', getTicket);
 router.put('/:id', updateTicketValidation, require('../middleware/validationHandler').handleValidationErrors, updateTicket);
 router.delete('/:id', authorize('admin', 'super-admin'), deleteTicket);

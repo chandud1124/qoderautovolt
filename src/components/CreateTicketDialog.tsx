@@ -5,15 +5,24 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription } from '@/components/ui/dialog';
-import { Badge } from '@/components/ui/badge';
-import { X, Plus, Ticket } from 'lucide-react';
-import { ticketAPI } from '@/services/api';
+import { MentionInput } from '@/components/ui/MentionInput';
+import { Ticket } from 'lucide-react';
+import { ticketAPI, usersAPI } from '@/services/api';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
 import { useDevices } from '@/hooks/useDevices';
 
 interface CreateTicketDialogProps {
     onTicketCreated?: () => void;
+}
+
+interface User {
+    _id: string;
+    id?: string;
+    name: string;
+    email: string;
+    role?: string;
+    department?: string;
 }
 
 const CreateTicketDialog: React.FC<CreateTicketDialogProps> = ({ onTicketCreated }) => {
@@ -30,9 +39,9 @@ const CreateTicketDialog: React.FC<CreateTicketDialogProps> = ({ onTicketCreated
         department: user?.department || '',
         location: '',
         deviceId: '',
-        tags: [] as string[]
+        tags: [] as string[],
+        mentionedUsers: [] as User[]
     });
-    const [newTag, setNewTag] = useState('');
 
     const categories = [
         { value: 'technical_issue', label: 'Technical Issue' },
@@ -65,25 +74,8 @@ const CreateTicketDialog: React.FC<CreateTicketDialogProps> = ({ onTicketCreated
         'Other'
     ];
 
-    const handleInputChange = (field: string, value: string) => {
+    const handleInputChange = (field: string, value: string | User[]) => {
         setFormData(prev => ({ ...prev, [field]: value }));
-    };
-
-    const addTag = () => {
-        if (newTag.trim() && !formData.tags.includes(newTag.trim())) {
-            setFormData(prev => ({
-                ...prev,
-                tags: [...prev.tags, newTag.trim()]
-            }));
-            setNewTag('');
-        }
-    };
-
-    const removeTag = (tagToRemove: string) => {
-        setFormData(prev => ({
-            ...prev,
-            tags: prev.tags.filter(tag => tag !== tagToRemove)
-        }));
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -100,10 +92,15 @@ const CreateTicketDialog: React.FC<CreateTicketDialogProps> = ({ onTicketCreated
 
         setLoading(true);
         try {
-            await ticketAPI.createTicket(formData);
+            // Extract user IDs from mentionedUsers
+            const ticketPayload = {
+                ...formData,
+                mentionedUsers: formData.mentionedUsers.map(u => u._id || u.id || '')
+            };
+            await ticketAPI.createTicket(ticketPayload);
             toast({
                 title: "Ticket Created",
-                description: "Your support ticket has been submitted successfully.",
+                description: "Your support ticket has been submitted successfully. Mentioned users will be notified.",
             });
             setOpen(false);
             setFormData({
@@ -114,7 +111,8 @@ const CreateTicketDialog: React.FC<CreateTicketDialogProps> = ({ onTicketCreated
                 department: user?.department || '',
                 location: '',
                 deviceId: '',
-                tags: []
+                tags: [],
+                mentionedUsers: []
             });
             onTicketCreated?.();
         } catch (error: unknown) {
@@ -256,34 +254,23 @@ const CreateTicketDialog: React.FC<CreateTicketDialogProps> = ({ onTicketCreated
                         </Select>
                     </div>
 
-                    {/* Tags */}
-                    <div className="space-y-2">
-                        <Label>Tags (Optional)</Label>
-                        <div className="flex gap-2">
-                            <Input
-                                value={newTag}
-                                onChange={(e) => setNewTag(e.target.value)}
-                                placeholder="Add a tag"
-                                onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), addTag())}
-                            />
-                            <Button type="button" variant="outline" onClick={addTag}>
-                                <Plus className="w-4 h-4" />
-                            </Button>
-                        </div>
-                        {formData.tags.length > 0 && (
-                            <div className="flex flex-wrap gap-2 mt-2">
-                                {formData.tags.map((tag) => (
-                                    <Badge key={tag} variant="secondary" className="gap-1">
-                                        {tag}
-                                        <X
-                                            className="w-3 h-3 cursor-pointer"
-                                            onClick={() => removeTag(tag)}
-                                        />
-                                    </Badge>
-                                ))}
-                            </div>
-                        )}
-                    </div>
+                    {/* Mention Users */}
+                    <MentionInput
+                        mentionedUsers={formData.mentionedUsers}
+                        onMentionedUsersChange={(users) => handleInputChange('mentionedUsers', users as any)}
+                        onSearchUsers={async (query) => {
+                            try {
+                                const response = await usersAPI.searchUsersForMention(query);
+                                return response.data?.data || [];
+                            } catch (error) {
+                                console.error('Error searching users:', error);
+                                return [];
+                            }
+                        }}
+                        placeholder="Type @ to mention users..."
+                        label="Mention Users (Optional)"
+                        maxMentions={10}
+                    />
 
                     {/* Submit Buttons */}
                     <div className="flex justify-end gap-3 pt-4">

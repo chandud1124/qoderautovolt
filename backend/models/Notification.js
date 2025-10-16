@@ -22,7 +22,10 @@ const notificationSchema = new mongoose.Schema({
             'account_approved',
             'account_rejected',
             'extension_approved',
-            'extension_rejected'
+            'extension_rejected',
+            'ticket_mention',
+            'ticket_status_change',
+            'ticket_assigned'
         ],
         required: true,
         index: true
@@ -54,7 +57,7 @@ const notificationSchema = new mongoose.Schema({
     relatedEntity: {
         model: {
             type: String,
-            enum: ['User', 'Device', 'Schedule', 'PermissionRequest', 'ClassExtensionRequest', 'SecurityAlert']
+            enum: ['User', 'Device', 'Schedule', 'PermissionRequest', 'ClassExtensionRequest', 'SecurityAlert', 'Ticket']
         },
         id: {
             type: mongoose.Schema.Types.ObjectId

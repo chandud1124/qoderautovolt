@@ -40,7 +40,7 @@ const ticketSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['open', 'in_progress', 'resolved', 'closed', 'cancelled'],
+        enum: ['open', 'in_progress', 'on_hold', 'resolved', 'closed', 'cancelled'],
         default: 'open',
         index: true
     },
@@ -99,6 +99,10 @@ const ticketSchema = new mongoose.Schema({
     tags: [{
         type: String,
         trim: true
+    }],
+    mentionedUsers: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
     }],
     resolution: {
         type: String,

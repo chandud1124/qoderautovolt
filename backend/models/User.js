@@ -23,7 +23,7 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['super-admin', 'dean', 'admin', 'faculty', 'teacher', 'student', 'security', 'guest'],
+    enum: ['super-admin', 'dean', 'hod', 'admin', 'faculty', 'teacher', 'student', 'security', 'guest'],
     default: 'student',
     index: true // Index for role-based queries
   },
@@ -33,12 +33,13 @@ const userSchema = new mongoose.Schema({
       const roleLevels = {
         'super-admin': 10,
         'dean': 9,
-        'admin': 8,
-        'faculty': 7,
-        'teacher': 6,
-        'security': 5,
-        'student': 4,
-        'guest': 3
+        'hod': 8,
+        'admin': 7,
+        'faculty': 6,
+        'teacher': 5,
+        'security': 4,
+        'student': 3,
+        'guest': 2
       };
       return roleLevels[this.role] || 3;
     }
@@ -206,6 +207,22 @@ userSchema.pre('save', async function (next) {
       canRequestExtensions: true,
       emergencyOverride: false
     },
+    'hod': {
+      canManageAdmins: false,
+      canManageUsers: false,
+      canConfigureDevices: false,
+      canControlDevices: true,
+      canViewAllReports: true,
+      canViewAssignedReports: true,
+      canApproveRequests: true,
+      canScheduleAutomation: true,
+      canRequestDeviceControl: true,
+      canMonitorSecurity: false,
+      canViewPublicDashboard: true,
+      canApproveExtensions: true,
+      canRequestExtensions: true,
+      emergencyOverride: false
+    },
     'admin': {
       canManageAdmins: false,
       canManageUsers: true,
@@ -313,12 +330,13 @@ userSchema.pre('save', async function (next) {
   const roleLevels = {
     'super-admin': 10,
     'dean': 9,
-    'admin': 8,
-    'faculty': 7,
-    'teacher': 6,
-    'security': 5,
-    'student': 4,
-    'guest': 3
+    'hod': 8,
+    'admin': 7,
+    'faculty': 6,
+    'teacher': 5,
+    'security': 4,
+    'student': 3,
+    'guest': 2
   };
   this.roleLevel = roleLevels[this.role] || 3;
 

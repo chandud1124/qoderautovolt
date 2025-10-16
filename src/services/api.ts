@@ -313,6 +313,7 @@ export const ticketAPI = {
     location?: string;
     deviceId?: string;
     tags?: string[];
+    mentionedUsers?: string[];
   }) => api.post('/tickets', ticketData),
 
   getTickets: (params?: {
@@ -451,6 +452,10 @@ export const devicePermissionsAPI = {
 
 // User management API endpoints
 export const usersAPI = {
+  getAllUsers: (params?: { search?: string; role?: string; department?: string; limit?: number }) => 
+    api.get('/users', { params }),
+  searchUsersForMention: (search: string) => 
+    api.get('/users', { params: { search, limit: 20 } }),
   bulkActivateUsers: (userIds: string[]) => api.patch('/users/bulk-activate', { userIds }),
   bulkDeactivateUsers: (userIds: string[]) => api.patch('/users/bulk-deactivate', { userIds }),
   bulkDeleteUsers: (userIds: string[]) => api.delete('/users/bulk-delete', { data: { userIds } }),

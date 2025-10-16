@@ -21,7 +21,8 @@ import {
     User,
     Calendar,
     Tag,
-    Ticket
+    Ticket,
+    RefreshCw
 } from 'lucide-react';
 import { ticketAPI } from '@/services/api';
 import { useToast } from '@/hooks/use-toast';
@@ -50,6 +51,13 @@ interface Ticket {
     location?: string;
     deviceId?: string;
     tags: string[];
+    mentionedUsers?: Array<{
+        _id?: string;
+        id?: string;
+        name: string;
+        email: string;
+        role?: string;
+    }>;
     resolution?: string;
     resolvedAt?: string;
     closedAt?: string;
@@ -75,6 +83,9 @@ const TicketList: React.FC = () => {
     const [loading, setLoading] = useState(true);
     const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
     const [showDetails, setShowDetails] = useState(false);
+    const [showResolutionDialog, setShowResolutionDialog] = useState(false);
+    const [resolutionMessage, setResolutionMessage] = useState('');
+    const [pendingStatusUpdate, setPendingStatusUpdate] = useState<{ ticketId: string, status: string } | null>(null);
     const [filters, setFilters] = useState({
         status: 'all',
         category: 'all',
@@ -87,6 +98,21 @@ const TicketList: React.FC = () => {
         total: 0,
         totalPages: 0
     });
+
+    // Helper function to check if user can manage tickets (status updates, assignments)
+    const canManageTickets = () => {
+        return user?.role === 'admin' || user?.role === 'super-admin';
+    };
+
+    // Helper function to check if user can view all department tickets
+    const canViewDepartmentTickets = () => {
+        return user?.role === 'admin' || user?.role === 'super-admin' || user?.role === 'dean' || user?.role === 'hod';
+    };
+
+    // Helper function to check if user can delete tickets (admin/super-admin only)
+    const canDeleteTickets = () => {
+        return user?.role === 'admin' || user?.role === 'super-admin';
+    };
 
     const loadTickets = async () => {
         try {
@@ -120,22 +146,47 @@ const TicketList: React.FC = () => {
 
     const getStatusColor = (status: string) => {
         switch (status) {
-            case 'open': return 'bg-blue-100 text-blue-800';
-            case 'in_progress': return 'bg-yellow-100 text-yellow-800';
-            case 'resolved': return 'bg-green-100 text-green-800';
-            case 'closed': return 'bg-gray-100 text-gray-800';
-            case 'cancelled': return 'bg-red-100 text-red-800';
-            default: return 'bg-gray-100 text-gray-800';
+            case 'open': return 'bg-blue-500 text-white hover:bg-blue-600';
+            case 'in_progress': return 'bg-yellow-500 text-white hover:bg-yellow-600';
+            case 'on_hold': return 'bg-orange-500 text-white hover:bg-orange-600';
+            case 'resolved': return 'bg-green-500 text-white hover:bg-green-600';
+            case 'closed': return 'bg-gray-500 text-white hover:bg-gray-600';
+            case 'cancelled': return 'bg-red-500 text-white hover:bg-red-600';
+            default: return 'bg-gray-500 text-white hover:bg-gray-600';
         }
     };
 
     const getPriorityColor = (priority: string) => {
         switch (priority) {
-            case 'low': return 'bg-gray-100 text-gray-800';
-            case 'medium': return 'bg-blue-100 text-blue-800';
-            case 'high': return 'bg-orange-100 text-orange-800';
-            case 'urgent': return 'bg-red-100 text-red-800';
-            default: return 'bg-gray-100 text-gray-800';
+            case 'low': return 'bg-gray-200 text-gray-800 hover:bg-gray-300';
+            case 'medium': return 'bg-blue-200 text-blue-800 hover:bg-blue-300';
+            case 'high': return 'bg-orange-200 text-orange-800 hover:bg-orange-300';
+            case 'urgent': return 'bg-red-200 text-red-800 hover:bg-red-300';
+            default: return 'bg-gray-200 text-gray-800 hover:bg-gray-300';
+        }
+    };
+
+    const getStatusIcon = (status: string) => {
+        switch (status) {
+            case 'open': return <Clock className="w-4 h-4" />;
+            case 'in_progress': return <AlertCircle className="w-4 h-4" />;
+            case 'on_hold': return <Clock className="w-4 h-4" />;
+            case 'resolved': return <CheckCircle className="w-4 h-4" />;
+            case 'closed': return <XCircle className="w-4 h-4" />;
+            case 'cancelled': return <XCircle className="w-4 h-4" />;
+            default: return <Clock className="w-4 h-4" />;
+        }
+    };
+
+    const getStatusText = (status: string) => {
+        switch (status) {
+            case 'open': return 'Open';
+            case 'in_progress': return 'Processing';
+            case 'on_hold': return 'On Hold';
+            case 'resolved': return 'Resolved';
+            case 'closed': return 'Closed';
+            case 'cancelled': return 'Cancelled';
+            default: return status.replace('_', ' ');
         }
     };
 
@@ -160,18 +211,65 @@ const TicketList: React.FC = () => {
 
     const handleStatusUpdate = async (ticketId: string, status: string, comment?: string) => {
         try {
-            await ticketAPI.updateTicket(ticketId, { status, comment });
+            const statusComments: Record<string, string> = {
+                'in_progress': 'Ticket is now being processed. Working on resolving the issue.',
+                'resolved': 'Issue has been resolved. Please verify the fix.',
+                'closed': 'Ticket has been closed. Thank you for your patience.',
+                'cancelled': 'Ticket has been cancelled.',
+                'on_hold': 'Ticket is on hold. Will resume shortly.'
+            };
+
+            const updateComment = comment || statusComments[status] || `Status changed to ${status.replace('_', ' ')}`;
+
+            await ticketAPI.updateTicket(ticketId, { 
+                status, 
+                comment: updateComment 
+            });
+            
             toast({
                 title: "Success",
-                description: "Ticket status updated successfully.",
+                description: `Ticket status updated to ${status.replace('_', ' ').toUpperCase()}`,
             });
-            loadTickets();
+            
+            // Reload tickets and refresh selected ticket details
+            await loadTickets();
+            
+            // If viewing details, refresh the selected ticket
+            if (selectedTicket && selectedTicket.id === ticketId) {
+                const response = await ticketAPI.getTicket(ticketId);
+                setSelectedTicket(response.data.data);
+            }
         } catch (error: any) {
             toast({
                 title: "Error",
                 description: "Failed to update ticket status.",
                 variant: "destructive"
             });
+        }
+    };
+
+    const handleStatusUpdateWithMessage = (ticketId: string, status: string) => {
+        // For certain statuses, show the message dialog
+        if (['in_progress', 'resolved', 'closed', 'on_hold', 'cancelled'].includes(status)) {
+            setPendingStatusUpdate({ ticketId, status });
+            setShowResolutionDialog(true);
+        } else {
+            handleStatusUpdate(ticketId, status);
+        }
+    };
+
+    const confirmStatusUpdate = async () => {
+        if (pendingStatusUpdate) {
+            const message = resolutionMessage.trim();
+            await handleStatusUpdate(
+                pendingStatusUpdate.ticketId, 
+                pendingStatusUpdate.status, 
+                message || undefined
+            );
+            setShowResolutionDialog(false);
+            setShowDetails(false);
+            setResolutionMessage('');
+            setPendingStatusUpdate(null);
         }
     };
 
@@ -202,7 +300,18 @@ const TicketList: React.FC = () => {
                     <h2 className="text-2xl font-bold">Support Tickets</h2>
                     <p className="text-muted-foreground">Manage and track support requests</p>
                 </div>
-                <CreateTicketDialog onTicketCreated={loadTickets} />
+                <div className="flex gap-2">
+                    <Button 
+                        variant="outline"
+                        onClick={loadTickets}
+                        disabled={loading}
+                        className="flex items-center gap-2"
+                    >
+                        <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                        Refresh
+                    </Button>
+                    <CreateTicketDialog onTicketCreated={loadTickets} />
+                </div>
             </div>
 
             {/* Filters */}
@@ -237,7 +346,8 @@ const TicketList: React.FC = () => {
                                 <SelectContent>
                                     <SelectItem value="all">All Status</SelectItem>
                                     <SelectItem value="open">Open</SelectItem>
-                                    <SelectItem value="in_progress">In Progress</SelectItem>
+                                    <SelectItem value="in_progress">Processing</SelectItem>
+                                    <SelectItem value="on_hold">On Hold</SelectItem>
                                     <SelectItem value="resolved">Resolved</SelectItem>
                                     <SelectItem value="closed">Closed</SelectItem>
                                     <SelectItem value="cancelled">Cancelled</SelectItem>
@@ -328,7 +438,10 @@ const TicketList: React.FC = () => {
                                         </TableCell>
                                         <TableCell>
                                             <Badge className={getStatusColor(ticket.status)}>
-                                                {ticket.status.replace('_', ' ')}
+                                                <span className="flex items-center gap-1">
+                                                    {getStatusIcon(ticket.status)}
+                                                    {getStatusText(ticket.status)}
+                                                </span>
                                             </Badge>
                                         </TableCell>
                                         <TableCell>
@@ -340,7 +453,7 @@ const TicketList: React.FC = () => {
                                             {getCategoryLabel(ticket.category)}
                                         </TableCell>
                                         <TableCell>
-                                            {ticket.createdBy.name}
+                                            {ticket.createdBy?.name || 'Unknown User'}
                                         </TableCell>
                                         <TableCell>
                                             {new Date(ticket.createdAt).toLocaleDateString()}
@@ -354,12 +467,13 @@ const TicketList: React.FC = () => {
                                                 >
                                                     <Eye className="w-4 h-4" />
                                                 </Button>
-                                                {user?.role === 'admin' && (
+                                                {canDeleteTickets() && (
                                                     <>
                                                         <Button
                                                             variant="ghost"
                                                             size="sm"
                                                             onClick={() => handleDeleteTicket(ticket.id)}
+                                                            className="text-red-500 hover:text-red-700 hover:bg-red-50"
                                                         >
                                                             <Trash2 className="w-4 h-4" />
                                                         </Button>
@@ -417,23 +531,32 @@ const TicketList: React.FC = () => {
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <Label>Status</Label>
-                                    <Badge className={getStatusColor(selectedTicket.status)}>
-                                        {selectedTicket.status.replace('_', ' ')}
-                                    </Badge>
+                                    <div className="mt-1">
+                                        <Badge className={getStatusColor(selectedTicket.status)}>
+                                            <span className="flex items-center gap-1">
+                                                {getStatusIcon(selectedTicket.status)}
+                                                {getStatusText(selectedTicket.status)}
+                                            </span>
+                                        </Badge>
+                                    </div>
                                 </div>
                                 <div>
                                     <Label>Priority</Label>
-                                    <Badge className={getPriorityColor(selectedTicket.priority)}>
-                                        {selectedTicket.priority}
-                                    </Badge>
+                                    <div className="mt-1">
+                                        <Badge className={getPriorityColor(selectedTicket.priority)}>
+                                            {selectedTicket.priority.toUpperCase()}
+                                        </Badge>
+                                    </div>
                                 </div>
                                 <div>
                                     <Label>Category</Label>
-                                    <p>{getCategoryLabel(selectedTicket.category)}</p>
+                                    <p className="mt-1">{getCategoryLabel(selectedTicket.category)}</p>
                                 </div>
                                 <div>
                                     <Label>Days Open</Label>
-                                    <p>{selectedTicket.daysOpen} days</p>
+                                    <p className="mt-1">
+                                        <span className="font-semibold">{selectedTicket.daysOpen}</span> days
+                                    </p>
                                 </div>
                             </div>
 
@@ -447,7 +570,7 @@ const TicketList: React.FC = () => {
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <Label>Created By</Label>
-                                    <p>{selectedTicket.createdBy.name} ({selectedTicket.createdBy.email})</p>
+                                    <p>{selectedTicket.createdBy?.name || 'Unknown User'} ({selectedTicket.createdBy?.email || 'N/A'})</p>
                                 </div>
                                 {selectedTicket.assignedTo && (
                                     <div>
@@ -484,6 +607,26 @@ const TicketList: React.FC = () => {
                                 </div>
                             )}
 
+                            {/* Mentioned Users */}
+                            {selectedTicket.mentionedUsers && selectedTicket.mentionedUsers.length > 0 && (
+                                <div>
+                                    <Label>Mentioned Users</Label>
+                                    <div className="flex flex-wrap gap-2 mt-1">
+                                        {selectedTicket.mentionedUsers.map((user) => (
+                                            <Badge key={user._id || user.id} variant="secondary" className="gap-1">
+                                                <User className="w-3 h-3" />
+                                                {user.name}
+                                                {user.role && (
+                                                    <span className="text-xs text-muted-foreground ml-1">
+                                                        ({user.role})
+                                                    </span>
+                                                )}
+                                            </Badge>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
                             {/* Comments */}
                             <div>
                                 <Label>Comments</Label>
@@ -509,34 +652,135 @@ const TicketList: React.FC = () => {
                             </div>
 
                             {/* Actions */}
-                            {user?.role === 'admin' && (
-                                <div className="flex gap-2 pt-4">
-                                    {selectedTicket.status === 'open' && (
-                                        <Button
-                                            onClick={() => handleStatusUpdate(selectedTicket.id, 'in_progress')}
-                                        >
-                                            Start Working
-                                        </Button>
-                                    )}
-                                    {selectedTicket.status === 'in_progress' && (
-                                        <Button
-                                            onClick={() => handleStatusUpdate(selectedTicket.id, 'resolved')}
-                                        >
-                                            Mark Resolved
-                                        </Button>
-                                    )}
-                                    {selectedTicket.status !== 'closed' && selectedTicket.status !== 'cancelled' && (
-                                        <Button
-                                            variant="outline"
-                                            onClick={() => handleStatusUpdate(selectedTicket.id, 'closed')}
-                                        >
-                                            Close Ticket
-                                        </Button>
-                                    )}
+                            {canManageTickets() && (
+                                <div className="space-y-4 pt-4 border-t">
+                                    <Label className="text-base font-semibold">Ticket Actions</Label>
+                                    <div className="flex flex-wrap gap-2">
+                                        {selectedTicket.status === 'open' && (
+                                            <>
+                                                <Button
+                                                    onClick={() => handleStatusUpdateWithMessage(selectedTicket.id, 'in_progress')}
+                                                    className="bg-yellow-500 hover:bg-yellow-600"
+                                                >
+                                                    <AlertCircle className="w-4 h-4 mr-2" />
+                                                    Start Processing
+                                                </Button>
+                                                <Button
+                                                    variant="outline"
+                                                    onClick={() => handleStatusUpdateWithMessage(selectedTicket.id, 'cancelled')}
+                                                    className="border-red-500 text-red-500 hover:bg-red-50"
+                                                >
+                                                    <XCircle className="w-4 h-4 mr-2" />
+                                                    Cancel Ticket
+                                                </Button>
+                                            </>
+                                        )}
+                                        
+                                        {selectedTicket.status === 'in_progress' && (
+                                            <>
+                                                <Button
+                                                    onClick={() => handleStatusUpdateWithMessage(selectedTicket.id, 'resolved')}
+                                                    className="bg-green-500 hover:bg-green-600"
+                                                >
+                                                    <CheckCircle className="w-4 h-4 mr-2" />
+                                                    Mark as Resolved
+                                                </Button>
+                                                <Button
+                                                    variant="outline"
+                                                    onClick={() => handleStatusUpdateWithMessage(selectedTicket.id, 'on_hold')}
+                                                    className="border-orange-500 text-orange-500 hover:bg-orange-50"
+                                                >
+                                                    <Clock className="w-4 h-4 mr-2" />
+                                                    Put On Hold
+                                                </Button>
+                                            </>
+                                        )}
+
+                                        {selectedTicket.status === 'on_hold' && (
+                                            <Button
+                                                onClick={() => handleStatusUpdateWithMessage(selectedTicket.id, 'in_progress')}
+                                                className="bg-yellow-500 hover:bg-yellow-600"
+                                            >
+                                                <AlertCircle className="w-4 h-4 mr-2" />
+                                                Resume Processing
+                                            </Button>
+                                        )}
+                                        
+                                        {selectedTicket.status === 'resolved' && (
+                                            <>
+                                                <Button
+                                                    onClick={() => handleStatusUpdateWithMessage(selectedTicket.id, 'closed')}
+                                                    className="bg-gray-500 hover:bg-gray-600"
+                                                >
+                                                    <XCircle className="w-4 h-4 mr-2" />
+                                                    Close Ticket
+                                                </Button>
+                                                <Button
+                                                    variant="outline"
+                                                    onClick={() => handleStatusUpdateWithMessage(selectedTicket.id, 'in_progress')}
+                                                >
+                                                    <AlertCircle className="w-4 h-4 mr-2" />
+                                                    Reopen Ticket
+                                                </Button>
+                                            </>
+                                        )}
+
+                                        {(selectedTicket.status === 'closed' || selectedTicket.status === 'cancelled') && (
+                                            <div className="w-full p-3 bg-muted rounded-md">
+                                                <p className="text-sm text-muted-foreground flex items-center gap-2">
+                                                    <CheckCircle className="w-4 h-4" />
+                                                    This ticket is {selectedTicket.status}. No further actions available.
+                                                </p>
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                             )}
                         </div>
                     )}
+                </DialogContent>
+            </Dialog>
+
+            {/* Resolution Message Dialog */}
+            <Dialog open={showResolutionDialog} onOpenChange={setShowResolutionDialog}>
+                <DialogContent className="max-w-md">
+                    <DialogHeader>
+                        <DialogTitle>Add Status Update Message (Optional)</DialogTitle>
+                        <DialogDescription>
+                            You can add a message that will be visible to all users viewing this ticket. This is optional.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4">
+                        <div>
+                            <Label htmlFor="resolutionMessage">Update Message</Label>
+                            <Textarea
+                                id="resolutionMessage"
+                                placeholder="e.g., Issue resolved by restarting the server, or Waiting for vendor response..."
+                                value={resolutionMessage}
+                                onChange={(e) => setResolutionMessage(e.target.value)}
+                                rows={4}
+                                className="mt-2"
+                            />
+                            <p className="text-sm text-muted-foreground mt-2">
+                                Leave empty to use default message
+                            </p>
+                        </div>
+                        <div className="flex gap-2 justify-end">
+                            <Button
+                                variant="outline"
+                                onClick={() => {
+                                    setShowResolutionDialog(false);
+                                    setResolutionMessage('');
+                                    setPendingStatusUpdate(null);
+                                }}
+                            >
+                                Cancel
+                            </Button>
+                            <Button onClick={confirmStatusUpdate}>
+                                Continue
+                            </Button>
+                        </div>
+                    </div>
                 </DialogContent>
             </Dialog>
         </div>

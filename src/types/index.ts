@@ -87,7 +87,7 @@ export interface User {
   id: string;
   email: string;
   name: string;
-  role: 'super-admin' | 'dean' | 'admin' | 'faculty' | 'teacher' | 'student' | 'security' | 'guest';
+  role: 'super-admin' | 'dean' | 'hod' | 'admin' | 'faculty' | 'teacher' | 'student' | 'security' | 'guest';
   roleLevel: number;
   department?: string;
   employeeId?: string;

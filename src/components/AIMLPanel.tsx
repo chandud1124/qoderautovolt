@@ -219,6 +219,32 @@ const AIMLPanel: React.FC = () => {
     { value: '30d', label: '30 Days', periods: 30, interval: '1d' },
   ];
 
+  // Generate time-based labels instead of "Period 1, Period 2"
+  const generateTimeLabel = (index: number, tfConfig: any) => {
+    const now = new Date();
+    
+    switch (tfConfig.interval) {
+      case '10min':
+        const minutes = now.getMinutes() + (index + 1) * 10;
+        const futureTime = new Date(now.getTime() + (index + 1) * 10 * 60000);
+        return futureTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+      
+      case '1h':
+        const futureHour = new Date(now.getTime() + (index + 1) * 3600000);
+        return futureHour.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+      
+      case '1d':
+        const futureDay = new Date(now.getTime() + (index + 1) * 86400000);
+        if (tfConfig.value === '7d') {
+          return futureDay.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+        }
+        return futureDay.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      
+      default:
+        return `Period ${index + 1}`;
+    }
+  };
+
   // Anomaly severity levels
   const ANOMALY_LEVELS = [
     { value: 'all', label: 'All Anomalies', color: 'bg-gray-100' },
@@ -651,15 +677,16 @@ const AIMLPanel: React.FC = () => {
   };
 
   const convertToCSV = (data: any) => {
-    const headers = ['Period', 'Value', 'Confidence', 'Timestamp'];
+    const headers = ['Time', 'Value', 'Confidence', 'Timestamp'];
     const rows = [];
+    const tfConfig = TIMEFRAME_OPTIONS.find(tf => tf.value === timeframe) || TIMEFRAME_OPTIONS[1];
 
     if (data.devices) {
       data.devices.forEach((deviceData: any) => {
         const device = devices.find(d => d.id === deviceData.deviceId);
         deviceData.data.forecast?.forEach((value: number, index: number) => {
           rows.push([
-            `Period ${index + 1}`,
+            generateTimeLabel(index, tfConfig),
             value,
             deviceData.data.confidence?.[index] || 0,
             deviceData.data.timestamp || new Date().toISOString()
@@ -744,6 +771,8 @@ const AIMLPanel: React.FC = () => {
     switch (type) {
       case 'forecast':
         const forecastData = predictionData.devices || [{ data: predictionData }];
+        const tfConfig = TIMEFRAME_OPTIONS.find(tf => tf.value === timeframe) || TIMEFRAME_OPTIONS[1];
+        
         const chartData = forecastData.flatMap((deviceData: any) => {
           const device = devices.find(d => d.id === deviceData.deviceId || d.id === device);
           const deviceName = device?.name || 'Device';
@@ -751,7 +780,7 @@ const AIMLPanel: React.FC = () => {
           if (comparisonMode && forecastData.length > 1) {
             // Multi-device comparison
             return deviceData.data.forecast.map((value: number, index: number) => ({
-              period: `Period ${index + 1}`,
+              period: generateTimeLabel(index, tfConfig),
               [deviceName]: value,
               confidence: deviceData.data.confidence?.[index] || 0
             }));
@@ -759,7 +788,7 @@ const AIMLPanel: React.FC = () => {
             // Single device with historical overlay
             const historicalData = showHistorical ? generateHistoricalData(deviceData.deviceId || device, 10) : [];
             return deviceData.data.forecast.map((value: number, index: number) => ({
-              period: `Period ${index + 1}`,
+              period: generateTimeLabel(index, tfConfig),
               forecast: value,
               historical: historicalData[index] || null,
               confidence: deviceData.data.confidence?.[index] || 0,
