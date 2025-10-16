@@ -8,44 +8,23 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <esp_task_wdt.h>
+#include <esp_system.h>
 #include <map>
 #include "config.h"
+#include "blink_status.h"
+
+// Define global connection state variable
+ConnState connState = WIFI_DISCONNECTED;
 
 Preferences prefs;
 
 // --- Connection State Enum and Status LED ---
-enum ConnState {
-  WIFI_DISCONNECTED,
-  WIFI_ONLY,
-  BACKEND_CONNECTED
-};
-ConnState connState = WIFI_DISCONNECTED;
-
-void blinkStatus() {
-  static unsigned long lastBlink = 0;
-  static bool ledState = false;
-  unsigned long now = millis();
-  int pattern = 0;
-
-  if (connState == WIFI_DISCONNECTED) {
-    // Fast blink (250ms on, 250ms off)
-    pattern = (now % 500) < 250;
-  } else if (connState == WIFI_ONLY) {
-    // Slow blink (1s on, 1s off)
-    pattern = (now % 2000) < 1000;
-  } else if (connState == BACKEND_CONNECTED) {
-    // LED constantly ON
-    pattern = 1;
-  }
-
-  pinMode(STATUS_LED_PIN, OUTPUT);
-  digitalWrite(STATUS_LED_PIN, pattern ? HIGH : LOW);
-}
+// Moved to blink_status.h
 
 
 #define MQTT_BROKER "172.16.3.171" // Set to backend IP or broker IP
 #define MQTT_PORT 1883
-#define MQTT_USER "351e01d4ccc5023263388c643badeb0a9672563d5bed0db7"
+#define MQTT_USER "f3d2a8a068437f9a18f3c47a365c22bfab61f6a90cb03e0b"
 #define MQTT_PASSWORD ""
 #define SWITCH_TOPIC "esp32/switches"
 #define STATE_TOPIC "esp32/state"
@@ -58,7 +37,7 @@ PubSubClient mqttClient(espClient);
 char mqttClientId[24];
 
 // Forward declarations
-void publishManualSwitchEvent(int gpio, bool state);
+void publishManualSwitchEvent(int gpio, bool state, int physicalPin = -1);
 void sendStateUpdate(bool force);
 int relayNameToGpio(const char* relay);
 String normalizeMac(String mac);
@@ -118,8 +97,6 @@ int commandQueueTail = 0;
 // Timer for periodic state sending
 unsigned long lastStateSend = 0;
 
-// --- END GLOBALS ---
-
 
 // Add a command to the queue
 void queueSwitchCommand(int gpio, bool state) {
@@ -177,7 +154,7 @@ void loadSwitchConfigFromNVS() {
     int manual = prefs.getInt(keyManual.c_str(), manualSwitchPins[i]);
     bool defState = prefs.getBool(keyDefault.c_str(), false);
     bool savedState = prefs.getBool(keyState.c_str(), false);
-    bool momentary = prefs.getBool(keyMomentary.c_str(), false);  // Load momentary setting
+    bool momentary = prefs.getBool(keyMomentary.c_str(), true);  // Load momentary setting (default to momentary)
     switchesLocal[i].relayGpio = relay;
     switchesLocal[i].manualGpio = manual;
     switchesLocal[i].defaultState = defState;
@@ -239,23 +216,23 @@ void initSwitches() {
 
 void handleManualSwitches() {
   unsigned long now = millis();
-  for (int i = 0; i < NUM_SWITCHES; i++) {
+  for (int i = 0; i < NUM_SWITCHES && i < 16; i++) {  // Add bounds check
     SwitchState &sw = switchesLocal[i];
-    if (!sw.manualEnabled || sw.manualGpio < 0) continue;
+    if (!sw.manualEnabled || sw.manualGpio < 0 || sw.manualGpio > 39) continue;  // Validate GPIO range
 
     // Setup pinMode if not already done (first call)
     if (!pinSetup[i]) {
       pinMode(sw.manualGpio, INPUT_PULLUP);
       pinMode(sw.relayGpio, OUTPUT);
       digitalWrite(sw.relayGpio, sw.state ? (RELAY_ACTIVE_HIGH ? HIGH : LOW) : (RELAY_ACTIVE_HIGH ? LOW : HIGH)); // Apply current state
-      
+
       // Initialize with current pin reading
       int initialLevel = digitalRead(sw.manualGpio);
       sw.lastManualLevel = initialLevel;
       sw.stableManualLevel = initialLevel;
       sw.lastManualActive = sw.manualActiveLow ? (initialLevel == LOW) : (initialLevel == HIGH);
       sw.lastManualChangeMs = now;
-      
+
       pinSetup[i] = true;
       Serial.printf("[MANUAL] Setup GPIO %d (manual pin %d), initial raw=%d\n", sw.relayGpio, sw.manualGpio, initialLevel);
     }
@@ -308,7 +285,7 @@ void handleManualSwitches() {
             
             // Send manual switch event for logging
             if (mqttClient.connected()) {
-              publishManualSwitchEvent(sw.relayGpio, sw.state);
+              publishManualSwitchEvent(sw.relayGpio, sw.state, sw.manualGpio);
             }
             // No offline event buffering: manual switch always controls relay locally
             // Send immediate state update for UI
@@ -326,7 +303,7 @@ void handleManualSwitches() {
             
             // Send manual switch event for logging
             if (mqttClient.connected()) {
-              publishManualSwitchEvent(sw.relayGpio, sw.state);
+              publishManualSwitchEvent(sw.relayGpio, sw.state, sw.manualGpio);
             }
             // No offline event buffering: manual switch always controls relay locally
             // Send immediate state update for UI
@@ -376,8 +353,17 @@ void checkSystemHealth() {
   size_t minFreeHeap = 0;
 #endif
   Serial.printf("[HEALTH] Heap: %u bytes free, Min: %u\n", freeHeap, minFreeHeap);
-  if (freeHeap < 20000) {
-    Serial.printf("[CRITICAL] Very low heap memory: %u bytes free!\n", freeHeap);
+
+  // CRITICAL: Check for dangerously low heap
+  if (freeHeap < 5000) {
+    Serial.printf("[CRITICAL] Extremely low heap memory: %u bytes free! System may crash soon.\n", freeHeap);
+    // Force garbage collection by restarting MQTT if heap is critical
+    if (freeHeap < 3000 && mqttClient.connected()) {
+      Serial.println("[CRITICAL] Heap critically low, disconnecting MQTT to free memory");
+      mqttClient.disconnect();
+    }
+  } else if (freeHeap < 10000) {
+    Serial.printf("[WARNING] Very low heap memory: %u bytes free!\n", freeHeap);
   }
 
   // Command queue monitoring
@@ -403,7 +389,9 @@ void setup_wifi() {
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   int retries = 0;
   while (WiFi.status() != WL_CONNECTED && retries < 30) {
-    delay(500);
+    delay(100);  // Reduced delay to allow more frequent manual switch checks
+    handleManualSwitches();  // Handle manual switches during WiFi connection
+    esp_task_wdt_reset(); // Reset watchdog during WiFi connection
     Serial.print(".");
     retries++;
   }
@@ -472,10 +460,17 @@ void reconnect_mqtt() {
 
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  if (length == 0 || payload == nullptr) {
-    Serial.println("[MQTT] Empty payload received, ignoring");
+  if (length == 0 || payload == nullptr || topic == nullptr) {
+    Serial.println("[MQTT] Empty or null payload/topic received, ignoring");
     return;
   }
+
+  // Check heap before processing
+  if (ESP.getFreeHeap() < 2000) {
+    Serial.println("[MQTT] Low heap memory, skipping MQTT message processing");
+    return;
+  }
+
   String message;
   if (length > 512) {
     Serial.println("[MQTT] Payload too large, ignoring");
@@ -587,7 +582,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 
 // Publish state update to backend
 void publishState() {
-  DynamicJsonDocument doc(1024);
+  DynamicJsonDocument doc(512);  // Reduced from 1024 to prevent heap fragmentation
   doc["mac"] = WiFi.macAddress();
   doc["secret"] = DEVICE_SECRET; // Include device secret for authentication
   JsonArray arr = doc.createNestedArray("switches");
@@ -597,25 +592,42 @@ void publishState() {
     o["state"] = switchesLocal[i].state;
     o["manual_override"] = switchesLocal[i].manualOverride;
   }
-  char buf[1024];
-  size_t n = serializeJson(doc, buf);
-  mqttClient.publish(STATE_TOPIC, buf, n);
-  Serial.println("[MQTT] Published state update");
+  char buf[512];  // Reduced buffer size to match document
+  size_t n = serializeJson(doc, buf, sizeof(buf));
+  if (n > 0 && n < sizeof(buf)) {
+    mqttClient.publish(STATE_TOPIC, buf, n);
+    Serial.println("[MQTT] Published state update");
+  } else {
+    Serial.println("[MQTT] Failed to serialize state update - buffer too small");
+  }
 }
 
 // Publish manual switch event for logging
-void publishManualSwitchEvent(int gpio, bool state) {
+void publishManualSwitchEvent(int gpio, bool state, int physicalPin) {
+  // Check heap before allocating JSON document
+  if (ESP.getFreeHeap() < 1000) {
+    Serial.println("[MQTT] Low heap memory, skipping manual switch event");
+    return;
+  }
+
   DynamicJsonDocument doc(128);
   doc["mac"] = WiFi.macAddress();
   doc["secret"] = DEVICE_SECRET; // Include device secret for authentication
   doc["type"] = "manual_switch";
   doc["gpio"] = gpio;
   doc["state"] = state;
+  if (physicalPin >= 0) {
+    doc["physicalPin"] = physicalPin;
+  }
   doc["timestamp"] = millis();
   char buf[128];
-  size_t n = serializeJson(doc, buf);
-  mqttClient.publish(TELEMETRY_TOPIC, buf, n);
-  Serial.printf("[MQTT] Published manual switch event: GPIO %d -> %s\n", gpio, state ? "ON" : "OFF");
+  size_t n = serializeJson(doc, buf, sizeof(buf));
+  if (n > 0 && n < sizeof(buf) && mqttClient.connected()) {
+    mqttClient.publish(TELEMETRY_TOPIC, buf, n);
+    Serial.printf("[MQTT] Published manual switch event: GPIO %d (physical pin %d) -> %s\n", gpio, physicalPin, state ? "ON" : "OFF");
+  } else {
+    Serial.println("[MQTT] Failed to publish manual switch event");
+  }
 }
 
 // Replace sendStateUpdate(bool force) to call publishState() when needed
@@ -670,9 +682,24 @@ String normalizeMac(String mac) {
 void setup() {
   Serial.begin(115200);
   Serial.println("\nESP32 Classroom Automation System (MQTT)");
-  esp_task_wdt_config_t wdt_config = { .timeout_ms = 10000, .idle_core_mask = 0, .trigger_panic = true };
+
+  // Boot recovery check
+  Serial.printf("[BOOT] Reset reason: %d\n", esp_reset_reason());
+  // Check for abnormal reset (panic, watchdog, or brownout)
+  int resetReason = esp_reset_reason();
+  if (resetReason == 1 || resetReason == 5 || resetReason == 6) {  // ESP_RST_PANIC=1, ESP_RST_INT_WDT=5, ESP_RST_TASK_WDT=6
+    Serial.println("[BOOT] Detected crash recovery - initializing safely");
+    delay(1000); // Give serial time to flush
+  }
+
+  // Initialize watchdog with 10 second timeout
+  esp_task_wdt_config_t wdt_config = {
+    .timeout_ms = 10000,  // 10 seconds
+    .trigger_panic = true
+  };
   esp_task_wdt_init(&wdt_config);
   esp_task_wdt_add(NULL);
+
   initSwitches();
   // No offline event loading: do not persist manual switch events
   setup_wifi();
@@ -684,6 +711,9 @@ void setup() {
 }
 
 void loop() {
+  static unsigned long loopStartTime = 0;
+  loopStartTime = millis();
+
   esp_task_wdt_reset();
   unsigned long now = millis();
   handleManualSwitches();
@@ -712,6 +742,12 @@ void loop() {
     }
     lastRelayCheck = now;
     Serial.println("[RELAY] Re-applied all relay states");
+  }
+
+  // Safety check: ensure loop doesn't take too long (should complete in < 100ms normally)
+  unsigned long loopDuration = millis() - loopStartTime;
+  if (loopDuration > 500) {
+    Serial.printf("[WARNING] Loop took %lu ms - possible performance issue\n", loopDuration);
   }
 
   delay(10);

@@ -951,7 +951,7 @@ apiRouter.use('/device-categories', apiLimiter, deviceCategoryRoutes);
 apiRouter.use('/class-extensions', apiLimiter, classExtensionRoutes);
 apiRouter.use('/voice-assistant', voiceAssistantRoutes);
 apiRouter.use('/role-permissions', apiLimiter, require('./routes/rolePermissions'));
-apiRouter.use('/notices', apiLimiter, require('./routes/notices'));
+// apiRouter.use('/notices', apiLimiter, require('./routes/notices')); // DISABLED - notice board functionality removed
 apiRouter.use('/boards', apiLimiter, require('./routes/boards'));
 apiRouter.use('/content', apiLimiter, require('./routes/contentScheduler'));
 apiRouter.use('/integrations', apiLimiter, require('./routes/integrations'));

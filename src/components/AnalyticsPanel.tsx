@@ -375,7 +375,7 @@ const AnalyticsPanel: React.FC = () => {
           <Card>
             <CardHeader>
               <CardTitle>Device Types Distribution</CardTitle>
-              <CardDescription>Breakdown of devices by category</CardDescription>
+              <CardDescription>Breakdown of switches by category</CardDescription>
             </CardHeader>
             <CardContent className="h-80">
               {analyticsData.devices && analyticsData.devices.length > 0 ? (
@@ -383,17 +383,25 @@ const AnalyticsPanel: React.FC = () => {
                   <BarChart
                     data={Object.entries(
                       analyticsData.devices.reduce((acc: any, device: any) => {
-                        const type = device.type || 'unknown';
-                        acc[type] = (acc[type] || 0) + 1;
+                        // Count switches by type instead of devices by type
+                        if (device.switches && Array.isArray(device.switches)) {
+                          device.switches.forEach((switchItem: any) => {
+                            const switchType = switchItem.type || 'unknown';
+                            acc[switchType] = (acc[switchType] || 0) + 1;
+                          });
+                        }
                         return acc;
                       }, {})
-                    ).map(([type, count]) => ({ type, count }))}
+                    ).map(([type, count]) => ({
+                      type: type.charAt(0).toUpperCase() + type.slice(1), // Capitalize first letter
+                      count
+                    }))}
                     margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
                   >
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="type" />
                     <YAxis />
-                    <Tooltip formatter={(value) => [value, 'Count']} />
+                    <Tooltip formatter={(value) => [value, 'Switches']} />
                     <Bar dataKey="count" fill="#3b82f6" radius={[4, 4, 0, 0]} maxBarSize={60} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -1142,16 +1150,20 @@ const AnalyticsPanel: React.FC = () => {
                       <PieChart>
                         <Pie
                           data={(() => {
-                            const typeCounts = analyticsData?.devices?.reduce((acc: any, device: any) => {
-                              const type = device.type || 'unknown';
-                              acc[type] = (acc[type] || 0) + 1;
+                            const switchTypeCounts = analyticsData?.devices?.reduce((acc: any, device: any) => {
+                              if (device.switches && Array.isArray(device.switches)) {
+                                device.switches.forEach((switchItem: any) => {
+                                  const switchType = switchItem.type || 'unknown';
+                                  acc[switchType] = (acc[switchType] || 0) + 1;
+                                });
+                              }
                               return acc;
                             }, {}) || {};
 
                             const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#84cc16', '#f97316'];
-                            return Object.entries(typeCounts)
+                            return Object.entries(switchTypeCounts)
                               .map(([type, count], index) => ({
-                                name: type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+                                name: type.charAt(0).toUpperCase() + type.slice(1), // Capitalize first letter
                                 value: count as number,
                                 fill: colors[index % colors.length]
                               }))
@@ -1165,21 +1177,25 @@ const AnalyticsPanel: React.FC = () => {
                           dataKey="value"
                         >
                           {(() => {
-                            const typeCounts = analyticsData?.devices?.reduce((acc: any, device: any) => {
-                              const type = device.type || 'unknown';
-                              acc[type] = (acc[type] || 0) + 1;
+                            const switchTypeCounts = analyticsData?.devices?.reduce((acc: any, device: any) => {
+                              if (device.switches && Array.isArray(device.switches)) {
+                                device.switches.forEach((switchItem: any) => {
+                                  const switchType = switchItem.type || 'unknown';
+                                  acc[switchType] = (acc[switchType] || 0) + 1;
+                                });
+                              }
                               return acc;
                             }, {}) || {};
 
                             const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#84cc16', '#f97316'];
-                            return Object.entries(typeCounts)
+                            return Object.entries(switchTypeCounts)
                               .filter(([, count]) => (count as number) > 0)
                               .map(([,], index) => (
                                 <Cell key={`cell-${index}`} fill={colors[index % colors.length]} />
                               ));
                           })()}
                         </Pie>
-                        <Tooltip formatter={(value) => [`${value} devices`, 'Count']} />
+                        <Tooltip formatter={(value) => [`${value} switches`, 'Count']} />
                         <Legend />
                       </PieChart>
                     </ResponsiveContainer>

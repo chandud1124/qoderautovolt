@@ -204,6 +204,19 @@ type LogType = 'activities' | 'manual-switches' | 'web-switches' | 'schedule-swi
   const [scheduleSwitchLogs, setScheduleSwitchLogs] = useState<ScheduleSwitchLog[]>([]);
   const [deviceStatusLogs, setDeviceStatusLogs] = useState<DeviceStatusLog[]>([]);
 
+  // Pagination metadata from backend
+  const [paginationMeta, setPaginationMeta] = useState<{
+    total: number;
+    totalPages: number;
+    currentPage: number;
+    limit: number;
+  }>({
+    total: 0,
+    totalPages: 1,
+    currentPage: 1,
+    limit: 50
+  });
+
   // Filter states
   const [searchTerm, setSearchTerm] = useState('');
   const [dateRange, setDateRange] = useState<{ from?: Date; to?: Date }>({});
@@ -218,7 +231,7 @@ type LogType = 'activities' | 'manual-switches' | 'web-switches' | 'schedule-swi
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage] = useState(50);
+  const [itemsPerPage, setItemsPerPage] = useState(50);
 
   // Error resolution dialog - removed
   // const [selectedError, setSelectedError] = useState<ErrorLog | null>(null);
@@ -227,6 +240,8 @@ type LogType = 'activities' | 'manual-switches' | 'web-switches' | 'schedule-swi
   useEffect(() => {
     loadData();
     loadStats();
+    setCurrentPage(1); // Reset to first page when changing tabs
+    setPaginationMeta({ total: 0, totalPages: 1, currentPage: 1, limit: itemsPerPage }); // Reset pagination metadata
   }, [activeTab]);
 
   useEffect(() => {
@@ -290,6 +305,20 @@ type LogType = 'activities' | 'manual-switches' | 'web-switches' | 'schedule-swi
 
       const response = await api.get(`${endpoint}?${params.toString()}`);
       const data = response.data.logs || response.data.data || response.data;
+
+      // Store pagination metadata
+      if (response.data.total !== undefined) {
+        setPaginationMeta({
+          total: response.data.total,
+          totalPages: response.data.totalPages || Math.ceil(response.data.total / itemsPerPage),
+          currentPage: response.data.page || currentPage,
+          limit: response.data.limit || itemsPerPage
+        });
+        // Update current page if backend returns different page
+        if (response.data.page && response.data.page !== currentPage) {
+          setCurrentPage(response.data.page);
+        }
+      }
 
       switch (activeTab) {
         case 'activities':
@@ -429,13 +458,25 @@ type LogType = 'activities' | 'manual-switches' | 'web-switches' | 'schedule-swi
     return data;
   }, [activeTab, activityLogs, manualSwitchLogs, webSwitchLogs, scheduleSwitchLogs, deviceStatusLogs]);
 
-  const paginatedData = useMemo(() => {
-    const startIndex = (currentPage - 1) * itemsPerPage;
-    const endIndex = startIndex + itemsPerPage;
-    return filteredData.slice(startIndex, endIndex);
-  }, [filteredData, currentPage, itemsPerPage]);
+  // Remove client-side pagination - backend handles pagination
+  const paginatedData = filteredData;
 
-  const totalPages = Math.ceil(filteredData.length / itemsPerPage);
+  // Use pagination metadata from backend
+  const totalPages = paginationMeta.totalPages;
+  const totalEntries = paginationMeta.total;
+
+  // Reset to page 1 if current page is out of bounds
+  useEffect(() => {
+    if (currentPage > totalPages && totalPages > 0) {
+      setCurrentPage(1);
+    }
+  }, [currentPage, totalPages]);
+
+  // Reset to page 1 when items per page changes
+  useEffect(() => {
+    setCurrentPage(1);
+    setPaginationMeta(prev => ({ ...prev, currentPage: 1, limit: itemsPerPage }));
+  }, [itemsPerPage]);
 
   return (
     <div className="w-full max-w-7xl mx-auto mt-4 space-y-6">
@@ -1085,24 +1126,94 @@ type LogType = 'activities' | 'manual-switches' | 'web-switches' | 'schedule-swi
           </Tabs>
 
           {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between mt-6">
-              <div className="text-sm text-muted-foreground">
-                Showing {((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, filteredData.length)} of {filteredData.length} entries
+          {filteredData.length > 0 && (
+            <div className="flex flex-col sm:flex-row items-center justify-between mt-6 gap-4">
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-muted-foreground">Show:</span>
+                  <Select value={itemsPerPage.toString()} onValueChange={(value) => setItemsPerPage(parseInt(value))}>
+                    <SelectTrigger className="w-20 h-8">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="10">10</SelectItem>
+                      <SelectItem value="25">25</SelectItem>
+                      <SelectItem value="50">50</SelectItem>
+                      <SelectItem value="100">100</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <span className="text-sm text-muted-foreground">entries</span>
+                </div>
+                <div className="text-sm text-muted-foreground">
+                  Showing {((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, totalEntries)} of {totalEntries} entries
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-muted-foreground">Go to page:</span>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={totalPages}
+                    value={currentPage}
+                    onChange={(e) => {
+                      const page = parseInt(e.target.value);
+                      if (page >= 1 && page <= totalPages) {
+                        setCurrentPage(page);
+                      }
+                    }}
+                    className="w-16 h-8 text-center"
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter') {
+                        const input = e.target as HTMLInputElement;
+                        const page = parseInt(input.value);
+                        if (page >= 1 && page <= totalPages) {
+                          setCurrentPage(page);
+                        }
+                      }
+                    }}
+                  />
+                  <span className="text-sm text-muted-foreground">of {totalPages}</span>
+                </div>
               </div>
               <div className="flex items-center space-x-2">
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => setCurrentPage(currentPage - 1)}
+                  onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
                   disabled={currentPage <= 1}
                 >
                   Previous
                 </Button>
+
+                {/* First page */}
+                {totalPages > 1 && currentPage > 3 && (
+                  <>
+                    <Button
+                      variant={1 === currentPage ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => setCurrentPage(1)}
+                    >
+                      1
+                    </Button>
+                    {currentPage > 4 && <span className="px-2">...</span>}
+                  </>
+                )}
+
+                {/* Page numbers around current page */}
                 <div className="flex items-center space-x-1">
                   {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
-                    const pageNum = currentPage - 2 + i;
+                    let pageNum;
+                    if (totalPages <= 5) {
+                      pageNum = i + 1;
+                    } else if (currentPage <= 3) {
+                      pageNum = i + 1;
+                    } else if (currentPage >= totalPages - 2) {
+                      pageNum = totalPages - 4 + i;
+                    } else {
+                      pageNum = currentPage - 2 + i;
+                    }
+                    
                     if (pageNum < 1 || pageNum > totalPages) return null;
+                    
                     return (
                       <Button
                         key={pageNum}
@@ -1114,11 +1225,24 @@ type LogType = 'activities' | 'manual-switches' | 'web-switches' | 'schedule-swi
                       </Button>
                     );
                   })}
-                </div>
+                </div>                {/* Last page */}
+                {totalPages > 1 && currentPage < totalPages - 2 && (
+                  <>
+                    {currentPage < totalPages - 3 && <span className="px-2">...</span>}
+                    <Button
+                      variant={totalPages === currentPage ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => setCurrentPage(totalPages)}
+                    >
+                      {totalPages}
+                    </Button>
+                  </>
+                )}
+
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => setCurrentPage(currentPage + 1)}
+                  onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
                   disabled={currentPage >= totalPages}
                 >
                   Next

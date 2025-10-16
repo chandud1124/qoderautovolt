@@ -1,6 +1,6 @@
 const OfflineContent = require('../models/OfflineContent');
 const Board = require('../models/Board');
-const Notice = require('../models/Notice');
+// const Notice = require('../models/Notice'); // Removed - notice board functionality no longer exists
 const fs = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
@@ -37,6 +37,11 @@ class OfflineService {
   // Queue content for offline storage
   async queueContentForOffline(boardId, contentId, priority = 0) {
     try {
+      // Notice board functionality has been removed - return early
+      console.log('Notice board offline functionality disabled - content not queued');
+      return { success: false, message: 'Notice board functionality has been removed' };
+
+      /* REMOVED - Notice board functionality no longer exists
       const board = await Board.findById(boardId);
       const notice = await Notice.findById(contentId).populate('attachments');
 
@@ -100,6 +105,7 @@ class OfflineService {
       });
 
       return { success: true, message: 'Content queued for offline storage' };
+      */
     } catch (error) {
       console.error('Error queuing content for offline:', error);
       throw error;
