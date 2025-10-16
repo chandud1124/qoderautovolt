@@ -60,11 +60,6 @@ export const navItems = [
 
   // ===== OPERATIONS & MAINTENANCE =====
   {
-    title: "Notice Board",
-    to: "/dashboard/notices",
-    icon: <FileText className="h-4 w-4" />,
-  },
-  {
     title: "Advanced Integrations",
     to: "/dashboard/integrations",
     icon: <Link className="h-4 w-4" />,

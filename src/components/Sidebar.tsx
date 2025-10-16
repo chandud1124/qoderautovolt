@@ -72,12 +72,6 @@ const navigationSections = [
     ]
   },
   {
-    title: 'Operations & Maintenance',
-    items: [
-      { name: 'Notice Board', icon: FileText, href: '/dashboard/notices', current: false },
-    ]
-  },
-  {
     title: 'Support & Logs',
     items: [
       { name: 'Support Tickets', icon: Ticket, href: '/dashboard/tickets', current: false },

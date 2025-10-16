@@ -42,7 +42,6 @@ const AIMLPage = lazy(() => import("./pages/AIMLPage"));
 const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage"));
 const GrafanaPage = lazy(() => import("./pages/GrafanaPage"));
 const PrometheusPage = lazy(() => import("./pages/PrometheusPage"));
-const NoticeBoard = lazy(() => import("./pages/NoticeBoard"));
 const SocketTest = lazy(() => import("./components/SocketTest"));
 
 const queryClient = new QueryClient({
@@ -135,7 +134,6 @@ const App = () => {
                       <Route path="analytics" element={<AnalyticsPage />} />
                       <Route path="grafana" element={<GrafanaPage />} />
                       <Route path="prometheus" element={<PrometheusPage />} />
-                      <Route path="notices" element={<NoticeBoard />} />
                       <Route path="socket-test" element={<SocketTest />} />
                     </Route>
 

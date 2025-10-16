@@ -76,8 +76,7 @@ const Landing: React.FC = () => {
       points: [
         'Automated classroom management',
         'Student attendance tracking',
-        'Energy cost reduction',
-        'Smart notice board system'
+        'Energy cost reduction'
       ]
     },
     {
