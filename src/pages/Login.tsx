@@ -83,8 +83,8 @@ const Login: React.FC = () => {
             className="h-16 w-auto"
           />
         </div>
-        <h1 className="text-4xl font-bold text-primary">AutoVolt</h1>
-        <p className="text-lg text-muted-foreground">Smart Automation System</p>
+        <h1 className="text-3xl sm:text-4xl font-bold text-primary">AutoVolt</h1>
+        <p className="text-base sm:text-lg text-muted-foreground">Smart Automation System</p>
       </div>
       <Card className="w-full max-w-md">
         <CardHeader>

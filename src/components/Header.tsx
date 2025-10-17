@@ -125,7 +125,7 @@ export function Header() {
         <div className={cn(isMobile && "max-w-[200px]", "overflow-hidden")}>
           <div className="flex items-center gap-3 mb-1">
             <Logo size="sm" variant="icon-only" animated />
-            <h1 className="font-bold truncate">{currentPage.title}</h1>
+            <h1 className="text-lg font-bold truncate">{currentPage.title}</h1>
           </div>
           <p className="text-sm text-muted-foreground truncate">{currentPage.description}</p>
         </div>

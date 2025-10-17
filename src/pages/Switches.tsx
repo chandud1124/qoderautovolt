@@ -202,7 +202,7 @@ const Switches = () => {
                             {(scheduled || power !== undefined) && (
                               <div className="flex gap-1 text-[9px]">
                                 {scheduled && <span className="px-1 py-0.5 rounded bg-blue-100 text-blue-700">Sched</span>}
-                                {power !== undefined && <span className="px-1 py-0.5 rounded bg-amber-100 text-amber-700">{power}W</span>}
+                                {power !== undefined && <span className="px-1 py-0.5 rounded bg-amber-100 text-amber-700">{typeof power === 'number' ? power.toFixed(2) : power}W</span>}
                               </div>
                             )}
                           </div>

@@ -519,8 +519,8 @@ const Register: React.FC = () => {
             className="h-16 w-auto"
           />
         </div>
-        <h1 className="text-4xl font-bold text-primary">AutoVolt</h1>
-        <p className="text-lg text-muted-foreground">Intelligent Power Management System</p>
+        <h1 className="text-3xl sm:text-4xl font-bold text-primary">AutoVolt</h1>
+        <p className="text-base sm:text-lg text-muted-foreground">Intelligent Power Management System</p>
       </div>
       <Card className="w-full max-w-2xl">
         <CardHeader>

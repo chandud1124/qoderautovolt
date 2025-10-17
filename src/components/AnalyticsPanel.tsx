@@ -193,8 +193,8 @@ const AnalyticsPanel: React.FC = () => {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-3xl font-bold text-primary">Analytics Dashboard</h2>
-          <p className="text-muted-foreground">Real-time monitoring and historical data analysis</p>
+          <h2 className="text-2xl sm:text-3xl font-bold text-primary">Analytics Dashboard</h2>
+          <p className="text-sm sm:text-base text-muted-foreground">Real-time monitoring and historical data analysis</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={fetchAnalyticsData}>
@@ -230,7 +230,7 @@ const AnalyticsPanel: React.FC = () => {
             <Zap className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{analyticsData.summary?.totalPowerConsumption?.toFixed(0) ?? 0}W</div>
+            <div className="text-xl sm:text-2xl font-bold break-words">{analyticsData.summary?.totalPowerConsumption?.toFixed(2) ?? 0}W</div>
             <p className="text-xs text-muted-foreground">
               Current total usage
             </p>
@@ -243,7 +243,7 @@ const AnalyticsPanel: React.FC = () => {
             <Activity className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{analyticsData.summary?.averageHealthScore?.toFixed(1) ?? 0}%</div>
+            <div className="text-xl sm:text-2xl font-bold break-words">{analyticsData.summary?.averageHealthScore?.toFixed(2) ?? 0}%</div>
             <p className="text-xs text-muted-foreground">
               Device health status
             </p>
@@ -256,7 +256,7 @@ const AnalyticsPanel: React.FC = () => {
             <AlertTriangle className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">-</div>
+            <div className="text-xl sm:text-2xl font-bold break-words">-</div>
             <p className="text-xs text-muted-foreground">
               Requiring attention
             </p>
@@ -267,11 +267,11 @@ const AnalyticsPanel: React.FC = () => {
 
       {/* Main Analytics Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <TabsList className="grid w-full grid-cols-4">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="energy">Energy</TabsTrigger>
-          <TabsTrigger value="devices">Devices</TabsTrigger>
-          <TabsTrigger value="anomalies">Anomalies</TabsTrigger>
+        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4">
+          <TabsTrigger value="overview" className="text-xs sm:text-sm">Overview</TabsTrigger>
+          <TabsTrigger value="energy" className="text-xs sm:text-sm">Energy</TabsTrigger>
+          <TabsTrigger value="devices" className="text-xs sm:text-sm">Devices</TabsTrigger>
+          <TabsTrigger value="anomalies" className="text-xs sm:text-sm">Anomalies</TabsTrigger>
         </TabsList>
 
         {/* Overview Tab */}
@@ -302,9 +302,9 @@ const AnalyticsPanel: React.FC = () => {
                       <Cell fill="#10b981" />
                       <Cell fill="#f59e0b" />
                     </Pie>
-                    <Tooltip formatter={(value) => [`${typeof value === 'number' ? value.toFixed(1) : value}%`, '']} />
+                    <Tooltip formatter={(value) => [`${typeof value === 'number' ? value.toFixed(2) : value}%`, '']} />
                     <text x="50%" y="45%" textAnchor="middle" dominantBaseline="middle" className="text-2xl font-bold fill-white">
-                      {analyticsData.summary?.averageHealthScore?.toFixed(0) ?? 0}%
+                      {analyticsData.summary?.averageHealthScore?.toFixed(2) ?? 0}%
                     </text>
                     <text x="50%" y="60%" textAnchor="middle" dominantBaseline="middle" className="text-sm fill-white">
                       Health Score
@@ -339,9 +339,9 @@ const AnalyticsPanel: React.FC = () => {
                       <Cell fill="#ef4444" />
                     </Pie>
                     <Tooltip formatter={(value) => [`${value} devices`, '']} />
-                    <text x="50%" y="45%" textAnchor="middle" dominantBaseline="middle" className="text-2xl font-bold fill-white">
+                    <text x="50%" y="45%" textAnchor="middle" dominantBaseline="middle" className="text-xl sm:text-2xl font-bold fill-white">
                       {analyticsData.summary?.totalDevices ?
-                        (((analyticsData.summary.onlineDevices ?? 0) / analyticsData.summary.totalDevices) * 100).toFixed(0) : 0}%
+                        (((analyticsData.summary.onlineDevices ?? 0) / analyticsData.summary.totalDevices) * 100).toFixed(2) : 0}%
                     </text>
                     <text x="50%" y="60%" textAnchor="middle" dominantBaseline="middle" className="text-sm fill-white">
                       Online
@@ -359,8 +359,8 @@ const AnalyticsPanel: React.FC = () => {
               </CardHeader>
               <CardContent className="h-64 flex items-center justify-center">
                 <div className="text-center">
-                  <div className="text-6xl font-bold text-blue-600 mb-2">
-                    {analyticsData.summary?.totalPowerConsumption?.toFixed(0) ?? 0}
+                  <div className="text-4xl sm:text-5xl lg:text-6xl font-bold text-blue-600 mb-2 break-words px-2">
+                    {analyticsData.summary?.totalPowerConsumption?.toFixed(2) ?? 0}
                   </div>
                   <div className="text-xl text-muted-foreground mb-1">Watts</div>
                   <div className="text-sm text-muted-foreground">
@@ -440,7 +440,7 @@ const AnalyticsPanel: React.FC = () => {
                           </div>
                         </div>
                         <div className="text-right">
-                          <p className="font-bold text-lg">{device.power ?? 0}W</p>
+                          <p className="font-bold text-base sm:text-lg break-words">{(device.power ?? 0).toFixed(2)}W</p>
                           <Badge variant={device.status === 'online' ? 'default' : 'destructive'} className="text-xs">
                             {device.status ?? 'unknown'}
                           </Badge>
@@ -809,8 +809,8 @@ const AnalyticsPanel: React.FC = () => {
                     <Card className="bg-blue-50 dark:bg-blue-950/20">
                       <CardContent className="pt-6">
                         <div className="text-center">
-                          <div className="text-3xl font-bold text-blue-600 mb-2">
-                            {forecastData.accuracy ? (forecastData.accuracy * 100).toFixed(1) : '87.3'}%
+                          <div className="text-2xl sm:text-3xl font-bold text-blue-600 mb-2 break-words px-2">
+                            {forecastData.accuracy ? (forecastData.accuracy * 100).toFixed(2) : '87.30'}%
                           </div>
                           <div className="text-sm text-blue-700 dark:text-blue-300">
                             Forecast Accuracy
@@ -826,8 +826,8 @@ const AnalyticsPanel: React.FC = () => {
                     <Card className="bg-green-50 dark:bg-green-950/20">
                       <CardContent className="pt-6">
                         <div className="text-center">
-                          <div className="text-3xl font-bold text-green-600 mb-2">
-                            {Math.max(...(forecastData.forecast?.map((f: any) => f.predicted) || [0]))?.toFixed(1) || '0.0'}
+                          <div className="text-2xl sm:text-3xl font-bold text-green-600 mb-2 break-words px-2">
+                            {Math.max(...(forecastData.forecast?.map((f: any) => f.predicted) || [0]))?.toFixed(2) || '0.00'}
                           </div>
                           <div className="text-sm text-green-700 dark:text-green-300">
                             Peak Usage Predicted
@@ -843,8 +843,8 @@ const AnalyticsPanel: React.FC = () => {
                     <Card className="bg-purple-50 dark:bg-purple-950/20">
                       <CardContent className="pt-6">
                         <div className="text-center">
-                          <div className="text-3xl font-bold text-purple-600 mb-2">
-                            ₹{forecastData.savings ? forecastData.savings.toFixed(0) : '245'}
+                          <div className="text-2xl sm:text-3xl font-bold text-purple-600 mb-2 break-words px-2">
+                            ₹{forecastData.savings ? forecastData.savings.toFixed(2) : '245.00'}
                           </div>
                           <div className="text-sm text-purple-700 dark:text-purple-300">
                             Potential Savings
@@ -912,7 +912,7 @@ const AnalyticsPanel: React.FC = () => {
                           <YAxis yAxisId="accuracy" orientation="right" />
                           <Tooltip
                             formatter={(value: any, name: string) => [
-                              name === 'accuracy' ? `${value?.toFixed(1) || 0}%` : `${value?.toFixed(2) || 0} kWh`,
+                              name === 'accuracy' ? `${value?.toFixed(2) || 0}%` : `${value?.toFixed(2) || 0} kWh`,
                               name === 'predicted' ? 'Predicted' :
                               name === 'actual' ? 'Actual' :
                               name === 'accuracy' ? 'Accuracy' : name
@@ -986,11 +986,11 @@ const AnalyticsPanel: React.FC = () => {
                             </li>
                             <li className="flex items-center gap-2">
                               <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                              Average forecast accuracy: {forecastData.accuracy ? (forecastData.accuracy * 100).toFixed(1) : '87.3'}%
+                              Average forecast accuracy: {forecastData.accuracy ? (forecastData.accuracy * 100).toFixed(2) : '87.30'}%
                             </li>
                             <li className="flex items-center gap-2">
                               <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
-                              Potential energy savings: ₹{forecastData.savings || '245'} this period
+                              Potential energy savings: ₹{forecastData.savings ? forecastData.savings.toFixed(2) : '245.00'} this period
                             </li>
                           </ul>
                         </div>
@@ -1382,7 +1382,7 @@ const AnalyticsPanel: React.FC = () => {
                     <div className="text-right">
                       <p className="text-sm font-medium capitalize">{device.status}</p>
                       <p className="text-xs text-muted-foreground">
-                        Health: {device.health}%
+                        Health: {typeof device.health === 'number' ? device.health.toFixed(2) : device.health}%
                       </p>
                     </div>
                   </div>
@@ -1421,7 +1421,7 @@ const AnalyticsPanel: React.FC = () => {
               <CardContent>
                 <div className="text-2xl font-bold text-green-600">{anomalyData?.resolvedAnomalies || 0}</div>
                 <p className="text-xs text-muted-foreground">
-                  {anomalyData?.totalAnomalies > 0 ? ((anomalyData.resolvedAnomalies / anomalyData.totalAnomalies) * 100).toFixed(0) : 0}% resolution rate
+                  {anomalyData?.totalAnomalies > 0 ? ((anomalyData.resolvedAnomalies / anomalyData.totalAnomalies) * 100).toFixed(2) : '0.00'}% resolution rate
                 </p>
               </CardContent>
             </Card>

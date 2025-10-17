@@ -268,8 +268,8 @@ const IntegrationsPage: React.FC = () => {
     <div className="container mx-auto p-6">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-3xl font-bold">Advanced Integrations</h1>
-          <p className="text-muted-foreground">
+          <h1 className="text-2xl sm:text-3xl font-bold">Advanced Integrations</h1>
+          <p className="text-sm sm:text-base text-muted-foreground">
             Manage RSS feeds, social media, weather, webhooks, and database integrations
           </p>
         </div>

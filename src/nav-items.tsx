@@ -9,8 +9,7 @@ export const navItems = [
     title: "Power Dashboard",
     to: "/dashboard",
     icon: LayoutDashboard,
-    pageName: "dashboard",
-    description: "Main dashboard overview"
+    pageName: "dashboard"
   },
   // ===== CORE OPERATIONS =====
   {

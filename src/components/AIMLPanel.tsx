@@ -143,18 +143,24 @@ const AIMLPanel: React.FC = () => {
     }
   }, [classroom, availableDevices]);
 
-  // Generate time-based labels
+  // Generate time-based labels for working hours only (6 AM - 10 PM)
   const generateTimeLabel = (index: number, timeframe: string) => {
     const now = new Date();
 
     switch (timeframe) {
       case '1h':
-        const futureTime = new Date(now.getTime() + (index + 1) * 10 * 60000);
-        return futureTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+        // For hourly, show 6 AM to 10 PM (16 hours)
+        const hour1h = 6 + index; // Start at 6 AM
+        const period1h = hour1h >= 12 ? 'PM' : 'AM';
+        const displayHour1h = hour1h > 12 ? hour1h - 12 : hour1h === 0 ? 12 : hour1h;
+        return `${displayHour1h}:00 ${period1h}`;
 
       case '24h':
-        const futureHour = new Date(now.getTime() + (index + 1) * 3600000);
-        return futureHour.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+        // For daily, show working hours only (6 AM - 10 PM)
+        const hour24h = 6 + index; // Start at 6 AM
+        const period24h = hour24h >= 12 ? 'PM' : 'AM';
+        const displayHour24h = hour24h > 12 ? hour24h - 12 : hour24h === 0 ? 12 : hour24h;
+        return `${displayHour24h}:00 ${period24h}`;
 
       case '7d':
         const futureDay = new Date(now.getTime() + (index + 1) * 86400000);
@@ -165,7 +171,7 @@ const AIMLPanel: React.FC = () => {
         return futureDay30.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 
       default:
-        return Period ;
+        return `Period ${index + 1}`;
     }
   };
 
@@ -188,7 +194,7 @@ const AIMLPanel: React.FC = () => {
               device_id: device,
               classroom_id: classroom,
               history: generateHistoricalData(device, 24), // More historical data for better learning
-              periods: 24
+              periods: 16 // Only forecast working hours (6 AM - 10 PM)
             });
             predictionData = {
               type: 'forecast',
@@ -341,15 +347,27 @@ const AIMLPanel: React.FC = () => {
 
   // Mock data generators
   const generateMockForecast = () => {
-    return Array.from({ length: 24 }, (_, i) => {
-      const hourOfDay = i % 24;
-      let baseUsage = 30;
+    // Only forecast for working hours: 6 AM to 10 PM (16 hours)
+    return Array.from({ length: 16 }, (_, i) => {
+      const hourOfDay = 6 + i; // Start at 6 AM, end at 10 PM (9 PM is last hour)
+      let baseUsage = 0;
 
-      // Simulate realistic daily patterns
-      if (hourOfDay >= 8 && hourOfDay <= 18) {
-        baseUsage = 60 + Math.random() * 30; // Active hours
-      } else if (hourOfDay >= 6 && hourOfDay <= 22) {
-        baseUsage = 40 + Math.random() * 20; // Moderate hours
+      // Simulate realistic classroom usage patterns
+      if (hourOfDay >= 8 && hourOfDay <= 12) {
+        // Morning classes (8 AM - 12 PM): High usage
+        baseUsage = 70 + Math.random() * 20; // 70-90%
+      } else if (hourOfDay >= 13 && hourOfDay <= 17) {
+        // Afternoon classes (1 PM - 5 PM): Peak usage
+        baseUsage = 75 + Math.random() * 15; // 75-90%
+      } else if (hourOfDay >= 18 && hourOfDay <= 20) {
+        // Evening study (6 PM - 8 PM): Moderate usage
+        baseUsage = 45 + Math.random() * 20; // 45-65%
+      } else if (hourOfDay >= 6 && hourOfDay < 8) {
+        // Early morning (6 AM - 8 AM): Low usage, setup time
+        baseUsage = 20 + Math.random() * 15; // 20-35%
+      } else if (hourOfDay >= 21) {
+        // Late evening (9 PM - 10 PM): Minimal usage, closing time
+        baseUsage = 10 + Math.random() * 15; // 10-25%
       }
 
       return Math.floor(baseUsage);
@@ -367,9 +385,9 @@ const AIMLPanel: React.FC = () => {
 
   const generateMockPeakHours = () => {
     return [
-      { hour: '9:00 AM', usage: 85, reason: 'Morning classes start' },
-      { hour: '2:00 PM', usage: 78, reason: 'Afternoon sessions' },
-      { hour: '6:00 PM', usage: '65', reason: 'Evening study hours' }
+      { hour: '9:00 AM', usage: 88, reason: 'Morning classes start - labs & computers active' },
+      { hour: '2:00 PM', usage: 92, reason: 'Peak afternoon sessions - all devices in use' },
+      { hour: '6:00 PM', usage: 65, reason: 'Evening study hours - moderate usage' }
     ];
   };
 
@@ -431,7 +449,7 @@ const AIMLPanel: React.FC = () => {
   const FEATURE_META: Record<string, { title: string; desc: string; action: string; icon: any }> = {
     forecast: {
       title: 'Energy Forecasting',
-      desc: 'Predict classroom electricity usage patterns and anticipate peak hours for better energy planning',
+      desc: 'Predict classroom electricity usage patterns during working hours (6 AM - 10 PM) and anticipate peak hours for better energy planning',
       action: 'Generate Forecast',
       icon: TrendingUp
     },
@@ -479,7 +497,7 @@ const AIMLPanel: React.FC = () => {
                   Energy Usage Forecast
                 </CardTitle>
                 <CardDescription>
-                  24-hour prediction based on historical patterns and current usage
+                  Working hours prediction (6 AM - 10 PM) based on historical patterns and current usage
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -496,7 +514,7 @@ const AIMLPanel: React.FC = () => {
                       <YAxis yAxisId='cost' orientation='right' />
                       <Tooltip
                         formatter={(value: any, name: string) => [
-                          name === 'usage' ? `${value}%` : `$${value}`,
+                          name === 'usage' ? `${typeof value === 'number' ? value.toFixed(2) : value}%` : `$${typeof value === 'number' ? value.toFixed(2) : value}`,
                           name === 'usage' ? 'Energy Usage' : 'Estimated Cost'
                         ]}
                       />
@@ -532,7 +550,7 @@ const AIMLPanel: React.FC = () => {
                           <div className='font-semibold'>{peak.hour}</div>
                           <div className='text-sm text-muted-foreground'>{peak.reason}</div>
                         </div>
-                        <Badge variant='outline'>{peak.usage}% usage</Badge>
+                        <Badge variant='outline'>{typeof peak.usage === 'number' ? peak.usage.toFixed(2) : peak.usage}% usage</Badge>
                       </div>
                     ))}
                   </div>
@@ -599,7 +617,7 @@ const AIMLPanel: React.FC = () => {
                 <CardContent className='pt-6'>
                   <div className='text-center'>
                     <AlertTriangle className='w-8 h-8 text-red-500 mx-auto mb-2' />
-                    <div className='text-2xl font-bold text-red-600'>
+                    <div className='text-xl sm:text-2xl font-bold text-red-600 break-words'>
                       {anomalies.length}
                     </div>
                     <p className='text-sm text-muted-foreground'>Anomalies Detected</p>
@@ -611,7 +629,7 @@ const AIMLPanel: React.FC = () => {
                 <CardContent className='pt-6'>
                   <div className='text-center'>
                     <Shield className='w-8 h-8 text-blue-500 mx-auto mb-2' />
-                    <div className='text-2xl font-bold text-blue-600'>
+                    <div className='text-xl sm:text-2xl font-bold text-blue-600 break-words'>
                       {alerts.length}
                     </div>
                     <p className='text-sm text-muted-foreground'>Active Alerts</p>
@@ -623,8 +641,8 @@ const AIMLPanel: React.FC = () => {
                 <CardContent className='pt-6'>
                   <div className='text-center'>
                     <CheckCircle className='w-8 h-8 text-green-500 mx-auto mb-2' />
-                    <div className='text-2xl font-bold text-green-600'>
-                      95%
+                    <div className='text-xl sm:text-2xl font-bold text-green-600 break-words'>
+                      95.00%
                     </div>
                     <p className='text-sm text-muted-foreground'>Detection Accuracy</p>
                   </div>
@@ -710,8 +728,8 @@ const AIMLPanel: React.FC = () => {
                 <CardContent className='pt-6'>
                   <div className='text-center'>
                     <Activity className='w-8 h-8 text-green-500 mx-auto mb-2' />
-                    <div className='text-2xl font-bold text-green-600'>
-                      {healthScore}%
+                    <div className='text-xl sm:text-2xl font-bold text-green-600 break-words'>
+                      {healthScore.toFixed(2)}%
                     </div>
                     <p className='text-sm text-muted-foreground'>Device Health Score</p>
                   </div>
@@ -722,8 +740,8 @@ const AIMLPanel: React.FC = () => {
                 <CardContent className='pt-6'>
                   <div className='text-center'>
                     <AlertTriangle className='w-8 h-8 text-red-500 mx-auto mb-2' />
-                    <div className='text-2xl font-bold text-red-600'>
-                      {(failureProbability * 100).toFixed(1)}%
+                    <div className='text-xl sm:text-2xl font-bold text-red-600 break-words'>
+                      {(failureProbability * 100).toFixed(2)}%
                     </div>
                     <p className='text-sm text-muted-foreground'>Failure Risk</p>
                   </div>
@@ -734,8 +752,8 @@ const AIMLPanel: React.FC = () => {
                 <CardContent className='pt-6'>
                   <div className='text-center'>
                     <Calendar className='w-8 h-8 text-blue-500 mx-auto mb-2' />
-                    <div className='text-2xl font-bold text-blue-600'>
-                      {estimatedLifetime}
+                    <div className='text-xl sm:text-2xl font-bold text-blue-600 break-words'>
+                      {estimatedLifetime.toFixed(2)}
                     </div>
                     <p className='text-sm text-muted-foreground'>Days Remaining</p>
                   </div>
@@ -851,8 +869,8 @@ const AIMLPanel: React.FC = () => {
   return (
     <div className='w-full bg-card shadow-2xl rounded-2xl p-6 sm:p-8 flex flex-col gap-8 border border-border'>
       <div className='text-center'>
-        <h2 className='text-3xl font-bold mb-2 text-primary'>AI Smart Energy Management</h2>
-        <p className='text-muted-foreground'>Intelligent predictions powered by machine learning</p>
+        <h2 className='text-2xl sm:text-3xl font-bold mb-2 text-primary'>AI Smart Energy Management</h2>
+        <p className='text-sm sm:text-base text-muted-foreground'>Intelligent predictions powered by machine learning</p>
       </div>
 
       {loading && devices.length === 0 ? (

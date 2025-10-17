@@ -80,7 +80,7 @@ function CustomTooltip({ active, payload }: TooltipProps<number, string>) {
           Value: <span className="font-medium text-foreground">{data.value}</span>
         </div>
         <div className="text-xs text-muted-foreground">
-          Percentage: <span className="font-medium text-foreground">{percentage.toFixed(1)}%</span>
+          Percentage: <span className="font-medium text-foreground">{percentage.toFixed(2)}%</span>
         </div>
       </div>
     </Card>
@@ -113,7 +113,7 @@ const renderActiveShape = (props: any) => {
         {value}
       </text>
       <text x={cx} y={cy} dy={35} textAnchor="middle" fill="hsl(var(--muted-foreground))" className="text-xs">
-        {`${(percent * 100).toFixed(1)}%`}
+        {`${(percent * 100).toFixed(2)}%`}
       </text>
       <Sector
         cx={cx}
@@ -136,7 +136,7 @@ const renderLabel = (entry: any) => {
 };
 
 const renderPercentageLabel = (entry: any) => {
-  return `${(entry.percent * 100).toFixed(0)}%`;
+  return `${(entry.percent * 100).toFixed(2)}%`;
 };
 
 /**

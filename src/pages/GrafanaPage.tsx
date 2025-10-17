@@ -79,8 +79,8 @@ const GrafanaPage: React.FC = () => {
     <div className="container mx-auto py-8 px-4 max-w-7xl">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-3xl font-bold text-primary mb-2">Grafana Analytics Dashboard</h1>
-          <p className="text-gray-600">Advanced monitoring and visualization for your IoT Classroom System</p>
+          <h1 className="text-2xl sm:text-3xl font-bold text-primary mb-2">Grafana Analytics Dashboard</h1>
+          <p className="text-sm sm:text-base text-gray-600">Advanced monitoring and visualization for your IoT Classroom System</p>
         </div>
         <div className="flex items-center gap-3">
           <Badge

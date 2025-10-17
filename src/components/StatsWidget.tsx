@@ -99,7 +99,7 @@ export function StatsWidget({
                 )}
               >
                 ({comparisonPercent > 0 ? '+' : ''}
-                {comparisonPercent.toFixed(1)}%)
+                {comparisonPercent.toFixed(2)}%)
               </span>
             )}
           </div>
