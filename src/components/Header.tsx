@@ -73,6 +73,16 @@ export function Header() {
     const handleClickOutside = (event) => {
       // Only process if at least one dropdown is open
       if (isDropdownOpen) {
+        // Check if click is within notification ref
+        const inNotifRef = notifRef.current?.contains(event.target);
+        // Check if click is within user ref
+        const inUserRef = userRef.current?.contains(event.target);
+        
+        // If clicking inside either ref, don't close
+        if (inNotifRef || inUserRef) {
+          return;
+        }
+        
         // Check if click is outside all dropdown areas
         const isOutsideAll = (
           (!notifRef.current || !notifRef.current.contains(event.target)) &&
@@ -107,11 +117,11 @@ export function Header() {
   return (
     <header className="border-b px-4 py-3 relative z-50 flex items-center justify-between">
       {/* Left side */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-1 min-w-0">
         {isMobile && (
           <Sheet open={showSidebar} onOpenChange={setShowSidebar}>
             <SheetTrigger asChild>
-              <Button variant="ghost" size="icon" className="mr-1" onClick={() => setShowSidebar(true)}>
+              <Button variant="ghost" size="icon" className="mr-1 flex-shrink-0" onClick={() => setShowSidebar(true)}>
                 <Menu className="h-5 w-5" />
               </Button>
             </SheetTrigger>
@@ -122,22 +132,26 @@ export function Header() {
             </SheetContent>
           </Sheet>
         )}
-        <div className={cn(isMobile && "max-w-[200px]", "overflow-hidden")}>
-          <div className="flex items-center gap-3 mb-1">
+        <div className={cn(isMobile && "max-w-[150px]", "overflow-hidden flex-1")}>
+          <div className="flex items-center gap-2 mb-1">
             <Logo size="sm" variant="icon-only" animated />
             <h1 className="text-lg font-bold truncate">{currentPage.title}</h1>
           </div>
-          <p className="text-sm text-muted-foreground truncate">{currentPage.description}</p>
         </div>
       </div>
 
-      {/* Right side */}
-      <div className="flex items-center gap-2">
-        {/* Theme Toggle */}
-        <ThemeToggle />
+      {/* Right side - Scrollable on mobile */}
+      <div className={cn(
+        "flex items-center gap-1 sm:gap-2 flex-shrink-0",
+        isMobile ? "overflow-x-auto" : "overflow-visible"
+      )}>
+        {/* Theme Toggle - Now visible on all devices */}
+        <div className="flex-shrink-0">
+          <ThemeToggle />
+        </div>
 
         {/* Connection status */}
-        <Button variant="ghost" size="icon" onClick={handleRefresh}>
+        <Button variant="ghost" size="icon" className="flex-shrink-0" onClick={handleRefresh}>
           {isConnected ? (
             <Wifi className="h-5 w-5 text-green-500" />
           ) : (
@@ -146,7 +160,7 @@ export function Header() {
         </Button>
 
         {/* Notifications */}
-        <div className="relative" ref={notifRef}>
+        <div className="relative flex-shrink-0" ref={notifRef}>
           <Button
             variant="ghost"
             size="icon"
@@ -162,10 +176,10 @@ export function Header() {
 
           {showNotifications && (
             <Card className={cn(
-              "absolute shadow-lg z-50",
+              "shadow-lg z-[200]",
               isMobile 
-                ? "right-2 mt-2 w-[calc(100vw-4rem)] max-w-[360px]" 
-                : "right-0 mt-2 w-80"
+                ? "fixed top-14 left-4 right-4 w-[calc(100vw-2rem)]" 
+                : "absolute right-0 top-full mt-2 w-80"
             )}>
               <CardHeader>
                 <CardTitle className="text-sm">Notifications</CardTitle>
@@ -184,7 +198,7 @@ export function Header() {
                           }}
                         >
                           <div className="flex-1 space-y-1">
-                            <p className="text-xs font-medium">{notification.title}</p>
+                            <p className="text-xs font-medium">{notification.deviceName || 'System Alert'}</p>
                             <p className="text-xs text-muted-foreground">{notification.message}</p>
                           </div>
                         </button>
@@ -203,12 +217,12 @@ export function Header() {
         </div>
 
         {/* Time Limit Alerts */}
-        <div className="hidden md:block">
+        <div className="hidden md:block flex-shrink-0">
           <DeviceNotificationAlert />
         </div>
 
         {/* User menu */}
-        <div className="relative" ref={userRef}>
+        <div className="relative flex-shrink-0" ref={userRef}>
           <Button
             variant="ghost"
             size="icon"
@@ -219,10 +233,10 @@ export function Header() {
 
           {showUserMenu && (
             <Card className={cn(
-              "absolute shadow-lg z-50",
+              "shadow-lg z-[200]",
               isMobile 
-                ? "right-2 mt-2 w-[calc(100vw-4rem)] max-w-[360px]" 
-                : "right-0 mt-2 w-80"
+                ? "fixed top-14 left-4 right-4 w-[calc(100vw-2rem)]" 
+                : "absolute right-0 top-full mt-2 w-80"
             )}>
               <CardHeader className="py-3 px-4">
                 <div className="flex flex-col space-y-1">
@@ -246,7 +260,7 @@ export function Header() {
                   <span>Settings</span>
                 </button>
                 <button
-                  className="flex w-full items-center gap-2 px-3 py-2 text-sm text-red-500 hover:bg-red-50"
+                  className="flex w-full items-center gap-2 px-3 py-2 text-sm text-red-500 hover:bg-red-50 hover:text-red-600"
                   onClick={() => {
                     closeAll();
                     localStorage.clear();
@@ -265,7 +279,7 @@ export function Header() {
       {/* Backdrop */}
       {(showNotifications || showUserMenu) && (
         <div 
-          className="fixed inset-0 bg-black/30 backdrop-blur-[1px] z-40" 
+          className="fixed inset-0 bg-black/30 backdrop-blur-[1px] z-[100]" 
           onClick={closeAll}
         />
       )}

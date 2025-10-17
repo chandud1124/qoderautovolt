@@ -701,6 +701,16 @@ const connectDB = async (retries = 5) => {
     } catch (scheduleError) {
       logger.error('Schedule service initialization error:', scheduleError);
     }
+    
+    // Initialize metrics service after DB connection
+    logger.info('[DEBUG] About to initialize metrics service...');
+    try {
+      const metricsService = require('./metricsService');
+      await metricsService.initializeMetricsAfterDB();
+      logger.info('[DEBUG] Metrics service initialization completed');
+    } catch (metricsError) {
+      logger.error('Metrics service initialization error:', metricsError);
+    }
   } catch (err) {
     const msg = err && (err.message || String(err));
     logger.error('MongoDB connection error (continuing in LIMITED MODE):', msg);

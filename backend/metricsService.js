@@ -147,47 +147,157 @@ const switchTimeOnMinutes = new promClient.Gauge({
   labelNames: ['device_id', 'device_name', 'switch_id', 'switch_name', 'classroom']
 });
 
-// Register all metrics
-register.registerMetric(deviceOnCount);
-register.registerMetric(deviceOffCount);
-register.registerMetric(deviceOnlineCount);
-register.registerMetric(deviceOfflineCount);
-register.registerMetric(powerUsageWatts);
-register.registerMetric(energyConsumptionKwh);
-register.registerMetric(powerFactor);
-register.registerMetric(classroomOccupancy);
-register.registerMetric(occupancySensorStatus);
-register.registerMetric(deviceHealthScore);
-register.registerMetric(deviceUptimeHours);
-register.registerMetric(deviceDowntimeHours);
-register.registerMetric(anomalyCount);
-register.registerMetric(anomalySeverity);
-register.registerMetric(timeLimitExceededCount);
-register.registerMetric(switchTimeOnMinutes);
+// ESP32-specific metrics
+const esp32DeviceCount = new promClient.Gauge({
+  name: 'esp32_device_count',
+  help: 'Total number of ESP32 devices registered in the system',
+  labelNames: ['status']
+});
 
-// Real device data from database - no mock data used
+const esp32PowerUsageWatts = new promClient.Gauge({
+  name: 'esp32_power_usage_watts',
+  help: 'Current power usage in watts for ESP32-controlled devices',
+  labelNames: ['device_id', 'device_name', 'classroom', 'mac_address']
+});
+
+const esp32OnlineStatus = new promClient.Gauge({
+  name: 'esp32_online_status',
+  help: 'ESP32 device online status (1=online, 0=offline)',
+  labelNames: ['device_id', 'device_name', 'classroom', 'mac_address']
+});
+
+const esp32TelemetryReceived = new promClient.Counter({
+  name: 'esp32_telemetry_received_total',
+  help: 'Total number of telemetry messages received from ESP32 devices',
+  labelNames: ['device_id', 'device_name', 'mac_address']
+});
+
+const esp32CommandSent = new promClient.Counter({
+  name: 'esp32_command_sent_total',
+  help: 'Total number of commands sent to ESP32 devices',
+  labelNames: ['device_id', 'device_name', 'mac_address', 'command_type']
+});
+
+const esp32ConnectionUptime = new promClient.Gauge({
+  name: 'esp32_connection_uptime_seconds',
+  help: 'ESP32 device connection uptime in seconds',
+  labelNames: ['device_id', 'device_name', 'mac_address']
+});
+
+const esp32SwitchState = new promClient.Gauge({
+  name: 'esp32_switch_state',
+  help: 'ESP32 switch state (1=ON, 0=OFF)',
+  labelNames: ['device_id', 'device_name', 'mac_address', 'switch_id', 'switch_name']
+});
+
+const esp32Temperature = new promClient.Gauge({
+  name: 'esp32_temperature_celsius',
+  help: 'ESP32 device temperature in Celsius',
+  labelNames: ['device_id', 'device_name', 'mac_address']
+});
+
+const esp32HeapMemory = new promClient.Gauge({
+  name: 'esp32_heap_memory_bytes',
+  help: 'ESP32 device free heap memory in bytes',
+  labelNames: ['device_id', 'device_name', 'mac_address']
+});
+
+// Register ESP32-specific metrics
+register.registerMetric(esp32DeviceCount);
+register.registerMetric(esp32PowerUsageWatts);
+register.registerMetric(esp32OnlineStatus);
+register.registerMetric(esp32TelemetryReceived);
+register.registerMetric(esp32CommandSent);
+register.registerMetric(esp32ConnectionUptime);
+register.registerMetric(esp32SwitchState);
+register.registerMetric(esp32Temperature);
+register.registerMetric(esp32HeapMemory);
 
 // Initialize metrics with real data
 async function initializeMetrics() {
+  console.log('[METRICS] initializeMetrics function called');
   try {
     // Fetch real devices from database
     const devices = await Device.find({}).lean();
+    console.log(`[METRICS] Found ${devices.length} devices in database`);
 
     if (!devices || devices.length === 0) {
       console.log('No devices found in database for metrics initialization');
       return;
     }
 
-    // Set initial device metrics
+    // Set initial ESP32 device metrics
     devices.forEach(device => {
-      const totalPower = device.switches ? device.switches.reduce((total, sw) => {
-        return total + (sw.state ? getBasePowerConsumption(sw.name, sw.type) : 0);
-      }, 0) : 0;
+      // Check if this is an ESP32 device (you might want to add a device type field)
+      // For now, we'll assume all devices could be ESP32 devices
+      const isESP32 = device.macAddress && device.macAddress.length > 0; // Simple check
 
-      powerUsageWatts.set({ device_id: device._id.toString(), device_name: device.name, classroom: device.classroom || 'unassigned' }, totalPower);
-      powerFactor.set({ device_id: device._id.toString(), device_name: device.name, classroom: device.classroom || 'unassigned' }, 0.85 + Math.random() * 0.15);
-      deviceHealthScore.set({ device_id: device._id.toString(), device_name: device.name, classroom: device.classroom || 'unassigned' }, 80 + Math.random() * 20);
+      if (isESP32) {
+        // Calculate current power based on switches
+        const totalPower = device.switches ? device.switches.reduce((total, sw) => {
+          return total + (sw.state ? getBasePowerConsumption(sw.name, sw.type) : 0);
+        }, 0) : 0;
+
+        // Set ESP32-specific metrics
+        esp32PowerUsageWatts.set({
+          device_id: device._id.toString(),
+          device_name: device.name,
+          classroom: device.classroom || 'unassigned',
+          mac_address: device.macAddress || 'unknown'
+        }, totalPower);
+
+        esp32OnlineStatus.set({
+          device_id: device._id.toString(),
+          device_name: device.name,
+          classroom: device.classroom || 'unassigned',
+          mac_address: device.macAddress || 'unknown'
+        }, device.status === 'online' ? 1 : 0);
+
+        // Set switch states
+        if (device.switches && device.switches.length > 0) {
+          device.switches.forEach((sw, index) => {
+            esp32SwitchState.set({
+              device_id: device._id.toString(),
+              device_name: device.name,
+              mac_address: device.macAddress || 'unknown',
+              switch_id: sw._id?.toString() || `switch_${index}`,
+              switch_name: sw.name
+            }, sw.state ? 1 : 0);
+          });
+        }
+
+        // Set mock telemetry data (in real implementation, this would come from ESP32)
+        esp32Temperature.set({
+          device_id: device._id.toString(),
+          device_name: device.name,
+          mac_address: device.macAddress || 'unknown'
+        }, 25 + Math.random() * 10); // 25-35°C
+
+        esp32HeapMemory.set({
+          device_id: device._id.toString(),
+          device_name: device.name,
+          mac_address: device.macAddress || 'unknown'
+        }, 50000 + Math.random() * 20000); // 50-70KB free heap
+
+        // Set connection uptime (mock data)
+        esp32ConnectionUptime.set({
+          device_id: device._id.toString(),
+          device_name: device.name,
+          mac_address: device.macAddress || 'unknown'
+        }, Math.floor(Math.random() * 86400)); // 0-24 hours in seconds
+      }
     });
+
+    // Set ESP32 device count
+    const esp32Devices = devices.filter(d => d.macAddress && d.macAddress.length > 0);
+    const onlineESP32Devices = esp32Devices.filter(d => d.status === 'online');
+    const offlineESP32Devices = esp32Devices.filter(d => d.status !== 'online');
+
+    console.log(`[METRICS] Found ${esp32Devices.length} ESP32 devices (${onlineESP32Devices.length} online, ${offlineESP32Devices.length} offline)`);
+
+    esp32DeviceCount.set({ status: 'total' }, esp32Devices.length);
+    esp32DeviceCount.set({ status: 'online' }, onlineESP32Devices.length);
+    esp32DeviceCount.set({ status: 'offline' }, offlineESP32Devices.length);
 
     // Get unique classrooms
     const classrooms = [...new Set(devices.map(d => d.classroom).filter(c => c))];
@@ -246,10 +356,73 @@ async function updateMetrics() {
           const hourlyConsumption = newPower / 1000; // Convert to kWh
           energyConsumptionKwh.inc({ device_id: device._id.toString(), device_name: device.name, classroom: device.classroom || 'unassigned' }, hourlyConsumption);
 
-          // Update health score based on device data
-          const currentHealth = deviceHealthScore.get({ device_id: device._id.toString(), device_name: device.name, classroom: device.classroom || 'unassigned' }) || 85;
-          const healthChange = (Math.random() - 0.5) * 1; // ±0.5 change
-          deviceHealthScore.set({ device_id: device._id.toString(), device_name: device.name, classroom: device.classroom || 'unassigned' }, Math.max(0, Math.min(100, currentHealth + healthChange)));
+        // Update ESP32-specific metrics if this is an ESP32 device
+        const isESP32 = device.macAddress && device.macAddress.length > 0;
+        if (isESP32) {
+          // Update power usage
+          esp32PowerUsageWatts.set({
+            device_id: device._id.toString(),
+            device_name: device.name,
+            classroom: device.classroom || 'unassigned',
+            mac_address: device.macAddress || 'unknown'
+          }, newPower);
+
+          // Update online status
+          esp32OnlineStatus.set({
+            device_id: device._id.toString(),
+            device_name: device.name,
+            classroom: device.classroom || 'unassigned',
+            mac_address: device.macAddress || 'unknown'
+          }, device.status === 'online' ? 1 : 0);
+
+          // Update switch states
+          if (device.switches && device.switches.length > 0) {
+            device.switches.forEach((sw, index) => {
+              esp32SwitchState.set({
+                device_id: device._id.toString(),
+                device_name: device.name,
+                mac_address: device.macAddress || 'unknown',
+                switch_id: sw._id?.toString() || `switch_${index}`,
+                switch_name: sw.name
+              }, sw.state ? 1 : 0);
+            });
+          }
+
+          // Update telemetry data with slight variations
+          const currentTemp = esp32Temperature.get({
+            device_id: device._id.toString(),
+            device_name: device.name,
+            mac_address: device.macAddress || 'unknown'
+          }) || 30;
+          esp32Temperature.set({
+            device_id: device._id.toString(),
+            device_name: device.name,
+            mac_address: device.macAddress || 'unknown'
+          }, Math.max(20, Math.min(45, currentTemp + (Math.random() - 0.5) * 2))); // ±1°C variation
+
+          const currentHeap = esp32HeapMemory.get({
+            device_id: device._id.toString(),
+            device_name: device.name,
+            mac_address: device.macAddress || 'unknown'
+          }) || 60000;
+          esp32HeapMemory.set({
+            device_id: device._id.toString(),
+            device_name: device.name,
+            mac_address: device.macAddress || 'unknown'
+          }, Math.max(10000, currentHeap + (Math.random() - 0.5) * 5000)); // ±2.5KB variation
+
+          // Increment uptime
+          const currentUptime = esp32ConnectionUptime.get({
+            device_id: device._id.toString(),
+            device_name: device.name,
+            mac_address: device.macAddress || 'unknown'
+          }) || 0;
+          esp32ConnectionUptime.set({
+            device_id: device._id.toString(),
+            device_name: device.name,
+            mac_address: device.macAddress || 'unknown'
+          }, currentUptime + 30); // Add 30 seconds
+        }
         }
       } catch (deviceError) {
         console.error(`Error updating metrics for device ${device._id}:`, deviceError.message);
@@ -1074,10 +1247,17 @@ async function getAnomalyHistory(timeframe = '7d') {
   }
 }
 
-// Initialize metrics on startup
-// (async () => {
-//   await initializeMetrics();
-// })();
+// Initialize metrics after database connection
+async function initializeMetricsAfterDB() {
+  console.log('[METRICS] initializeMetricsAfterDB called - initializing ESP32 metrics after DB connection');
+  try {
+    await initializeMetrics();
+    console.log('[METRICS] ESP32 metrics initialization completed successfully');
+  } catch (error) {
+    console.error('[METRICS] Error in initializeMetricsAfterDB:', error.message);
+    throw error;
+  }
+}
 
 // Update metrics every 30 seconds
 setInterval(updateMetrics, 30000);
@@ -1532,5 +1712,6 @@ module.exports = {
   calculateEnergyConsumption,
   calculatePreciseEnergyConsumption,
   initializeMetrics,
+  initializeMetricsAfterDB,
   updateDeviceMetrics: () => {} // Legacy function, kept for compatibility
 };
