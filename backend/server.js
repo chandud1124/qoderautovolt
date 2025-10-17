@@ -711,6 +711,24 @@ const connectDB = async (retries = 5) => {
     } catch (metricsError) {
       logger.error('Metrics service initialization error:', metricsError);
     }
+
+    // Initialize RSS service after DB connection
+    logger.info('[DEBUG] About to initialize RSS service...');
+    try {
+      await rssService.initializeFeeds();
+      logger.info('[DEBUG] RSS service initialization completed');
+    } catch (rssError) {
+      logger.error('RSS service initialization error:', rssError);
+    }
+
+    // Initialize weather service after DB connection
+    logger.info('[DEBUG] About to initialize weather service...');
+    try {
+      await weatherService.initializeFeeds();
+      logger.info('[DEBUG] Weather service initialization completed');
+    } catch (weatherError) {
+      logger.error('Weather service initialization error:', weatherError);
+    }
   } catch (err) {
     const msg = err && (err.message || String(err));
     logger.error('MongoDB connection error (continuing in LIMITED MODE):', msg);
