@@ -191,20 +191,20 @@ const AnalyticsPanel: React.FC = () => {
   // console.log('Chart data:', { deviceStatusData, occupancyData }); // Removed duplicate logging
 
   return (
-    <div className="w-full space-y-6">
+    <div className="w-full space-y-4 md:space-y-6 p-2 md:p-0">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div>
-          <h2 className="text-2xl sm:text-3xl font-bold text-primary">Analytics Dashboard</h2>
-          <p className="text-sm sm:text-base text-muted-foreground">Real-time monitoring and historical data analysis</p>
+          <h2 className="text-xl sm:text-2xl md:text-3xl font-bold text-primary">Analytics Dashboard</h2>
+          <p className="text-xs sm:text-sm md:text-base text-muted-foreground">Real-time monitoring and historical data analysis</p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={fetchAnalyticsData}>
-            <RefreshCw className="w-4 h-4 mr-2" />
+        <div className="flex gap-2 w-full sm:w-auto">
+          <Button variant="outline" onClick={fetchAnalyticsData} className="flex-1 sm:flex-none text-xs sm:text-sm">
+            <RefreshCw className="w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
             Refresh
           </Button>
-          <Button variant="outline">
-            <Download className="w-4 h-4 mr-2" />
+          <Button variant="outline" className="flex-1 sm:flex-none text-xs sm:text-sm">
+            <Download className="w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
             Export
           </Button>
         </div>
@@ -212,7 +212,7 @@ const AnalyticsPanel: React.FC = () => {
 
       {/* Summary Cards */}
       {analyticsData.summary && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Total Devices</CardTitle>
@@ -269,17 +269,17 @@ const AnalyticsPanel: React.FC = () => {
 
       {/* Main Analytics Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4">
-          <TabsTrigger value="overview" className="text-xs sm:text-sm">Overview</TabsTrigger>
-          <TabsTrigger value="energy" className="text-xs sm:text-sm">Energy</TabsTrigger>
-          <TabsTrigger value="devices" className="text-xs sm:text-sm">Devices</TabsTrigger>
-          <TabsTrigger value="anomalies" className="text-xs sm:text-sm">Anomalies</TabsTrigger>
+        <TabsList className="grid w-full grid-cols-4 h-auto gap-1 p-1">
+          <TabsTrigger value="overview" className="text-xs sm:text-sm py-2 px-2 sm:px-4">Overview</TabsTrigger>
+          <TabsTrigger value="energy" className="text-xs sm:text-sm py-2 px-2 sm:px-4">Energy</TabsTrigger>
+          <TabsTrigger value="devices" className="text-xs sm:text-sm py-2 px-2 sm:px-4">Devices</TabsTrigger>
+          <TabsTrigger value="anomalies" className="text-xs sm:text-sm py-2 px-2 sm:px-4">Anomalies</TabsTrigger>
         </TabsList>
 
         {/* Overview Tab */}
-        <TabsContent value="overview" className="space-y-6">
+        <TabsContent value="overview" className="space-y-4 md:space-y-6 mt-4 md:mt-6">
           {/* Key Metrics Overview */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
             {/* System Health Gauge */}
             <Card>
               <CardHeader>
@@ -1066,9 +1066,9 @@ const AnalyticsPanel: React.FC = () => {
         {/* END OF OLD ENERGY TAB CONTENT */}
 
         {/* Devices Tab */}
-        <TabsContent value="devices" className="space-y-6">
+        <TabsContent value="devices" className="space-y-4 md:space-y-6 mt-4 md:mt-6">
           {/* Device Overview Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">Total Devices</CardTitle>
@@ -1408,7 +1408,7 @@ const AnalyticsPanel: React.FC = () => {
         </TabsContent>
 
         {/* Anomalies Tab */}
-        <TabsContent value="anomalies" className="space-y-6">
+        <TabsContent value="anomalies" className="space-y-4 md:space-y-6 mt-4 md:mt-6">
           {/* Anomaly Overview Cards */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <Card>

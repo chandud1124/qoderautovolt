@@ -902,12 +902,20 @@ function calculateEnergyConsumption(powerWatts, durationHours) {
 async function calculatePreciseEnergyConsumption(deviceId, startTime, endTime) {
   try {
     const ActivityLog = require('./models/ActivityLog');
+    const Device = require('./models/Device');
 
-    // Get all switch on/off events for the device in the time period
+    // Get device to check current online status
+    const device = await Device.findById(deviceId).lean();
+    if (!device) return 0;
+
+    // Get all switch on/off events AND device online/offline events for the time period
     const activities = await ActivityLog.find({
       deviceId: deviceId,
       timestamp: { $gte: startTime, $lte: endTime },
-      action: { $in: ['on', 'off', 'manual_on', 'manual_off'] }
+      action: { 
+        $in: ['on', 'off', 'manual_on', 'manual_off', 'switch_on', 'switch_off',
+              'device_online', 'device_offline', 'device_connected', 'device_disconnected'] 
+      }
     }).sort({ timestamp: 1 });
 
     if (activities.length === 0) return 0;
@@ -915,32 +923,48 @@ async function calculatePreciseEnergyConsumption(deviceId, startTime, endTime) {
     let totalEnergyKwh = 0;
     let currentPower = 0;
     let lastTimestamp = startTime;
+    let deviceOnline = device.status === 'online'; // Assume current status at start
 
     for (const activity of activities) {
-      // Calculate energy for the previous period
-      const durationHours = (activity.timestamp - lastTimestamp) / (1000 * 60 * 60); // Convert ms to hours
-      if (durationHours > 0 && currentPower > 0) {
-        totalEnergyKwh += calculateEnergyConsumption(currentPower, durationHours);
+      // Only calculate energy if device was online during this period
+      if (deviceOnline) {
+        const durationHours = (activity.timestamp - lastTimestamp) / (1000 * 60 * 60); // Convert ms to hours
+        if (durationHours > 0 && currentPower > 0) {
+          totalEnergyKwh += calculateEnergyConsumption(currentPower, durationHours);
+        }
       }
 
-      // Update current power based on switch state change
-      const switchInfo = activity.switchName || activity.context?.switchName;
-      if (switchInfo) {
-        const powerChange = getBasePowerConsumption(switchInfo, activity.context?.switchType || 'unknown');
-        if (activity.action.includes('on')) {
-          currentPower += powerChange;
-        } else if (activity.action.includes('off')) {
-          currentPower -= powerChange;
+      // Check if this is a device online/offline event
+      if (['device_online', 'device_connected'].includes(activity.action)) {
+        deviceOnline = true;
+      } else if (['device_offline', 'device_disconnected'].includes(activity.action)) {
+        deviceOnline = false;
+        // When device goes offline, stop counting power consumption
+        currentPower = 0;
+      }
+
+      // Update current power based on switch state change (only if device is online)
+      if (deviceOnline && ['on', 'off', 'manual_on', 'manual_off', 'switch_on', 'switch_off'].includes(activity.action)) {
+        const switchInfo = activity.switchName || activity.context?.switchName || activity.details?.switchName;
+        if (switchInfo) {
+          const powerChange = getBasePowerConsumption(switchInfo, activity.context?.switchType || activity.details?.switchType || 'unknown');
+          if (activity.action.includes('on')) {
+            currentPower += powerChange;
+          } else if (activity.action.includes('off')) {
+            currentPower = Math.max(0, currentPower - powerChange);
+          }
         }
       }
 
       lastTimestamp = activity.timestamp;
     }
 
-    // Calculate energy for the remaining period until endTime
-    const finalDurationHours = (endTime - lastTimestamp) / (1000 * 60 * 60);
-    if (finalDurationHours > 0 && currentPower > 0) {
-      totalEnergyKwh += calculateEnergyConsumption(currentPower, finalDurationHours);
+    // Calculate energy for the remaining period until endTime (only if device is currently online)
+    if (deviceOnline && device.status === 'online') {
+      const finalDurationHours = (endTime - lastTimestamp) / (1000 * 60 * 60);
+      if (finalDurationHours > 0 && currentPower > 0) {
+        totalEnergyKwh += calculateEnergyConsumption(currentPower, finalDurationHours);
+      }
     }
 
     return totalEnergyKwh;
@@ -2045,7 +2069,7 @@ async function getEnergySummary() {
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
     
-    // Get only online devices
+    // Get only online devices with at least one switch on
     const devices = await Device.find({ status: 'online' }, {
       name: 1,
       classroom: 1,
@@ -2059,47 +2083,34 @@ async function getEnergySummary() {
     let monthlyConsumption = 0;
     let monthlyCost = 0;
 
-    // Calculate daily (today) consumption
+    // Calculate daily (today) consumption - only for online devices
     for (const device of devices) {
-      const devicePower = calculateDevicePowerConsumption(device);
+      // Only calculate if device has at least one switch on
+      const hasActiveSwitches = device.switches && device.switches.some(sw => sw.state);
+      
+      if (!hasActiveSwitches) {
+        continue; // Skip devices with all switches off
+      }
       
       // Get precise consumption from ActivityLog for today
+      // This now only counts when device was online
       const todayPrecise = await calculatePreciseEnergyConsumption(
         device._id,
         todayStart,
         now
       );
 
-      if (todayPrecise > 0) {
-        dailyConsumption += todayPrecise;
-      } else {
-        // Fallback: estimate based on current switch states
-        const activeSwitches = device.switches ? device.switches.filter(sw => sw.state).length : 0;
-        const totalSwitches = device.switches ? device.switches.length : 1;
-        const usageFactor = totalSwitches > 0 ? activeSwitches / totalSwitches : 0;
-        const hoursToday = (now - todayStart) / (1000 * 60 * 60);
-        const estimatedHours = Math.min(hoursToday, 24) * usageFactor * 0.8;
-        dailyConsumption += calculateEnergyConsumption(devicePower, estimatedHours);
-      }
+      dailyConsumption += todayPrecise;
 
       // Get precise consumption from ActivityLog for this month
+      // This now only counts when device was online
       const monthPrecise = await calculatePreciseEnergyConsumption(
         device._id,
         monthStart,
         now
       );
 
-      if (monthPrecise > 0) {
-        monthlyConsumption += monthPrecise;
-      } else {
-        // Fallback: estimate based on current switch states
-        const activeSwitches = device.switches ? device.switches.filter(sw => sw.state).length : 0;
-        const totalSwitches = device.switches ? device.switches.length : 1;
-        const usageFactor = totalSwitches > 0 ? activeSwitches / totalSwitches : 0;
-        const hoursThisMonth = (now - monthStart) / (1000 * 60 * 60);
-        const estimatedHours = Math.min(hoursThisMonth, 24 * 31) * usageFactor * 0.8;
-        monthlyConsumption += calculateEnergyConsumption(devicePower, estimatedHours);
-      }
+      monthlyConsumption += monthPrecise;
     }
 
     dailyCost = dailyConsumption * ELECTRICITY_RATE_INR_PER_KWH;
