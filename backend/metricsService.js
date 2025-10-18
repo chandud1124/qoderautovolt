@@ -77,6 +77,18 @@ const powerUsageWatts = new promClient.Gauge({
   labelNames: ['device_id', 'device_name', 'classroom']
 });
 
+const powerUsageByTypeWatts = new promClient.Gauge({
+  name: 'device_power_usage_by_type_watts',
+  help: 'Aggregate power usage in watts per logical device type',
+  labelNames: ['device_type']
+});
+
+const powerUsageByClassroomTypeWatts = new promClient.Gauge({
+  name: 'device_power_usage_by_classroom_type_watts',
+  help: 'Aggregate power usage in watts per classroom and device type',
+  labelNames: ['classroom', 'device_type']
+});
+
 const energyConsumptionKwh = new promClient.Counter({
   name: 'device_energy_consumption_kwh',
   help: 'Cumulative energy consumption in kWh per device',
@@ -202,6 +214,49 @@ const esp32HeapMemory = new promClient.Gauge({
   labelNames: ['device_id', 'device_name', 'mac_address']
 });
 
+const esp32EnergyConsumptionDaily = new promClient.Gauge({
+  name: 'esp32_energy_consumption_daily_kwh',
+  help: 'Estimated daily energy consumption in kWh for ESP32 devices',
+  labelNames: ['device_id', 'device_name', 'classroom']
+});
+
+const esp32EnergyConsumptionMonthly = new promClient.Gauge({
+  name: 'esp32_energy_consumption_monthly_kwh',
+  help: 'Estimated monthly energy consumption in kWh for ESP32 devices',
+  labelNames: ['device_id', 'device_name', 'classroom']
+});
+
+const esp32EnergyConsumptionTotalDaily = new promClient.Gauge({
+  name: 'esp32_energy_consumption_total_daily_kwh',
+  help: 'Total estimated daily energy consumption in kWh for all ESP32 devices'
+});
+
+const esp32EnergyConsumptionTotalMonthly = new promClient.Gauge({
+  name: 'esp32_energy_consumption_total_monthly_kwh',
+  help: 'Total estimated monthly energy consumption in kWh for all ESP32 devices'
+});
+
+// Register ESP32-specific metrics
+// Register all defined metrics so they are exposed via the registry
+register.registerMetric(deviceOnCount);
+register.registerMetric(deviceOffCount);
+register.registerMetric(deviceOnlineCount);
+register.registerMetric(deviceOfflineCount);
+register.registerMetric(powerUsageWatts);
+register.registerMetric(powerUsageByTypeWatts);
+register.registerMetric(powerUsageByClassroomTypeWatts);
+register.registerMetric(energyConsumptionKwh);
+register.registerMetric(powerFactor);
+register.registerMetric(classroomOccupancy);
+register.registerMetric(occupancySensorStatus);
+register.registerMetric(deviceHealthScore);
+register.registerMetric(deviceUptimeHours);
+register.registerMetric(deviceDowntimeHours);
+register.registerMetric(anomalyCount);
+register.registerMetric(anomalySeverity);
+register.registerMetric(timeLimitExceededCount);
+register.registerMetric(switchTimeOnMinutes);
+
 // Register ESP32-specific metrics
 register.registerMetric(esp32DeviceCount);
 register.registerMetric(esp32PowerUsageWatts);
@@ -212,6 +267,85 @@ register.registerMetric(esp32ConnectionUptime);
 register.registerMetric(esp32SwitchState);
 register.registerMetric(esp32Temperature);
 register.registerMetric(esp32HeapMemory);
+register.registerMetric(esp32EnergyConsumptionDaily);
+register.registerMetric(esp32EnergyConsumptionMonthly);
+register.registerMetric(esp32EnergyConsumptionTotalDaily);
+register.registerMetric(esp32EnergyConsumptionTotalMonthly);
+
+const energyTracker = {
+  deviceState: new Map(),
+  dailyTotals: new Map(),
+  monthlyTotals: new Map(),
+  esp32DailyTotalAll: 0,
+  esp32MonthlyTotalAll: 0,
+  nextDailyReset: getStartOfNextDay(Date.now()),
+  nextMonthlyReset: getStartOfNextMonth(Date.now())
+};
+
+const esp32UptimeTracker = new Map();
+
+function getStartOfNextDay(timestampMs) {
+  const nextDay = new Date(timestampMs);
+  nextDay.setHours(24, 0, 0, 0);
+  return nextDay.getTime();
+}
+
+function getStartOfNextMonth(timestampMs) {
+  const nextMonth = new Date(timestampMs);
+  nextMonth.setDate(1);
+  nextMonth.setHours(0, 0, 0, 0);
+  nextMonth.setMonth(nextMonth.getMonth() + 1);
+  return nextMonth.getTime();
+}
+
+function maybeResetEnergyTotals(nowMs) {
+  if (nowMs >= energyTracker.nextDailyReset) {
+    energyTracker.dailyTotals.clear();
+    energyTracker.esp32DailyTotalAll = 0;
+    energyTracker.nextDailyReset = getStartOfNextDay(nowMs);
+  }
+
+  if (nowMs >= energyTracker.nextMonthlyReset) {
+    energyTracker.monthlyTotals.clear();
+    energyTracker.esp32MonthlyTotalAll = 0;
+    energyTracker.nextMonthlyReset = getStartOfNextMonth(nowMs);
+  }
+}
+
+function updateEnergyAccumulator(deviceId, powerWatts, nowMs, isEsp32) {
+  const previous = energyTracker.deviceState.get(deviceId);
+  let energyDelta = 0;
+
+  if (previous) {
+    const deltaSeconds = Math.max(0, (nowMs - previous.timestamp) / 1000);
+    if (deltaSeconds > 0) {
+      const averagePower = (previous.power + powerWatts) / 2;
+      energyDelta = (averagePower * deltaSeconds) / 3600 / 1000;
+    }
+  }
+
+  energyTracker.deviceState.set(deviceId, { power: powerWatts, timestamp: nowMs, isEsp32 });
+
+  if (energyDelta > 0) {
+    const updatedDaily = (energyTracker.dailyTotals.get(deviceId) || 0) + energyDelta;
+    energyTracker.dailyTotals.set(deviceId, updatedDaily);
+
+    const updatedMonthly = (energyTracker.monthlyTotals.get(deviceId) || 0) + energyDelta;
+    energyTracker.monthlyTotals.set(deviceId, updatedMonthly);
+
+    if (isEsp32) {
+      energyTracker.esp32DailyTotalAll += energyDelta;
+      energyTracker.esp32MonthlyTotalAll += energyDelta;
+    }
+  }
+
+  return energyDelta;
+}
+
+function incrementLabeledCount(map, labels, amount = 1) {
+  const key = JSON.stringify(labels);
+  map.set(key, (map.get(key) || 0) + amount);
+}
 
 // Initialize metrics with real data
 async function initializeMetrics() {
@@ -226,8 +360,16 @@ async function initializeMetrics() {
       return;
     }
 
+  const nowDate = new Date();
+  const nowMs = nowDate.getTime();
+  const dayStart = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate(), 0, 0, 0, 0);
+  const monthStart = new Date(nowDate.getFullYear(), nowDate.getMonth(), 1, 0, 0, 0, 0);
+
+  energyTracker.esp32DailyTotalAll = 0;
+  energyTracker.esp32MonthlyTotalAll = 0;
+
     // Set initial ESP32 device metrics
-    devices.forEach(device => {
+    for (const device of devices) {
       // Check if this is an ESP32 device (you might want to add a device type field)
       // For now, we'll assume all devices could be ESP32 devices
       const isESP32 = device.macAddress && device.macAddress.length > 0; // Simple check
@@ -280,13 +422,17 @@ async function initializeMetrics() {
         }, 50000 + Math.random() * 20000); // 50-70KB free heap
 
         // Set connection uptime (mock data)
+        const initialUptime = Math.floor(Math.random() * 86400); // 0-24 hours in seconds
         esp32ConnectionUptime.set({
           device_id: device._id.toString(),
           device_name: device.name,
           mac_address: device.macAddress || 'unknown'
-        }, Math.floor(Math.random() * 86400)); // 0-24 hours in seconds
+        }, initialUptime);
+
+        esp32UptimeTracker.set(device._id.toString(), initialUptime);
+
       }
-    });
+    }
 
     // Set ESP32 device count
     const esp32Devices = devices.filter(d => d.macAddress && d.macAddress.length > 0);
@@ -298,6 +444,69 @@ async function initializeMetrics() {
     esp32DeviceCount.set({ status: 'total' }, esp32Devices.length);
     esp32DeviceCount.set({ status: 'online' }, onlineESP32Devices.length);
     esp32DeviceCount.set({ status: 'offline' }, offlineESP32Devices.length);
+
+    for (const device of devices) {
+      const deviceId = device._id.toString();
+      const initialPower = device.status === 'online' ? calculateDevicePowerConsumption(device) : 0;
+      const isEsp32Device = (device.deviceType === 'esp32') || (device.macAddress && device.macAddress.length > 0);
+
+      energyTracker.deviceState.set(deviceId, { power: initialPower, timestamp: nowMs, isEsp32: isEsp32Device });
+      energyTracker.dailyTotals.set(deviceId, 0);
+      energyTracker.monthlyTotals.set(deviceId, 0);
+    }
+
+    // Pre-compute daily/monthly consumption so Prometheus matches analytics immediately
+    for (const device of devices) {
+      try {
+        const deviceId = device._id.toString();
+        const classroom = device.classroom || 'unassigned';
+        const isEsp32Device = (device.deviceType === 'esp32') || (device.macAddress && device.macAddress.length > 0);
+
+        let dailyConsumption = await calculatePreciseEnergyConsumption(device._id, dayStart, nowDate);
+        let monthlyConsumption = await calculatePreciseEnergyConsumption(device._id, monthStart, nowDate);
+
+        if (dailyConsumption === 0 && device.status === 'online') {
+          const devicePower = calculateDevicePowerConsumption(device);
+          const hoursToday = (nowMs - dayStart.getTime()) / (1000 * 60 * 60);
+          dailyConsumption = calculateEnergyConsumption(devicePower, Math.max(0, hoursToday * 0.8));
+        }
+
+        if (monthlyConsumption === 0 && device.status === 'online') {
+          const devicePower = calculateDevicePowerConsumption(device);
+          const hoursMonth = (nowMs - monthStart.getTime()) / (1000 * 60 * 60);
+          monthlyConsumption = calculateEnergyConsumption(devicePower, Math.max(0, hoursMonth * 0.5));
+        }
+
+        energyTracker.dailyTotals.set(deviceId, dailyConsumption);
+        energyTracker.monthlyTotals.set(deviceId, monthlyConsumption);
+
+        if (isEsp32Device) {
+          energyTracker.esp32DailyTotalAll += dailyConsumption;
+          energyTracker.esp32MonthlyTotalAll += monthlyConsumption;
+
+          esp32EnergyConsumptionDaily.set({
+            device_id: deviceId,
+            device_name: device.name,
+            classroom
+          }, parseFloat(dailyConsumption.toFixed(6)));
+
+          esp32EnergyConsumptionMonthly.set({
+            device_id: deviceId,
+            device_name: device.name,
+            classroom
+          }, parseFloat(monthlyConsumption.toFixed(6)));
+        }
+      } catch (consumptionError) {
+        console.error(`Error seeding energy consumption for device ${device._id}:`, consumptionError.message);
+      }
+    }
+
+    energyTracker.nextDailyReset = getStartOfNextDay(nowMs);
+    energyTracker.nextMonthlyReset = getStartOfNextMonth(nowMs);
+
+    // After seeding per-device totals, update fleet-wide gauges
+    esp32EnergyConsumptionTotalDaily.set(parseFloat(energyTracker.esp32DailyTotalAll.toFixed(6)));
+    esp32EnergyConsumptionTotalMonthly.set(parseFloat(energyTracker.esp32MonthlyTotalAll.toFixed(6)));
 
     // Get unique classrooms
     const classrooms = [...new Set(devices.map(d => d.classroom).filter(c => c))];
@@ -319,21 +528,55 @@ async function initializeMetrics() {
 // Update metrics periodically
 async function updateMetrics() {
   try {
-    // Fetch real devices from database with projection for better performance
+    const now = Date.now();
+    maybeResetEnergyTotals(now);
+
     const devices = await Device.find({}, {
       name: 1,
       classroom: 1,
       switches: 1,
       status: 1,
+      deviceType: 1,
+      macAddress: 1,
       _id: 1
     }).lean();
 
+    powerUsageWatts.reset();
+    deviceOnCount.reset();
+    deviceOffCount.reset();
+    deviceOnlineCount.reset();
+    deviceOfflineCount.reset();
+    esp32DeviceCount.reset();
+    esp32PowerUsageWatts.reset();
+    esp32OnlineStatus.reset();
+    esp32SwitchState.reset();
+    esp32Temperature.reset();
+    esp32HeapMemory.reset();
+    esp32EnergyConsumptionDaily.reset();
+    esp32EnergyConsumptionMonthly.reset();
+    powerUsageByTypeWatts.reset();
+    powerUsageByClassroomTypeWatts.reset();
+
     if (!devices || devices.length === 0) {
-      console.warn('No devices found in database for metrics update');
+      esp32EnergyConsumptionTotalDaily.set(energyTracker.esp32DailyTotalAll);
+      esp32EnergyConsumptionTotalMonthly.set(energyTracker.esp32MonthlyTotalAll);
       return;
     }
 
-    // Update device metrics
+    const onlineCounts = new Map();
+    const offlineCounts = new Map();
+    const onCounts = new Map();
+    const offCounts = new Map();
+    const powerByType = new Map();
+    const powerByClassroom = new Map();
+
+    let esp32Total = 0;
+    let esp32Online = 0;
+    let esp32Offline = 0;
+
+    const classrooms = new Set();
+    const seenDeviceIds = new Set();
+
     devices.forEach(device => {
       try {
         if (!device || !device._id) {
@@ -341,117 +584,217 @@ async function updateMetrics() {
           return;
         }
 
-        if (device.status === 'online') {
-          // Calculate current power based on switches
-          const currentPower = device.switches ? device.switches.reduce((total, sw) => {
-            return total + (sw.state ? getBasePowerConsumption(sw.name, sw.type) : 0);
-          }, 0) : 0;
+        const deviceId = device._id.toString();
+  seenDeviceIds.add(deviceId);
+        const classroom = device.classroom || 'unassigned';
+        const deviceType = device.deviceType || 'unknown';
+  const primarySwitchType = device.switches && device.switches.length > 0 ? device.switches[0].type : 'generic';
+  const normalizedType = (primarySwitchType || 'generic').toLowerCase();
+        const isOnline = device.status === 'online';
+        const isEsp32 = deviceType === 'esp32' || (device.macAddress && device.macAddress.length > 0);
 
-          // Add some variation for realism
-          const variation = currentPower * 0.05; // ±5% variation
-          const newPower = Math.max(0, currentPower + (Math.random() - 0.5) * variation);
-          powerUsageWatts.set({ device_id: device._id.toString(), device_name: device.name, classroom: device.classroom || 'unassigned' }, newPower);
+        classrooms.add(classroom);
 
-          // Update energy consumption (simulate hourly accumulation)
-          const hourlyConsumption = newPower / 1000; // Convert to kWh
-          energyConsumptionKwh.inc({ device_id: device._id.toString(), device_name: device.name, classroom: device.classroom || 'unassigned' }, hourlyConsumption);
+        const basePower = isOnline ? calculateDevicePowerConsumption(device) : 0;
+        const variation = isOnline ? basePower * 0.05 : 0;
+        const newPower = isOnline ? Math.max(0, basePower + (Math.random() - 0.5) * variation) : 0;
 
-        // Update ESP32-specific metrics if this is an ESP32 device
-        const isESP32 = device.macAddress && device.macAddress.length > 0;
-        if (isESP32) {
-          // Update power usage
-          esp32PowerUsageWatts.set({
-            device_id: device._id.toString(),
+  powerByType.set(normalizedType, (powerByType.get(normalizedType) || 0) + newPower);
+
+  const classroomTypeMap = powerByClassroom.get(classroom) || new Map();
+  classroomTypeMap.set(normalizedType, (classroomTypeMap.get(normalizedType) || 0) + newPower);
+  powerByClassroom.set(classroom, classroomTypeMap);
+
+        powerUsageWatts.set({
+          device_id: deviceId,
+          device_name: device.name,
+          classroom
+        }, newPower);
+
+        if (isOnline) {
+          incrementLabeledCount(onlineCounts, { classroom, device_type: deviceType });
+          incrementLabeledCount(onlineCounts, { classroom: 'all', device_type: deviceType });
+          incrementLabeledCount(onlineCounts, { classroom, device_type: 'all' });
+          incrementLabeledCount(onlineCounts, { classroom: 'all', device_type: 'all' });
+        } else {
+          incrementLabeledCount(offlineCounts, { classroom, device_type: deviceType });
+          incrementLabeledCount(offlineCounts, { classroom: 'all', device_type: deviceType });
+          incrementLabeledCount(offlineCounts, { classroom, device_type: 'all' });
+          incrementLabeledCount(offlineCounts, { classroom: 'all', device_type: 'all' });
+        }
+
+        if (newPower > 0) {
+          incrementLabeledCount(onCounts, { classroom, device_type: normalizedType });
+          incrementLabeledCount(onCounts, { classroom: 'all', device_type: normalizedType });
+          incrementLabeledCount(onCounts, { classroom, device_type: 'all' });
+          incrementLabeledCount(onCounts, { classroom: 'all', device_type: 'all' });
+        } else {
+          incrementLabeledCount(offCounts, { classroom, device_type: normalizedType });
+          incrementLabeledCount(offCounts, { classroom: 'all', device_type: normalizedType });
+          incrementLabeledCount(offCounts, { classroom, device_type: 'all' });
+          incrementLabeledCount(offCounts, { classroom: 'all', device_type: 'all' });
+        }
+
+        const energyDelta = updateEnergyAccumulator(deviceId, newPower, now, isEsp32);
+        if (energyDelta > 0) {
+          energyConsumptionKwh.inc({
+            device_id: deviceId,
             device_name: device.name,
-            classroom: device.classroom || 'unassigned',
-            mac_address: device.macAddress || 'unknown'
+            classroom
+          }, energyDelta);
+        }
+
+        const dailyConsumption = energyTracker.dailyTotals.get(deviceId) || 0;
+        const monthlyConsumption = energyTracker.monthlyTotals.get(deviceId) || 0;
+
+        if (isEsp32) {
+          esp32Total += 1;
+          if (isOnline) {
+            esp32Online += 1;
+          } else {
+            esp32Offline += 1;
+          }
+
+          const mac = device.macAddress || 'unknown';
+
+          esp32PowerUsageWatts.set({
+            device_id: deviceId,
+            device_name: device.name,
+            classroom,
+            mac_address: mac
           }, newPower);
 
-          // Update online status
           esp32OnlineStatus.set({
-            device_id: device._id.toString(),
+            device_id: deviceId,
             device_name: device.name,
-            classroom: device.classroom || 'unassigned',
-            mac_address: device.macAddress || 'unknown'
-          }, device.status === 'online' ? 1 : 0);
+            classroom,
+            mac_address: mac
+          }, isOnline ? 1 : 0);
 
-          // Update switch states
           if (device.switches && device.switches.length > 0) {
             device.switches.forEach((sw, index) => {
               esp32SwitchState.set({
-                device_id: device._id.toString(),
+                device_id: deviceId,
                 device_name: device.name,
-                mac_address: device.macAddress || 'unknown',
+                mac_address: mac,
                 switch_id: sw._id?.toString() || `switch_${index}`,
                 switch_name: sw.name
               }, sw.state ? 1 : 0);
             });
           }
 
-          // Update telemetry data with slight variations
-          const currentTemp = esp32Temperature.get({
-            device_id: device._id.toString(),
-            device_name: device.name,
-            mac_address: device.macAddress || 'unknown'
-          }) || 30;
           esp32Temperature.set({
-            device_id: device._id.toString(),
+            device_id: deviceId,
             device_name: device.name,
-            mac_address: device.macAddress || 'unknown'
-          }, Math.max(20, Math.min(45, currentTemp + (Math.random() - 0.5) * 2))); // ±1°C variation
+            mac_address: mac
+          }, 25 + Math.random() * 10);
 
-          const currentHeap = esp32HeapMemory.get({
-            device_id: device._id.toString(),
-            device_name: device.name,
-            mac_address: device.macAddress || 'unknown'
-          }) || 60000;
           esp32HeapMemory.set({
-            device_id: device._id.toString(),
+            device_id: deviceId,
             device_name: device.name,
-            mac_address: device.macAddress || 'unknown'
-          }, Math.max(10000, currentHeap + (Math.random() - 0.5) * 5000)); // ±2.5KB variation
+            mac_address: mac
+          }, 50000 + Math.random() * 20000);
 
-          // Increment uptime
-          const currentUptime = esp32ConnectionUptime.get({
-            device_id: device._id.toString(),
+          const currentUptime = esp32UptimeTracker.get(deviceId) || 0;
+          if (isOnline) {
+            const newUptime = currentUptime + 30;
+            esp32UptimeTracker.set(deviceId, newUptime);
+            esp32ConnectionUptime.set({
+              device_id: deviceId,
+              device_name: device.name,
+              mac_address: mac
+            }, newUptime);
+          } else {
+            esp32ConnectionUptime.set({
+              device_id: deviceId,
+              device_name: device.name,
+              mac_address: mac
+            }, currentUptime);
+          }
+
+          esp32EnergyConsumptionDaily.set({
+            device_id: deviceId,
             device_name: device.name,
-            mac_address: device.macAddress || 'unknown'
-          }) || 0;
-          esp32ConnectionUptime.set({
-            device_id: device._id.toString(),
+            classroom
+          }, parseFloat(dailyConsumption.toFixed(6)));
+
+          esp32EnergyConsumptionMonthly.set({
+            device_id: deviceId,
             device_name: device.name,
-            mac_address: device.macAddress || 'unknown'
-          }, currentUptime + 30); // Add 30 seconds
-        }
+            classroom
+          }, parseFloat(monthlyConsumption.toFixed(6)));
         }
       } catch (deviceError) {
         console.error(`Error updating metrics for device ${device._id}:`, deviceError.message);
       }
     });
 
-    // Get unique classrooms from devices
-    const classrooms = [...new Set(devices.map(d => d.classroom).filter(c => c))];
+    powerByType.forEach((totalWatts, typeKey) => {
+      powerUsageByTypeWatts.set({ device_type: typeKey }, parseFloat(totalWatts.toFixed(3)));
+    });
 
-    // Update classroom occupancy
+    powerByClassroom.forEach((typeMap, classroom) => {
+      typeMap.forEach((totalWatts, typeKey) => {
+        powerUsageByClassroomTypeWatts.set({ classroom, device_type: typeKey }, parseFloat(totalWatts.toFixed(3)));
+      });
+    });
+
+    esp32UptimeTracker.forEach((_, id) => {
+      if (!seenDeviceIds.has(id)) {
+        esp32UptimeTracker.delete(id);
+      }
+    });
+
+    energyTracker.deviceState.forEach((state, id) => {
+      if (!seenDeviceIds.has(id)) {
+        if (state && state.isEsp32) {
+          const dailyValue = energyTracker.dailyTotals.get(id) || 0;
+          const monthlyValue = energyTracker.monthlyTotals.get(id) || 0;
+          energyTracker.esp32DailyTotalAll = Math.max(0, energyTracker.esp32DailyTotalAll - dailyValue);
+          energyTracker.esp32MonthlyTotalAll = Math.max(0, energyTracker.esp32MonthlyTotalAll - monthlyValue);
+        }
+
+        energyTracker.deviceState.delete(id);
+        energyTracker.dailyTotals.delete(id);
+        energyTracker.monthlyTotals.delete(id);
+      }
+    });
+
+    onlineCounts.forEach((value, key) => {
+      deviceOnlineCount.set(JSON.parse(key), value);
+    });
+
+    offlineCounts.forEach((value, key) => {
+      deviceOfflineCount.set(JSON.parse(key), value);
+    });
+
+    onCounts.forEach((value, key) => {
+      deviceOnCount.set(JSON.parse(key), value);
+    });
+
+    offCounts.forEach((value, key) => {
+      deviceOffCount.set(JSON.parse(key), value);
+    });
+
+    esp32DeviceCount.set({ status: 'total' }, esp32Total);
+    esp32DeviceCount.set({ status: 'online' }, esp32Online);
+    esp32DeviceCount.set({ status: 'offline' }, esp32Offline);
+
+    esp32EnergyConsumptionTotalDaily.set(parseFloat(energyTracker.esp32DailyTotalAll.toFixed(6)));
+    esp32EnergyConsumptionTotalMonthly.set(parseFloat(energyTracker.esp32MonthlyTotalAll.toFixed(6)));
+
+    // Update classroom occupancy with simulated values based on time of day
+    const timeOfDay = new Date().getHours();
     classrooms.forEach(classroom => {
       try {
-        if (!classroom || typeof classroom !== 'string') {
-          console.warn('Invalid classroom data:', classroom);
-          return;
-        }
-
-        const currentOccupancy = classroomOccupancy.get({ classroom_id: classroom, classroom_name: classroom }) || 0;
-        const timeOfDay = new Date().getHours();
         let baseOccupancy = 0;
-
-        // Simulate occupancy patterns based on time
-        if (timeOfDay >= 9 && timeOfDay <= 17) { // Class hours
+        if (timeOfDay >= 9 && timeOfDay <= 17) {
           baseOccupancy = classroom.toLowerCase().includes('lab') ? 60 + Math.random() * 40 : 40 + Math.random() * 50;
         } else {
-          baseOccupancy = Math.random() * 20; // Low occupancy outside class hours
+          baseOccupancy = Math.random() * 20;
         }
 
-        const variation = (Math.random() - 0.5) * 20; // ±10 variation
+        const variation = (Math.random() - 0.5) * 20;
         const newOccupancy = Math.max(0, Math.min(100, baseOccupancy + variation));
         classroomOccupancy.set({ classroom_id: classroom, classroom_name: classroom }, newOccupancy);
         occupancySensorStatus.set({ classroom_id: classroom, sensor_id: 'pir_001' }, 1);
@@ -461,7 +804,6 @@ async function updateMetrics() {
     });
   } catch (error) {
     console.error('Error updating metrics:', error.message);
-    // Don't rethrow - metrics update should not crash the application
   }
 }
 
@@ -1693,11 +2035,221 @@ async function getDeviceUsageData(timeframe = '24h') {
   }
 }
 
+/**
+ * Get energy consumption summary for daily and monthly periods
+ * Excludes offline devices from calculations
+ */
+async function getEnergySummary() {
+  try {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
+    
+    // Get only online devices
+    const devices = await Device.find({ status: 'online' }, {
+      name: 1,
+      classroom: 1,
+      switches: 1,
+      status: 1,
+      _id: 1
+    }).lean();
+
+    let dailyConsumption = 0;
+    let dailyCost = 0;
+    let monthlyConsumption = 0;
+    let monthlyCost = 0;
+
+    // Calculate daily (today) consumption
+    for (const device of devices) {
+      const devicePower = calculateDevicePowerConsumption(device);
+      
+      // Get precise consumption from ActivityLog for today
+      const todayPrecise = await calculatePreciseEnergyConsumption(
+        device._id,
+        todayStart,
+        now
+      );
+
+      if (todayPrecise > 0) {
+        dailyConsumption += todayPrecise;
+      } else {
+        // Fallback: estimate based on current switch states
+        const activeSwitches = device.switches ? device.switches.filter(sw => sw.state).length : 0;
+        const totalSwitches = device.switches ? device.switches.length : 1;
+        const usageFactor = totalSwitches > 0 ? activeSwitches / totalSwitches : 0;
+        const hoursToday = (now - todayStart) / (1000 * 60 * 60);
+        const estimatedHours = Math.min(hoursToday, 24) * usageFactor * 0.8;
+        dailyConsumption += calculateEnergyConsumption(devicePower, estimatedHours);
+      }
+
+      // Get precise consumption from ActivityLog for this month
+      const monthPrecise = await calculatePreciseEnergyConsumption(
+        device._id,
+        monthStart,
+        now
+      );
+
+      if (monthPrecise > 0) {
+        monthlyConsumption += monthPrecise;
+      } else {
+        // Fallback: estimate based on current switch states
+        const activeSwitches = device.switches ? device.switches.filter(sw => sw.state).length : 0;
+        const totalSwitches = device.switches ? device.switches.length : 1;
+        const usageFactor = totalSwitches > 0 ? activeSwitches / totalSwitches : 0;
+        const hoursThisMonth = (now - monthStart) / (1000 * 60 * 60);
+        const estimatedHours = Math.min(hoursThisMonth, 24 * 31) * usageFactor * 0.8;
+        monthlyConsumption += calculateEnergyConsumption(devicePower, estimatedHours);
+      }
+    }
+
+    dailyCost = dailyConsumption * ELECTRICITY_RATE_INR_PER_KWH;
+    monthlyCost = monthlyConsumption * ELECTRICITY_RATE_INR_PER_KWH;
+
+    const summary = {
+      daily: {
+        consumption: parseFloat(dailyConsumption.toFixed(3)),
+        cost: parseFloat(dailyCost.toFixed(2)),
+        onlineDevices: devices.length
+      },
+      monthly: {
+        consumption: parseFloat(monthlyConsumption.toFixed(3)),
+        cost: parseFloat(monthlyCost.toFixed(2)),
+        onlineDevices: devices.length
+      },
+      timestamp: now.toISOString()
+    };
+
+    console.log('[Energy Summary] Calculated:', {
+      daily: `${summary.daily.consumption} kWh (₹${summary.daily.cost})`,
+      monthly: `${summary.monthly.consumption} kWh (₹${summary.monthly.cost})`,
+      onlineDevices: devices.length
+    });
+
+    return summary;
+  } catch (error) {
+    console.error('Error getting energy summary:', error);
+    return {
+      daily: { consumption: 0, cost: 0, onlineDevices: 0 },
+      monthly: { consumption: 0, cost: 0, onlineDevices: 0 },
+      timestamp: new Date().toISOString()
+    };
+  }
+}
+
+/**
+ * Get energy calendar data for a specific month
+ * Returns daily consumption breakdown with color categories
+ */
+async function getEnergyCalendar(year, month) {
+  try {
+    const monthStart = new Date(year, month - 1, 1, 0, 0, 0);
+    const monthEnd = new Date(year, month, 0, 23, 59, 59);
+    const daysInMonth = new Date(year, month, 0).getDate();
+    
+    // Get all devices (online and offline to calculate historical data)
+    const devices = await Device.find({}, {
+      name: 1,
+      classroom: 1,
+      switches: 1,
+      status: 1,
+      _id: 1
+    }).lean();
+
+    const days = [];
+    let totalCost = 0;
+    let totalConsumption = 0;
+
+    // Calculate consumption for each day of the month
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dayStart = new Date(year, month - 1, day, 0, 0, 0);
+      const dayEnd = new Date(year, month - 1, day, 23, 59, 59);
+      
+      let dayConsumption = 0;
+      let dayRuntime = 0;
+
+      // Calculate for each device
+      for (const device of devices) {
+        const deviceConsumption = await calculatePreciseEnergyConsumption(
+          device._id,
+          dayStart,
+          dayEnd
+        );
+        dayConsumption += deviceConsumption;
+
+        // Calculate runtime from ActivityLog
+        const ActivityLog = require('./models/ActivityLog');
+        const activities = await ActivityLog.find({
+          deviceId: device._id,
+          timestamp: { $gte: dayStart, $lte: dayEnd },
+          action: { $in: ['on', 'off'] }
+        }).sort({ timestamp: 1 }).lean();
+
+        // Count hours device was on
+        let onTime = null;
+        for (const activity of activities) {
+          if (activity.action === 'on') {
+            onTime = activity.timestamp;
+          } else if (activity.action === 'off' && onTime) {
+            dayRuntime += (activity.timestamp - onTime) / (1000 * 60 * 60);
+            onTime = null;
+          }
+        }
+        // If still on at end of day
+        if (onTime) {
+          dayRuntime += (dayEnd - onTime) / (1000 * 60 * 60);
+        }
+      }
+
+      const dayCost = dayConsumption * ELECTRICITY_RATE_INR_PER_KWH;
+      totalCost += dayCost;
+      totalConsumption += dayConsumption;
+
+      // Categorize based on consumption thresholds
+      let category = 'low';
+      if (dayConsumption > 2) {
+        category = 'high';
+      } else if (dayConsumption > 1) {
+        category = 'medium';
+      }
+
+      days.push({
+        date: `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+        consumption: parseFloat(dayConsumption.toFixed(3)),
+        cost: parseFloat(dayCost.toFixed(2)),
+        runtime: parseFloat(dayRuntime.toFixed(2)),
+        category
+      });
+    }
+
+    const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 
+                        'July', 'August', 'September', 'October', 'November', 'December'];
+
+    return {
+      month: monthNames[month - 1],
+      year,
+      days,
+      totalCost: parseFloat(totalCost.toFixed(2)),
+      totalConsumption: parseFloat(totalConsumption.toFixed(3))
+    };
+  } catch (error) {
+    console.error('Error getting energy calendar:', error);
+    return {
+      month: '',
+      year,
+      days: [],
+      totalCost: 0,
+      totalConsumption: 0
+    };
+  }
+}
+
 module.exports = {
   getContentType,
   getMetrics,
   getDashboardData,
   getEnergyData,
+  getEnergySummary,
+  getEnergyCalendar,
   getDeviceUsageData,
   getDeviceHealth,
   getOccupancyData,

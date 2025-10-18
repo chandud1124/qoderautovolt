@@ -98,6 +98,7 @@ mqttClient.on('message', (topic, message) => {
           device.lastSeen = new Date();
 
           let stateChanged = false;
+          const stateChanges = []; // Track state changes for ActivityLog
 
           // Update switch states from ESP32 payload if switches array is present
           if (data.switches && Array.isArray(data.switches)) {
@@ -110,6 +111,15 @@ mqttClient.on('message', (topic, message) => {
                     deviceSwitch.relayGpio = deviceSwitch.gpio;
                   }
                   if (deviceSwitch.state !== esp32Switch.state) {
+                    // Record state change for ActivityLog
+                    stateChanges.push({
+                      switchId: deviceSwitch._id,
+                      switchName: deviceSwitch.name,
+                      oldState: deviceSwitch.state,
+                      newState: esp32Switch.state,
+                      manualOverride: esp32Switch.manual_override || false
+                    });
+                    
                     deviceSwitch.state = esp32Switch.state;
                     deviceSwitch.manualOverride = esp32Switch.manual_override || false;
                     deviceSwitch.lastStateChange = new Date();
@@ -184,6 +194,41 @@ mqttClient.on('message', (topic, message) => {
               console.error('[MQTT] Log error details:', logError);
             }
 
+            // Create ActivityLog entries for state changes (for energy consumption calculation)
+            if (stateChanges.length > 0) {
+              try {
+                const ActivityLog = require('./models/ActivityLog');
+                
+                for (const change of stateChanges) {
+                  const action = change.newState ? 
+                    (change.manualOverride ? 'manual_on' : 'on') : 
+                    (change.manualOverride ? 'manual_off' : 'off');
+                  
+                  await ActivityLog.create({
+                    deviceId: device._id,
+                    deviceName: device.name,
+                    switchId: change.switchId,
+                    switchName: change.switchName,
+                    action: action,
+                    triggeredBy: change.manualOverride ? 'manual_switch' : 'esp32',
+                    classroom: device.classroom,
+                    location: device.location,
+                    timestamp: new Date(),
+                    context: {
+                      source: 'esp32_state_update',
+                      previousState: change.oldState,
+                      newState: change.newState,
+                      manualOverride: change.manualOverride
+                    }
+                  });
+                  
+                  console.log(`[MQTT] ✅ Created ActivityLog for ${device.name} - ${change.switchName}: ${action}`);
+                }
+              } catch (activityError) {
+                console.error('[MQTT] ❌ Error creating ActivityLog entries:', activityError.message);
+              }
+            }
+
             // Send current configuration to ESP32
             sendDeviceConfigToESP32(device.macAddress);
 
@@ -244,6 +289,16 @@ mqttClient.on('message', (topic, message) => {
           function normalizeMac(mac) {
             return mac.replace(/[^a-fA-F0-9]/g, '').toLowerCase();
           }
+          // Basic validations to help debug missing telemetry
+          if (!data.mac) {
+            console.warn('[MQTT] manual_switch telemetry missing mac:', telemetry);
+            return;
+          }
+          if (typeof data.gpio === 'undefined' || data.gpio === null) {
+            console.warn('[MQTT] manual_switch telemetry missing gpio:', telemetry);
+            return;
+          }
+
           const normalizedMac = normalizeMac(data.mac);
 
           Device.findOne({ $or: [
@@ -260,6 +315,9 @@ mqttClient.on('message', (topic, message) => {
                 // Find the switch by GPIO
                 const switchInfo = device.switches.find(sw => (sw.relayGpio || sw.gpio) === data.gpio);
                 console.log(`[DEBUG] Looking for switch with GPIO ${data.gpio}, found:`, switchInfo ? switchInfo.name : 'NOT FOUND');
+                if (!switchInfo) {
+                  console.warn('[MQTT] manual_switch telemetry: switch not found for device. Payload:', telemetry, 'Device switches:', device.switches.map(s=>({name:s.name,gpio:s.gpio,relayGpio:s.relayGpio}))); 
+                }
                 if (switchInfo) {
                   // Update the switch state in database
                   const updatedDevice = await Device.findOneAndUpdate(
@@ -277,6 +335,7 @@ mqttClient.on('message', (topic, message) => {
                   );
 
                   // Log the manual operation
+                  // Persist ActivityLog and ManualSwitchLog with raw telemetry for reliable mapping
                   await ActivityLog.create({
                     deviceId: device._id,
                     deviceName: device.name,
@@ -287,8 +346,39 @@ mqttClient.on('message', (topic, message) => {
                     classroom: device.classroom,
                     location: device.location,
                     ip: 'ESP32',
-                    userAgent: 'ESP32 Manual Switch'
+                    userAgent: 'ESP32 Manual Switch',
+                    context: {
+                      telemetry: {
+                        gpio: data.gpio,
+                        physicalPin: data.physicalPin || null,
+                        mac: data.mac,
+                        heap: data.heap || null
+                      }
+                    }
                   });
+
+                  try {
+                    await ManualSwitchLog.create({
+                      deviceId: device._id,
+                      deviceName: device.name,
+                      deviceMac: data.mac,
+                      switchId: switchInfo._id,
+                      switchName: switchInfo.name,
+                      physicalPin: data.physicalPin || data.gpio,
+                      action: data.state ? 'manual_on' : 'manual_off',
+                      previousState: 'unknown',
+                      newState: data.state ? 'on' : 'off',
+                      classroom: device.classroom,
+                      location: device.location,
+                      timestamp: new Date(),
+                      context: {
+                        heap: data.heap || null,
+                        rawPayload: data
+                      }
+                    });
+                  } catch (msErr) {
+                    console.warn('[MQTT] Warning: failed to create ManualSwitchLog:', msErr && msErr.message ? msErr.message : msErr);
+                  }
 
                   console.log(`[ACTIVITY] Logged manual switch: ${device.name} - ${switchInfo.name} -> ${data.state ? 'ON' : 'OFF'}`);
 
@@ -655,12 +745,12 @@ const deviceMonitoringService = require('./services/deviceMonitoringService');
 const EnhancedLoggingService = require('./services/enhancedLoggingService');
 const ESP32CrashMonitor = require('./services/esp32CrashMonitor'); // Import ESP32 crash monitor service
 const offlineCleanupService = require('./services/offlineCleanupService');
-// Import integration services
-const rssService = require('./services/rssService');
-const socialMediaService = require('./services/socialMediaService');
-const weatherService = require('./services/weatherService');
-const webhookService = require('./services/webhookService');
-const databaseService = require('./services/databaseService');
+// Import integration services (commented out - services not yet implemented)
+// const rssService = require('./services/rssService');
+// const socialMediaService = require('./services/socialMediaService');
+// const weatherService = require('./services/weatherService');
+// const webhookService = require('./services/webhookService');
+// const databaseService = require('./services/databaseService');
 // Removed legacy DeviceSocketService/TestSocketService/ESP32SocketService for cleanup
 
 // Initialize ESP32 crash monitoring
@@ -1134,7 +1224,7 @@ apiRouter.use('/role-permissions', apiLimiter, require('./routes/rolePermissions
 // apiRouter.use('/notices', apiLimiter, require('./routes/notices')); // DISABLED - notice board functionality removed
 apiRouter.use('/boards', apiLimiter, require('./routes/boards'));
 apiRouter.use('/content', apiLimiter, require('./routes/contentScheduler'));
-apiRouter.use('/integrations', apiLimiter, require('./routes/integrations'));
+// apiRouter.use('/integrations', apiLimiter, require('./routes/integrations')); // DISABLED - integrations route not yet implemented
 
 // Catch-all route for debugging (must be last)
 apiRouter.use('*', (req, res) => {
@@ -1162,8 +1252,8 @@ app.use('/api', (req, res, next) => {
 
 app.use('/api', apiRouter);
 
-// Public webhook routes (no authentication required)
-app.use('/webhooks', require('./routes/publicWebhooks'));
+// Public webhook routes (no authentication required) - DISABLED until webhookService is implemented
+// app.use('/webhooks', require('./routes/publicWebhooks'));
 
 // Optional same-origin static serving (set SERVE_FRONTEND=1 after building frontend into ../dist)
 try {

@@ -23,6 +23,8 @@ import {
   Wifi, WifiOff, Calendar, Clock
 } from 'lucide-react';
 import { apiService } from '@/services/api';
+import EnergyMonitoringDashboard from './EnergyMonitoringDashboard';
+import DeviceUptimeTracker from './DeviceUptimeTracker';
 
 interface AnalyticsData {
   devices: Array<{
@@ -458,8 +460,13 @@ const AnalyticsPanel: React.FC = () => {
           </Card>
         </TabsContent>
 
-        {/* Energy Tab */}
-        <TabsContent value="energy" className="space-y-6">
+        {/* Energy Tab - Comprehensive Energy Monitoring Dashboard */}
+        <TabsContent value="energy">
+          <EnergyMonitoringDashboard />
+        </TabsContent>
+
+        {/* ENERGY TAB OLD CONTENT BELOW (FOR REFERENCE) - DELETE LATER */}
+        {false && <TabsContent value="OLD_ENERGY" className="space-y-6">
           {/* Time Range Selector and Filters */}
           <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
             <h3 className="text-lg font-semibold">Energy Consumption Analytics</h3>
@@ -1055,7 +1062,8 @@ const AnalyticsPanel: React.FC = () => {
               </ResponsiveContainer>
             </CardContent>
           </Card>
-        </TabsContent>
+        </TabsContent>}
+        {/* END OF OLD ENERGY TAB CONTENT */}
 
         {/* Devices Tab */}
         <TabsContent value="devices" className="space-y-6">
@@ -1394,6 +1402,9 @@ const AnalyticsPanel: React.FC = () => {
               </div>
             </CardContent>
           </Card>
+
+          {/* Device Uptime & Switch Statistics */}
+          <DeviceUptimeTracker devices={analyticsData?.devices || []} />
         </TabsContent>
 
         {/* Anomalies Tab */}

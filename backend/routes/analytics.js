@@ -44,6 +44,33 @@ router.get('/energy/:timeframe',
   }
 });
 
+// Get energy consumption summary (daily and monthly totals, excluding offline devices)
+router.get('/energy-summary', async (req, res) => {
+  try {
+    const summary = await metricsService.getEnergySummary();
+    res.json(summary);
+  } catch (error) {
+    console.error('Error getting energy summary:', error);
+    res.status(500).json({ error: 'Failed to get energy summary' });
+  }
+});
+
+// Get energy calendar view data (daily breakdown for a specific month)
+router.get('/energy-calendar/:year/:month', 
+  param('year').isInt({ min: 2020, max: 2100 }).withMessage('Invalid year'),
+  param('month').isInt({ min: 1, max: 12 }).withMessage('Invalid month'),
+  handleValidationErrors,
+  async (req, res) => {
+  try {
+    const { year, month } = req.params;
+    const calendarData = await metricsService.getEnergyCalendar(parseInt(year), parseInt(month));
+    res.json(calendarData);
+  } catch (error) {
+    console.error('Error getting energy calendar data:', error);
+    res.status(500).json({ error: 'Failed to get energy calendar data' });
+  }
+});
+
 // Get device health data
 router.get('/health/:deviceId?', 
   param('deviceId').optional().isMongoId().withMessage('Invalid device ID'),
@@ -227,6 +254,220 @@ router.get('/behavioral-analysis/:deviceId?',
   } catch (error) {
     console.error('Error getting behavioral analysis data:', error);
     res.status(500).json({ error: 'Failed to get behavioral analysis data' });
+  }
+});
+
+// Get device uptime/downtime statistics
+router.get('/device-uptime', async (req, res) => {
+  try {
+    const { date, deviceId } = req.query;
+    const ActivityLog = require('../models/ActivityLog');
+    const Device = require('../models/Device');
+    
+    // Parse date or use today
+    const targetDate = date ? new Date(date) : new Date();
+    const startOfDay = new Date(targetDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(targetDate);
+    endOfDay.setHours(23, 59, 59, 999);
+    
+    // Get devices to track
+    let devices = [];
+    if (deviceId) {
+      const device = await Device.findById(deviceId);
+      if (device) devices = [device];
+    } else {
+      devices = await Device.find({});
+    }
+    
+    const uptimeStats = [];
+    
+    for (const device of devices) {
+      // Get all status change logs for this device on this date
+      const statusLogs = await ActivityLog.find({
+        deviceId: device._id,
+        action: { $in: ['device_online', 'device_offline', 'device_connected', 'device_disconnected'] },
+        timestamp: { $gte: startOfDay, $lte: endOfDay }
+      }).sort({ timestamp: 1 }).lean();
+      
+      let onlineDuration = 0;
+      let offlineDuration = 0;
+      let lastStatus = device.status === 'online' ? 'online' : 'offline';
+      let lastTimestamp = startOfDay;
+      let lastOnlineAt = 'N/A';
+      let lastOfflineAt = 'N/A';
+      
+      // Process each status change
+      statusLogs.forEach(log => {
+        const duration = (new Date(log.timestamp) - lastTimestamp) / 1000; // in seconds
+        
+        if (lastStatus === 'online') {
+          onlineDuration += duration;
+        } else {
+          offlineDuration += duration;
+        }
+        
+        // Update status based on action
+        if (log.action === 'device_online' || log.action === 'device_connected') {
+          lastStatus = 'online';
+          lastOnlineAt = log.timestamp;
+        } else {
+          lastStatus = 'offline';
+          lastOfflineAt = log.timestamp;
+        }
+        
+        lastTimestamp = new Date(log.timestamp);
+      });
+      
+      // Add duration from last log to end of day
+      const remainingDuration = (endOfDay - lastTimestamp) / 1000;
+      if (lastStatus === 'online') {
+        onlineDuration += remainingDuration;
+      } else {
+        offlineDuration += remainingDuration;
+      }
+      
+      // Format durations
+      const formatDuration = (seconds) => {
+        if (seconds < 60) return `${Math.floor(seconds)}s`;
+        if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60)}s`;
+        if (seconds < 86400) {
+          const hours = Math.floor(seconds / 3600);
+          const mins = Math.floor((seconds % 3600) / 60);
+          return `${hours}h ${mins}m`;
+        }
+        const days = Math.floor(seconds / 86400);
+        const hours = Math.floor((seconds % 86400) / 3600);
+        return `${days}d ${hours}h`;
+      };
+      
+      uptimeStats.push({
+        deviceId: device._id,
+        deviceName: device.name,
+        onlineDuration: Math.floor(onlineDuration),
+        offlineDuration: Math.floor(offlineDuration),
+        lastOnlineAt,
+        lastOfflineAt,
+        totalUptime: formatDuration(onlineDuration),
+        totalDowntime: formatDuration(offlineDuration)
+      });
+    }
+    
+    res.json({ uptimeStats });
+  } catch (error) {
+    console.error('Error getting device uptime stats:', error);
+    res.status(500).json({ error: 'Failed to get device uptime statistics' });
+  }
+});
+
+// Get switch on/off statistics
+router.get('/switch-stats', async (req, res) => {
+  try {
+    const { date, deviceId } = req.query;
+    
+    if (!deviceId) {
+      return res.status(400).json({ error: 'Device ID is required' });
+    }
+    
+    const ActivityLog = require('../models/ActivityLog');
+    const Device = require('../models/Device');
+    
+    // Parse date or use today
+    const targetDate = date ? new Date(date) : new Date();
+    const startOfDay = new Date(targetDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(targetDate);
+    endOfDay.setHours(23, 59, 59, 999);
+    
+    // Get device
+    const device = await Device.findById(deviceId);
+    if (!device) {
+      return res.status(404).json({ error: 'Device not found' });
+    }
+    
+    const switchStats = [];
+    
+    // Process each switch
+    if (device.switches && device.switches.length > 0) {
+      for (const switchItem of device.switches) {
+        // Get all switch toggle logs for this switch on this date
+        const switchLogs = await ActivityLog.find({
+          deviceId: device._id,
+          action: { $in: ['switch_on', 'switch_off'] },
+          'details.switchId': switchItem.id,
+          timestamp: { $gte: startOfDay, $lte: endOfDay }
+        }).sort({ timestamp: 1 }).lean();
+        
+        let onDuration = 0;
+        let offDuration = 0;
+        let toggleCount = switchLogs.length;
+        let lastState = switchItem.state ? 'on' : 'off';
+        let lastTimestamp = startOfDay;
+        let lastOnAt = 'N/A';
+        let lastOffAt = 'N/A';
+        
+        // Process each toggle
+        switchLogs.forEach(log => {
+          const duration = (new Date(log.timestamp) - lastTimestamp) / 1000; // in seconds
+          
+          if (lastState === 'on') {
+            onDuration += duration;
+          } else {
+            offDuration += duration;
+          }
+          
+          // Update state
+          if (log.action === 'switch_on') {
+            lastState = 'on';
+            lastOnAt = log.timestamp;
+          } else {
+            lastState = 'off';
+            lastOffAt = log.timestamp;
+          }
+          
+          lastTimestamp = new Date(log.timestamp);
+        });
+        
+        // Add duration from last log to end of day
+        const remainingDuration = (endOfDay - lastTimestamp) / 1000;
+        if (lastState === 'on') {
+          onDuration += remainingDuration;
+        } else {
+          offDuration += remainingDuration;
+        }
+        
+        // Format durations
+        const formatDuration = (seconds) => {
+          if (seconds < 60) return `${Math.floor(seconds)}s`;
+          if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60)}s`;
+          if (seconds < 86400) {
+            const hours = Math.floor(seconds / 3600);
+            const mins = Math.floor((seconds % 3600) / 60);
+            return `${hours}h ${mins}m`;
+          }
+          const days = Math.floor(seconds / 86400);
+          const hours = Math.floor((seconds % 86400) / 3600);
+          return `${days}d ${hours}h`;
+        };
+        
+        switchStats.push({
+          switchId: switchItem.id,
+          switchName: switchItem.name,
+          onDuration: Math.floor(onDuration),
+          offDuration: Math.floor(offDuration),
+          toggleCount,
+          lastOnAt,
+          lastOffAt,
+          totalOnTime: formatDuration(onDuration),
+          totalOffTime: formatDuration(offDuration)
+        });
+      }
+    }
+    
+    res.json({ switchStats });
+  } catch (error) {
+    console.error('Error getting switch stats:', error);
+    res.status(500).json({ error: 'Failed to get switch statistics' });
   }
 });
 
