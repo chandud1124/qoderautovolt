@@ -25,6 +25,7 @@ import {
 import { apiService } from '@/services/api';
 import EnergyMonitoringDashboard from './EnergyMonitoringDashboard';
 import DeviceUptimeTracker from './DeviceUptimeTracker';
+import { AnalyticsSkeleton } from '@/components/skeletons';
 
 interface AnalyticsData {
   devices: Array<{
@@ -147,14 +148,7 @@ const AnalyticsPanel: React.FC = () => {
   };
 
   if (loading) {
-    return (
-      <div className="w-full h-96 flex items-center justify-center">
-        <div className="text-center">
-          <RefreshCw className="w-8 h-8 animate-spin mx-auto mb-4 text-primary" />
-          <p className="text-muted-foreground">Loading analytics data...</p>
-        </div>
-      </div>
-    );
+    return <AnalyticsSkeleton />;
   }
 
   if (error && !analyticsData) {
@@ -597,8 +591,9 @@ const AnalyticsPanel: React.FC = () => {
               <ResponsiveContainer width="100%" height={300}>
                 <AreaChart data={energyData?.map((item: any) => ({
                   ...item,
-                  // Only show consumption when devices are active/online
-                  totalConsumption: analyticsData?.devices?.some(d => d.status === 'online') ? item.totalConsumption : 0
+                  // Show actual consumption from activity logs
+                  // Zero consumption means no switches were turned on during that period
+                  totalConsumption: item.totalConsumption || 0
                 }))}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis
@@ -625,11 +620,16 @@ const AnalyticsPanel: React.FC = () => {
                   />
                 </AreaChart>
               </ResponsiveContainer>
-              {(!analyticsData?.devices?.some(d => d.status === 'online')) && (
-                <div className="text-center mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                  <p className="text-sm text-blue-800">
-                    ℹ️ No devices are currently online. Energy consumption shows as zero.
+              {energyData?.every((item: any) => item.totalConsumption === 0) && (
+                <div className="text-center mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                  <p className="text-sm text-amber-800">
+                    ⚠️ No energy consumption recorded for this period. This could mean:
                   </p>
+                  <ul className="text-xs text-amber-700 mt-2 space-y-1">
+                    <li>• No switches were turned on during these time periods</li>
+                    <li>• Devices were offline or not logging activity</li>
+                    <li>• This is normal for periods with no device usage</li>
+                  </ul>
                 </div>
               )}
             </CardContent>
@@ -645,8 +645,9 @@ const AnalyticsPanel: React.FC = () => {
               <ResponsiveContainer width="100%" height={250}>
                 <LineChart data={energyData?.map((item: any) => ({
                   ...item,
-                  // Only show costs when devices are active/online
-                  totalCostINR: analyticsData?.devices?.some(d => d.status === 'online') ? item.totalCostINR : 0
+                  // Show actual costs from activity logs
+                  // Zero costs mean no switches were turned on during that period
+                  totalCostINR: item.totalCostINR || 0
                 }))}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis
@@ -673,11 +674,9 @@ const AnalyticsPanel: React.FC = () => {
                   />
                 </LineChart>
               </ResponsiveContainer>
-              {(!analyticsData?.devices?.some(d => d.status === 'online')) && (
+              {energyData?.every((item: any) => item.totalCostINR === 0) && (
                 <div className="text-center mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
-                  <p className="text-sm text-green-800">
-                    💰 No energy costs incurred while devices are offline.
-                  </p>
+                  💰 No energy costs incurred during this period - no switches were active.
                 </div>
               )}
             </CardContent>
@@ -719,10 +718,10 @@ const AnalyticsPanel: React.FC = () => {
                           return {
                             ...item,
                             time: timestamp.toISOString(),
-                            actual: analyticsData?.devices?.some(d => d.status === 'online') ? item.actual : 0,
-                            predicted: analyticsData?.devices?.some(d => d.status === 'online') ? item.predicted : 0,
-                            upperBound: (analyticsData?.devices?.some(d => d.status === 'online') ? item.predicted : 0) * 1.15,
-                            lowerBound: Math.max(0, (analyticsData?.devices?.some(d => d.status === 'online') ? item.predicted : 0) * 0.85),
+                            actual: item.actual || 0, // Show zero if no actual consumption
+                            predicted: item.predicted || 0,
+                            upperBound: (item.predicted || 0) * 1.15,
+                            lowerBound: Math.max(0, (item.predicted || 0) * 0.85),
                             accuracy: item.accuracy || Math.random() * 0.3 + 0.7
                           };
                         })}
@@ -891,8 +890,8 @@ const AnalyticsPanel: React.FC = () => {
                             }
 
                             const timestamp = new Date(baseTime.getTime() + timeIncrement);
-                            const actual = analyticsData?.devices?.some(d => d.status === 'online') ? item.actual : 0;
-                            const predicted = analyticsData?.devices?.some(d => d.status === 'online') ? item.predicted : 0;
+                            const actual = item.actual || 0;
+                            const predicted = item.predicted || 0;
                             const accuracy = actual > 0 ? Math.min(100, Math.max(0, 100 - Math.abs((predicted - actual) / actual) * 100)) : 85;
 
                             return {
@@ -1024,10 +1023,10 @@ const AnalyticsPanel: React.FC = () => {
                   </Card>
                 </div>
 
-                {(!analyticsData?.devices?.some(d => d.status === 'online')) && (
+                {energyData?.every((item: any) => item.totalConsumption === 0) && (
                   <div className="text-center mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
                     <p className="text-sm text-yellow-800">
-                      ⚠️ No devices are currently online. Forecast shows zero consumption until devices are activated.
+                      ⚠️ No energy consumption data available for forecasting. Forecast shows zero consumption until device activity is recorded.
                     </p>
                   </div>
                 )}

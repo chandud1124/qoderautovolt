@@ -343,7 +343,9 @@ const updateDevice = async (req, res) => {
       pirEnabled,
       pirGpio,
       pirAutoOffDelay,
-      switches
+      switches,
+      status,
+      lastSeen
     } = req.body;
 
     const device = await Device.findById(deviceId);
@@ -401,6 +403,8 @@ const updateDevice = async (req, res) => {
     device.pirEnabled = pirEnabled !== undefined ? pirEnabled : device.pirEnabled;
     device.pirGpio = pirGpio || device.pirGpio;
     device.pirAutoOffDelay = pirAutoOffDelay || device.pirAutoOffDelay;
+    device.status = status || device.status;
+    device.lastSeen = lastSeen ? new Date(lastSeen) : device.lastSeen;
 
     let removedSwitches = [];
     const oldSwitchesSnapshot = device.switches ? device.switches.map(sw => sw.toObject ? sw.toObject() : { ...sw }) : [];

@@ -58,6 +58,9 @@ export default defineConfig(({ mode }) => ({
             '@radix-ui/react-switch',
           ],
           
+          // 3D Graphics (Three.js)
+          'vendor-three': ['three', '@react-three/fiber', '@react-three/drei'],
+          
           // Data visualization
           'vendor-charts': ['recharts'],
           
@@ -113,8 +116,17 @@ export default defineConfig(({ mode }) => ({
       '@tanstack/react-table',
       'axios',
       'recharts',
+      'three',
+      '@react-three/fiber',
     ],
-    exclude: ['@vite/client', '@vite/env'],
+    exclude: ['@vite/client', '@vite/env', '@react-three/drei', 'stats.js'],
+    esbuildOptions: {
+      target: 'esnext',
+    },
+  },
+  // Handle ESM compatibility issues
+  ssr: {
+    noExternal: ['three', '@react-three/fiber'],
   },
   // Performance optimizations
   esbuild: {

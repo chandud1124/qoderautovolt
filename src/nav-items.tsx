@@ -47,13 +47,13 @@ export const navItems = [
     icon: <Brain className="h-4 w-4" />,
   },
   {
-    title: "Grafana Analytics",
+    title: "Grafana",
     to: "/dashboard/grafana",
     icon: <BarChart3 className="h-4 w-4" />,
   },
   {
-    title: "Prometheus Metrics",
-    to: "/dashboard/prometheus",
+    title: "ESP32 Dashboard",
+    to: "/dashboard/esp32-grafana",
     icon: <Monitor className="h-4 w-4" />,
   },
 
@@ -82,6 +82,11 @@ export const navItems = [
   },
 
   // ===== SUPPORT & LOGS =====
+  {
+    title: "Notifications",
+    to: "/dashboard/notifications",
+    icon: <Bell className="h-4 w-4" />,
+  },
   {
     title: "Support Tickets",
     to: "/dashboard/tickets",

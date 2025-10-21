@@ -12,9 +12,11 @@ import { GlobalLoadingProvider } from '@/hooks/useGlobalLoading';
 import { GlobalLoadingOverlay } from '@/components/GlobalLoadingOverlay';
 import { DevicesProvider } from '@/hooks/useDevices';
 import { SocketProvider } from '@/context/SocketContext';
+import { NotificationProvider } from '@/context/NotificationContext';
 import { ThemeProvider } from '@/components/ThemeProvider';
 import { LogoLoader } from '@/components/Logo';
 import { SkipToContent } from '@/components/SkipToContent';
+import ErrorBoundary from '@/components/ErrorBoundary';
 
 // Lazy load components for better performance
 const Index = lazy(() => import("./pages/Index"));
@@ -41,8 +43,11 @@ const SystemHealthPage = lazy(() => import("./pages/SystemHealthPage"));
 const AIMLPage = lazy(() => import("./pages/AIMLPage"));
 const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage"));
 const GrafanaPage = lazy(() => import("./pages/GrafanaPage"));
+const GrafanaPublic = lazy(() => import("./pages/GrafanaPublic"));
+const ESP32GrafanaPage = lazy(() => import("./pages/ESP32GrafanaPage"));
 const PrometheusPage = lazy(() => import("./pages/PrometheusPage"));
 const SocketTest = lazy(() => import("./components/SocketTest"));
+const NotificationsPage = lazy(() => import("./pages/NotificationsPage"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -82,8 +87,9 @@ const App = () => {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider defaultTheme="dark" storageKey="autovolt-ui-theme">
         <AuthProvider>
-          <SocketProvider>
-            <GlobalLoadingProvider>
+          <NotificationProvider>
+            <SocketProvider>
+              <GlobalLoadingProvider>
               <TooltipProvider>
                 <SkipToContent />
                 <Toaster />
@@ -92,10 +98,11 @@ const App = () => {
                   v7_startTransition: true,
                   v7_relativeSplatPath: true
                 }}>
-                  <Suspense fallback={<PageLoader />}>
-                    <Routes>
-                    {/* Root redirect - smart routing based on auth */}
-                    <Route index element={<RootRedirect />} />
+                  <ErrorBoundary>
+                    <Suspense fallback={<PageLoader />}>
+                      <Routes>
+                      {/* Root redirect - smart routing based on auth */}
+                      <Route index element={<RootRedirect />} />
                     
                     {/* Public Landing Page */}
                     <Route path="/landing" element={<Landing />} />
@@ -133,18 +140,23 @@ const App = () => {
                       <Route path="aiml" element={<AIMLPage />} />
                       <Route path="analytics" element={<AnalyticsPage />} />
                       <Route path="grafana" element={<GrafanaPage />} />
+                      <Route path="grafana-public" element={<GrafanaPublic />} />
+                      <Route path="esp32-grafana" element={<ESP32GrafanaPage />} />
                       <Route path="prometheus" element={<PrometheusPage />} />
                       <Route path="socket-test" element={<SocketTest />} />
+                      <Route path="notifications" element={<NotificationsPage />} />
                     </Route>
 
                     <Route path="*" element={<NotFound />} />
                   </Routes>
                 </Suspense>
+                  </ErrorBoundary>
               </BrowserRouter>
               <GlobalLoadingOverlay />
             </TooltipProvider>
           </GlobalLoadingProvider>
         </SocketProvider>
+      </NotificationProvider>
       </AuthProvider>
       </ThemeProvider>
     </QueryClientProvider>

@@ -35,9 +35,11 @@ import {
   TrendingUp,
   Tv,
   Wind,
-  Monitor as MonitorIcon
+  Monitor as MonitorIcon,
+  Zap
 } from 'lucide-react';
 import '../styles/landing.css';
+
 
 const Landing: React.FC = () => {
   const navigate = useNavigate();
@@ -45,6 +47,8 @@ const Landing: React.FC = () => {
   const [scrollProgress, setScrollProgress] = useState(0);
   const [activeSection, setActiveSection] = useState(0);
   const heroRef = useRef<HTMLDivElement>(null);
+  const hardwareRef = useRef<HTMLDivElement>(null);
+  const [hardwareVisible, setHardwareVisible] = useState(false);
   const [realTimeStats, setRealTimeStats] = useState({
     totalDevices: 0,
     onlineDevices: 0,
@@ -76,6 +80,30 @@ const Landing: React.FC = () => {
 
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  // Hardware section scroll animation
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            setHardwareVisible(true);
+          }
+        });
+      },
+      { threshold: 0.2 }
+    );
+
+    if (hardwareRef.current) {
+      observer.observe(hardwareRef.current);
+    }
+
+    return () => {
+      if (hardwareRef.current) {
+        observer.unobserve(hardwareRef.current);
+      }
+    };
   }, []);
 
   // Fetch real stats from backend
@@ -574,6 +602,132 @@ const Landing: React.FC = () => {
         <div className="absolute bottom-0 left-0 right-0 z-10">
           <svg viewBox="0 0 1440 120" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full">
           </svg>
+        </div>
+      </section>
+
+      {/* 3D Hardware Components Section - Futuristic */}
+      <section 
+        ref={hardwareRef}
+        data-section="1"
+        className="py-20 sm:py-32 relative overflow-hidden bg-gradient-to-br from-slate-950 via-blue-950/50 to-slate-950"
+      >
+        {/* Animated Background */}
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-blue-900/20 via-transparent to-transparent" />
+          <div className="absolute inset-0 bg-[linear-gradient(to_right,#1e293b_1px,transparent_1px),linear-gradient(to_bottom,#1e293b_1px,transparent_1px)] bg-[size:4rem_4rem] opacity-10" />
+        </div>
+
+        <div className="container relative z-10 mx-auto px-4 sm:px-6 lg:px-8">
+          {/* Section Header */}
+          <div className="text-center mb-16 sm:mb-24">
+            <div 
+              className={`inline-flex items-center gap-2 bg-blue-500/10 backdrop-blur-xl px-4 py-2 rounded-full border border-blue-500/30 mb-6 transition-all duration-1000 ${
+                hardwareVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'
+              }`}
+            >
+              <Cpu className="h-4 w-4 text-cyan-400 animate-pulse" />
+              <span className="text-sm font-medium text-blue-200">IoT Hardware Architecture</span>
+            </div>
+            
+            <h2 
+              className={`text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold mb-6 transition-all duration-1000 delay-100 ${
+                hardwareVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'
+              }`}
+            >
+              <span className="block text-white mb-2">Powered by</span>
+              <span className="block bg-gradient-to-r from-blue-400 via-cyan-400 to-teal-400 bg-clip-text text-transparent">
+                Industrial-Grade Hardware
+              </span>
+            </h2>
+            
+            <p 
+              className={`text-lg sm:text-xl text-blue-200/80 max-w-3xl mx-auto transition-all duration-1000 delay-200 ${
+                hardwareVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'
+              }`}
+            >
+              Built with cutting-edge ESP32 microcontrollers, professional relay modules,
+              and intelligent PIR sensors for reliable classroom automation
+            </p>
+          </div>
+
+          {/* Features Grid - Now at top */}
+          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mt-16 max-w-6xl mx-auto">
+            {[
+              {
+                icon: <Zap className="h-8 w-8" />,
+                title: "Real-time Control",
+                description: "Instant device switching with <50ms latency",
+                gradient: "from-blue-600 to-cyan-600"
+              },
+              {
+                icon: <Wifi className="h-8 w-8" />,
+                title: "Cloud Integration",
+                description: "MQTT & WebSocket for seamless connectivity",
+                gradient: "from-purple-600 to-pink-600"
+              },
+              {
+                icon: <Brain className="h-8 w-8" />,
+                title: "Smart Automation",
+                description: "PIR-based occupancy detection & scheduling",
+                gradient: "from-teal-600 to-emerald-600"
+              },
+              {
+                icon: <Shield className="h-8 w-8" />,
+                title: "Secure by Design",
+                description: "End-to-end encryption & role-based access",
+                gradient: "from-indigo-600 to-blue-600"
+              }
+            ].map((feature, index) => (
+              <div
+                key={index}
+                className={`group relative transition-all duration-1000 ${
+                  hardwareVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'
+                }`}
+                style={{ transitionDelay: `${500 + index * 100}ms` }}
+              >
+                {/* Glow Effect */}
+                <div className={`absolute -inset-0.5 bg-gradient-to-r ${feature.gradient} rounded-2xl blur-lg opacity-0 group-hover:opacity-75 transition-opacity duration-500`} />
+                
+                {/* Card */}
+                <div className="relative bg-slate-900/90 backdrop-blur-xl rounded-2xl p-6 border border-white/10 h-full">
+                  <div className={`inline-flex p-3 rounded-xl bg-gradient-to-r ${feature.gradient} mb-4 group-hover:scale-110 transition-transform duration-300`}>
+                    {feature.icon}
+                  </div>
+                  <h3 className="text-xl font-bold text-white mb-2 group-hover:text-cyan-400 transition-colors">
+                    {feature.title}
+                  </h3>
+                  <p className="text-blue-200/70 text-sm leading-relaxed">
+                    {feature.description}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Bottom Info */}
+          <div 
+            className={`mt-16 text-center transition-all duration-1000 delay-900 ${
+              hardwareVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'
+            }`}
+          >
+            <div className="inline-flex items-center gap-6 bg-white/5 backdrop-blur-xl px-8 py-4 rounded-2xl border border-white/10 flex-wrap justify-center">
+              <div className="flex items-center gap-2">
+                <CheckCircle className="h-5 w-5 text-green-400" />
+                <span className="text-white font-semibold">Industrial Grade</span>
+              </div>
+              <div className="hidden sm:block w-px h-6 bg-white/20" />
+              <div className="flex items-center gap-2">
+                <Shield className="h-5 w-5 text-blue-400" />
+                <span className="text-white font-semibold">CE Certified</span>
+              </div>
+              <div className="hidden sm:block w-px h-6 bg-white/20" />
+              <div className="flex items-center gap-2">
+                <Leaf className="h-5 w-5 text-emerald-400" />
+                <span className="text-white font-semibold">Energy Efficient</span>
+              </div>
+            </div>
+          </div>
+
         </div>
       </section>
 

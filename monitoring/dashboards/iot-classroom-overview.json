@@ -1,5 +1,5 @@
 {
-  "dashboard": {
+  "dashboard": {"uid": "iot-classroom-dashboard",
     "id": null,
     "title": "IoT Classroom System Overview",
     "tags": ["iot", "classroom", "monitoring"],

@@ -13,10 +13,11 @@ import {
 } from 'recharts';
 import {
   Calendar as CalendarIcon, Clock, Zap, TrendingUp, TrendingDown, Activity,
-  ChevronLeft, ChevronRight, Info
+  ChevronLeft, ChevronRight, Info, Settings
 } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { cn } from '@/lib/utils';
+import PowerSettings from './PowerSettings';
 
 interface EnergyData {
   timestamp: string;
@@ -44,6 +45,7 @@ interface CalendarViewData {
 const EnergyMonitoringDashboard: React.FC = () => {
   const [viewMode, setViewMode] = useState<'day' | 'month' | 'year'>('day');
   const [showCalendar, setShowCalendar] = useState(false);
+  const [showPowerSettings, setShowPowerSettings] = useState(false);
   const [selectedDevice, setSelectedDevice] = useState<string>('all');
   const [selectedClassroom, setSelectedClassroom] = useState<string>('all');
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -55,6 +57,20 @@ const EnergyMonitoringDashboard: React.FC = () => {
   const [devices, setDevices] = useState<any[]>([]);
   const [classrooms, setClassrooms] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const [electricityPrice, setElectricityPrice] = useState<number>(7.5);
+
+  // Fetch electricity price from power settings
+  const fetchElectricityPrice = async () => {
+    try {
+      const response = await apiService.get('/settings/power/price');
+      if (response.data && typeof response.data.price === 'number') {
+        setElectricityPrice(response.data.price);
+      }
+    } catch (error) {
+      console.error('Error fetching electricity price:', error);
+      // Keep default value of 7.5
+    }
+  };
 
   // Fetch summary data
   const fetchSummaryData = async () => {
@@ -118,6 +134,7 @@ const EnergyMonitoringDashboard: React.FC = () => {
     const loadData = async () => {
       setLoading(true);
       await Promise.all([
+        fetchElectricityPrice(),
         fetchSummaryData(),
         fetchChartData(),
         fetchDevicesAndClassrooms()
@@ -242,6 +259,18 @@ const EnergyMonitoringDashboard: React.FC = () => {
 
   return (
     <div className="w-full space-y-4 md:space-y-6">
+      {/* Power Settings Modal */}
+      <PowerSettings 
+        isOpen={showPowerSettings} 
+        onClose={() => {
+          setShowPowerSettings(false);
+          // Reload electricity price and data after settings change
+          fetchElectricityPrice();
+          fetchSummaryData();
+          fetchChartData();
+        }} 
+      />
+
       {/* Header with Filters */}
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
@@ -279,6 +308,16 @@ const EnergyMonitoringDashboard: React.FC = () => {
           </Select>
 
           <Button
+            variant={showPowerSettings ? 'default' : 'outline'}
+            size="icon"
+            onClick={() => setShowPowerSettings(!showPowerSettings)}
+            className="flex-shrink-0"
+            title="Power Settings"
+          >
+            <Settings className="h-4 w-4" />
+          </Button>
+
+          <Button
             variant={showCalendar ? 'default' : 'outline'}
             size="icon"
             onClick={() => setShowCalendar(!showCalendar)}
@@ -303,11 +342,8 @@ const EnergyMonitoringDashboard: React.FC = () => {
             <div className="text-2xl md:text-3xl font-bold text-blue-600">
               {todayData?.consumption?.toFixed(3) || '0.000'} kWh
             </div>
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span className="flex items-center gap-1">
-                <Clock className="h-3 w-3" />
-                Runtime: {formatRuntime(todayData?.runtime || 18)}
-              </span>
+            <div className="text-xs text-muted-foreground">
+              Cost: ₹{todayData?.cost?.toFixed(2) || '0.00'}
             </div>
             <Badge variant="outline" className="text-xs">
               {todayData?.onlineDevices || 0} devices online
@@ -327,11 +363,8 @@ const EnergyMonitoringDashboard: React.FC = () => {
             <div className="text-2xl md:text-3xl font-bold text-green-600">
               {monthData?.consumption?.toFixed(3) || '0.000'} kWh
             </div>
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span className="flex items-center gap-1">
-                <Clock className="h-3 w-3" />
-                Runtime: {formatRuntime(monthData?.runtime || 383.7)}
-              </span>
+            <div className="text-xs text-muted-foreground">
+              Cost: ₹{monthData?.cost?.toFixed(2) || '0.00'}
             </div>
             <Badge variant="outline" className="text-xs">
               Avg. efficiency: 85%
@@ -352,7 +385,7 @@ const EnergyMonitoringDashboard: React.FC = () => {
               ₹{monthData?.cost?.toFixed(2) || '0.00'}
             </div>
             <div className="text-xs text-muted-foreground">
-              Rate: ₹7.5/kWh
+              Rate: ₹{electricityPrice.toFixed(2)}/kWh
             </div>
             <Badge variant="outline" className="text-xs">
               {((monthData?.cost || 0) / 30).toFixed(2)} ₹/day avg

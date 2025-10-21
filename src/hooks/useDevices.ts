@@ -176,9 +176,7 @@ const useDevicesInternal = () => {
           relayGpio: sw.relayGpio ?? sw.gpio
         })) : []
       }));
-      // Filter out Raspberry Pi test devices - only show ESP32 devices
-      const filteredDevices = mapped.filter((device: any) => device.deviceType !== 'raspberry_pi');
-      setDevices(filteredDevices);
+      setDevices(mapped);
       setLastLoaded(Date.now());
       // Reset backoff on success
       failureBackoffRef.current = 0;

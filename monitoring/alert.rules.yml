@@ -81,13 +81,17 @@ groups:
   - name: device_alerts
     rules:
       - alert: DeviceOffline
-        expr: classroom_device_status == 0
+        expr: esp32_online_status == 0
         for: 5m
         labels:
-          severity: info
+          severity: warning
+          channel: telegram
+          alert_type: device_offline
         annotations:
           summary: "IoT device is offline"
-          description: "IoT device has been offline for more than 5 minutes."
+          description: "IoT device has been offline for more than 5 minutes. Device details will be provided in the notification."
+          device_info: "Device information will be fetched from the backend"
+          repeat_interval: "30m"
 
       - alert: PowerUsageSpike
         expr: total_power_usage_watts > 1000
@@ -155,3 +159,13 @@ groups:
         annotations:
           summary: "Switch time limit exceeded"
           description: "One or more switches have exceeded their configured time limits."
+
+      - alert: SwitchesOnAfter5PM
+        expr: classroom_switch_status == 1 and hour() >= 17
+        for: 5m
+        labels:
+          severity: warning
+          channel: telegram
+        annotations:
+          summary: "Switches are ON after 5 PM"
+          description: "IoT classroom switches are still ON after 5:00 PM. Please turn them off to save energy."

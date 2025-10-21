@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -11,11 +11,12 @@ import { integrationsAPI } from '@/services/api';
 import { toast } from 'sonner';
 
 interface WeatherFormProps {
+  integration?: any;
   onSuccess?: () => void;
   onCancel?: () => void;
 }
 
-const WeatherForm: React.FC<WeatherFormProps> = ({ onSuccess, onCancel }) => {
+const WeatherForm: React.FC<WeatherFormProps> = ({ integration, onSuccess, onCancel }) => {
   const [formData, setFormData] = useState({
     name: '',
     apiKey: '',
@@ -27,6 +28,20 @@ const WeatherForm: React.FC<WeatherFormProps> = ({ onSuccess, onCancel }) => {
   const [loading, setLoading] = useState(false);
   const [testing, setTesting] = useState(false);
 
+  // Populate form data when editing an existing integration
+  useEffect(() => {
+    if (integration) {
+      setFormData({
+        name: integration.name || '',
+        apiKey: integration.config?.apiKey || '',
+        location: integration.config?.location || '',
+        units: integration.config?.units || 'metric',
+        updateInterval: integration.config?.updateInterval || 60,
+        autoPublish: integration.config?.autoPublish ?? true
+      });
+    }
+  }, [integration]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -37,19 +52,28 @@ const WeatherForm: React.FC<WeatherFormProps> = ({ onSuccess, onCancel }) => {
 
     try {
       setLoading(true);
-      await integrationsAPI.weather.create({
+      const integrationData = {
         name: formData.name,
         apiKey: formData.apiKey,
         location: formData.location,
         units: formData.units as 'metric' | 'imperial',
         updateInterval: formData.updateInterval,
         autoPublish: formData.autoPublish
-      });
-      toast.success('Weather integration created successfully');
+      };
+
+      if (integration) {
+        // Update existing integration
+        await integrationsAPI.weather.update(integration._id, integrationData);
+        toast.success('Weather integration updated successfully');
+      } else {
+        // Create new integration
+        await integrationsAPI.weather.create(integrationData);
+        toast.success('Weather integration created successfully');
+      }
       onSuccess?.();
     } catch (error) {
-      console.error('Failed to create weather integration:', error);
-      toast.error('Failed to create weather integration');
+      console.error('Failed to save weather integration:', error);
+      toast.error(`Failed to ${integration ? 'update' : 'create'} weather integration`);
     } finally {
       setLoading(false);
     }
@@ -98,10 +122,10 @@ const WeatherForm: React.FC<WeatherFormProps> = ({ onSuccess, onCancel }) => {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Cloud className="h-5 w-5" />
-          Create Weather Integration
+          {integration ? 'Edit' : 'Create'} Weather Integration
         </CardTitle>
         <CardDescription>
-          Display local weather information and severe weather alerts on your digital signage
+          {integration ? 'Update' : 'Display'} local weather information and severe weather alerts on your digital signage
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -231,10 +255,10 @@ const WeatherForm: React.FC<WeatherFormProps> = ({ onSuccess, onCancel }) => {
               {loading ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Creating...
+                  {integration ? 'Updating...' : 'Creating...'}
                 </>
               ) : (
-                'Create Weather Integration'
+                `${integration ? 'Update' : 'Create'} Weather Integration`
               )}
             </Button>
             <Button type="button" variant="outline" onClick={onCancel}>

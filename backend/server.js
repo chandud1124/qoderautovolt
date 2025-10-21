@@ -19,9 +19,12 @@ const MOSQUITTO_HOST = process.env.MQTT_BROKER || '172.16.3.171'; // Use network
 const mqttClient = mqtt.connect(`mqtt://${MOSQUITTO_HOST}:${MOSQUITTO_PORT}`, {
   clientId: 'backend_server',
   clean: true,
-  connectTimeout: 4000,
-  reconnectPeriod: 1000,
-  protocolVersion: 4
+  connectTimeout: 10000, // Increased from 4000ms to 10 seconds
+  reconnectPeriod: 5000, // Increased from 1000ms to 5 seconds to reduce reconnection spam
+  keepalive: 60, // Add 60-second keepalive heartbeat
+  protocolVersion: 4,
+  resubscribe: true, // Automatically resubscribe on reconnect
+  queueQoSZero: false, // Don't queue QoS 0 messages during disconnect
 });
 
 // Import models
@@ -43,11 +46,15 @@ mqttClient.on('error', (error) => {
 });
 
 mqttClient.on('offline', () => {
-  console.log('[MQTT] Client offline');
+  console.log('[MQTT] Client offline - will attempt reconnection');
 });
 
 mqttClient.on('reconnect', () => {
-  console.log('[MQTT] Reconnecting...');
+  console.log('[MQTT] Attempting reconnection...');
+});
+
+mqttClient.on('close', () => {
+  console.log('[MQTT] Connection closed');
 });
 
 mqttClient.on('message', (topic, message) => {
@@ -473,7 +480,7 @@ mqttClient.on('message', (topic, message) => {
 
               // Emit real-time update if status was previously offline
               if (global.io && device.status !== 'online') {
-                // emitDeviceStateChanged(device, { source: 'mqtt_heartbeat' }); // TEMPORARILY DISABLED
+                emitDeviceStateChanged(device, { source: 'mqtt_heartbeat' });
               }
             } else {
               console.warn(`[MQTT] Heartbeat from unknown device: ${data.mac}`);
@@ -626,8 +633,23 @@ function sendDeviceConfigToESP32(macAddress) {
           switches: device.switches.map(sw => ({
             gpio: sw.relayGpio || sw.gpio,
             manualGpio: sw.manualSwitchGpio,
-            manualMode: sw.manualMode || 'maintained'
-          }))
+            manualMode: sw.manualMode || 'maintained',
+            usePir: sw.usePir || false,           // ✅ Per-switch PIR control
+            dontAutoOff: sw.dontAutoOff || false  // ✅ Prevent auto-off for this switch
+          })),
+          // Motion sensor configuration (Fixed GPIO: 34 for PIR, 35 for Microwave)
+          motionSensor: {
+            enabled: device.pirEnabled || false,
+            type: device.pirSensorType || 'hc-sr501',
+            gpio: device.pirSensorType === 'rcwl-0516' ? 35 : 34,  // Fixed: GPIO 34 for PIR, 35 for Microwave
+            autoOffDelay: device.pirAutoOffDelay || 30,
+            sensitivity: device.pirSensitivity || 50,
+            detectionRange: device.pirDetectionRange || 7,
+            dualMode: device.pirSensorType === 'both',
+            secondaryGpio: 35,  // Fixed: GPIO 35 for secondary sensor
+            secondaryType: 'rcwl-0516',  // Always microwave for secondary
+            detectionLogic: device.motionDetectionLogic || 'and'
+          }
         };
 
         const message = JSON.stringify(config);
@@ -740,11 +762,11 @@ const { auth, authorize } = require('./middleware/auth');
 
 // Import services (only those actively used)
 const scheduleService = require('./services/scheduleService');
-const contentSchedulerService = require('./services/contentSchedulerService');
+// const contentSchedulerService = require('./services/contentSchedulerService'); // DISABLED - board functionality removed
 const deviceMonitoringService = require('./services/deviceMonitoringService');
 const EnhancedLoggingService = require('./services/enhancedLoggingService');
 const ESP32CrashMonitor = require('./services/esp32CrashMonitor'); // Import ESP32 crash monitor service
-const offlineCleanupService = require('./services/offlineCleanupService');
+// Removed offlineCleanupService - board functionality removed
 // Import integration services (commented out - services not yet implemented)
 // const rssService = require('./services/rssService');
 // const socialMediaService = require('./services/socialMediaService');
@@ -770,9 +792,16 @@ const connectDB = async (retries = 5) => {
   const opts = {
     useNewUrlParser: true,
     useUnifiedTopology: true,
-    serverSelectionTimeoutMS: 4000,
-    socketTimeoutMS: 45000,
+    serverSelectionTimeoutMS: 10000, // Increased from 4000ms to 10 seconds
+    socketTimeoutMS: 60000, // Increased from 45000ms to 60 seconds
+    maxPoolSize: 10, // Reduced from 20 to prevent connection exhaustion
+    minPoolSize: 2,  // Reduced from 5 to be more conservative
+    maxIdleTimeMS: 60000, // Increased from 30000ms to 60 seconds
+    bufferMaxEntries: 0, // Disable mongoose buffering to prevent timeout issues
+    bufferCommands: false, // Disable command buffering
     directConnection: primaryUri.startsWith('mongodb://') ? true : undefined,
+    heartbeatFrequencyMS: 10000, // Check connection every 10 seconds
+    maxConnecting: 2, // Limit concurrent connection attempts
   };
   try {
     await mongoose.connect(primaryUri, opts);
@@ -805,8 +834,8 @@ const connectDB = async (retries = 5) => {
     // Initialize RSS service after DB connection
     logger.info('[DEBUG] About to initialize RSS service...');
     try {
-      await rssService.initializeFeeds();
-      logger.info('[DEBUG] RSS service initialization completed');
+      // await rssService.initializeFeeds();
+      logger.info('[DEBUG] RSS service initialization skipped (service not available)');
     } catch (rssError) {
       logger.error('RSS service initialization error:', rssError);
     }
@@ -814,8 +843,8 @@ const connectDB = async (retries = 5) => {
     // Initialize weather service after DB connection
     logger.info('[DEBUG] About to initialize weather service...');
     try {
-      await weatherService.initializeFeeds();
-      logger.info('[DEBUG] Weather service initialization completed');
+      // await weatherService.initializeFeeds();
+      logger.info('[DEBUG] Weather service initialization skipped (service not available)');
     } catch (weatherError) {
       logger.error('Weather service initialization error:', weatherError);
     }
@@ -834,12 +863,6 @@ const connectDB = async (retries = 5) => {
         dbConnected = true;
         logger.info('Connected to MongoDB via fallback URI');
         try { await createAdminUser(); } catch (adminError) { logger.error('Admin user creation error:', adminError); }
-        // Initialize schedule service after DB connection
-        try {
-          await scheduleService.initialize();
-        } catch (scheduleError) {
-          logger.error('Schedule service initialization error:', scheduleError);
-        }
         return;
       } catch (fallbackErr) {
         logger.error('Fallback MongoDB URI connection failed:', fallbackErr.message || fallbackErr);
@@ -855,14 +878,37 @@ const connectDB = async (retries = 5) => {
   }
 };
 
-connectDB().catch(() => { });
-
 mongoose.connection.on('error', (err) => {
   logger.error('MongoDB error:', err);
+  dbConnected = false;
+});
+
+mongoose.connection.on('disconnected', () => {
+  logger.warn('MongoDB disconnected');
+  dbConnected = false;
+});
+
+mongoose.connection.on('connected', () => {
+  logger.info('MongoDB connected');
+  dbConnected = true;
+});
+
+mongoose.connection.on('reconnected', () => {
+  logger.info('MongoDB reconnected');
+  dbConnected = true;
 });
 
 const app = express();
 const server = http.createServer(app);
+
+console.log('[DEBUG] HTTP server created');
+console.log('[DEBUG] Server object type:', typeof server);
+console.log('[DEBUG] Server listening method exists:', typeof server.listen);
+
+// Check if app is properly configured
+console.log('[DEBUG] App object type:', typeof app);
+console.log('[DEBUG] App has _router:', typeof app._router);
+console.log('[DEBUG] App stack length:', app._router ? app._router.stack.length : 'no router');
 
 // Make MQTT client available to routes
 app.set('mqttClient', mqttClient);
@@ -877,6 +923,24 @@ app.use(helmet({
   contentSecurityPolicy: false,
   crossOriginEmbedderPolicy: false
 }));
+
+// TEST ROUTE - Add this at the very beginning
+app.get('/test-connection', (req, res) => {
+  console.log('[TEST] Test route hit!');
+  console.log('[TEST] Request details:', {
+    method: req.method,
+    url: req.url,
+    headers: req.headers,
+    ip: req.ip
+  });
+  res.json({ message: 'Server is responding', timestamp: new Date().toISOString() });
+});
+
+// Catch-all middleware to debug requests
+app.use((req, res, next) => {
+  console.log('[DEBUG] Request received:', req.method, req.url, 'from', req.ip);
+  next();
+});
 
 // Manual preflight handler (before cors) to guarantee PATCH visibility
 app.use((req, res, next) => {
@@ -964,8 +1028,6 @@ app.use('/uploads', (req, res, next) => {
   res.header('Cross-Origin-Resource-Policy', 'cross-origin');
   next();
 }, express.static(path.join(__dirname, 'uploads')));
-
-// Initialize main Socket.IO instance
 
 // Initialize main Socket.IO instance
 const io = socketIo(server, {
@@ -1217,13 +1279,13 @@ apiRouter.use('/aiml', apiLimiter, aimlRoutes);
 apiRouter.use('/settings', apiLimiter, settingsRoutes);
 apiRouter.use('/tickets', apiLimiter, ticketRoutes);
 apiRouter.use('/device-permissions', apiLimiter, devicePermissionRoutes);
+apiRouter.use('/telegram', require('./routes/telegram'));
 apiRouter.use('/device-categories', apiLimiter, deviceCategoryRoutes);
 apiRouter.use('/class-extensions', apiLimiter, classExtensionRoutes);
 apiRouter.use('/voice-assistant', voiceAssistantRoutes);
 apiRouter.use('/role-permissions', apiLimiter, require('./routes/rolePermissions'));
 // apiRouter.use('/notices', apiLimiter, require('./routes/notices')); // DISABLED - notice board functionality removed
-apiRouter.use('/boards', apiLimiter, require('./routes/boards'));
-apiRouter.use('/content', apiLimiter, require('./routes/contentScheduler'));
+// apiRouter.use('/content', apiLimiter, require('./routes/contentScheduler')); // DISABLED - board functionality removed
 // apiRouter.use('/integrations', apiLimiter, require('./routes/integrations')); // DISABLED - integrations route not yet implemented
 
 // Catch-all route for debugging (must be last)
@@ -1243,6 +1305,8 @@ app.get('/health', (req, res) => {
     environment: process.env.NODE_ENV || 'development'
   });
 });
+
+console.log('[DEBUG] Routes mounted, app stack length:', app._router ? app._router.stack.length : 'no router');
 
 // Debug middleware for API routes
 app.use('/api', (req, res, next) => {
@@ -1287,6 +1351,19 @@ if (process.env.NODE_ENV === 'development') {
 }
 
 
+// Initialize Telegram service
+const telegramService = require('./services/telegramService');
+telegramService.initialize().catch(error => {
+  console.error('Failed to initialize Telegram service:', error);
+});
+
+// Initialize Smart Notification service
+const smartNotificationService = require('./services/smartNotificationService');
+smartNotificationService.setTelegramService(telegramService);
+smartNotificationService.start().catch(error => {
+  console.error('Failed to initialize Smart Notification service:', error);
+});
+
 // Create default admin user
 const createAdminUser = async () => {
   try {
@@ -1311,14 +1388,6 @@ const createAdminUser = async () => {
 };
 
 // Socket.IO for real-time updates with additional diagnostics
-// io.engine.on('connection_error', (err) => {
-//   logger.error('[socket.io engine connection_error]', {
-//     code: err.code,
-//     message: err.message,
-//     context: err.context
-//   });
-// });
-
 io.on('connection', (socket) => {
   logger.info('Client connected:', socket.id);
   // Emit a hello for quick handshake debug
@@ -1479,7 +1548,7 @@ setInterval(async () => {
     for (const d of stale) {
       d.status = 'offline';
       await d.save();
-      // emitDeviceStateChanged(d, { source: 'offline-scan' }); // TEMPORARILY DISABLED
+      emitDeviceStateChanged(d, { source: 'offline-scan' });
       logger.info(`[offline-scan] marked device offline: ${d.macAddress} (lastSeen: ${d.lastSeen})`);
     }
 
@@ -1500,6 +1569,19 @@ app.get('/api/health', (req, res) => {
     environment: process.env.NODE_ENV,
     database: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected'
   });
+});
+
+// Prometheus metrics endpoint
+app.get('/metrics', async (req, res) => {
+  try {
+    const metricsService = require('./metricsService');
+    res.set('Content-Type', metricsService.getContentType());
+    const metrics = await metricsService.getMetrics();
+    res.end(metrics);
+  } catch (error) {
+    logger.error('Error fetching metrics:', error);
+    res.status(500).send('Error fetching metrics');
+  }
 });
 
 // Simple test endpoint
@@ -1561,42 +1643,66 @@ app.use('*', (req, res) => {
 });
 
 // Start the server (single attempt)
-const PORT = process.env.PORT || 3001;
-const HOST = '0.0.0.0'; // Listen on all network interfaces (allows network access)
+const PORT = process.env.PORT || 3001; // Changed back to 3001 after debugging
+const HOST = process.env.HOST || '0.0.0.0'; // Use environment variable or bind to all interfaces
 
 console.log('[DEBUG] About to call server.listen...');
+console.log(`[DEBUG] PORT: ${PORT}, HOST: ${HOST}`);
+console.log(`[DEBUG] Server object:`, typeof server);
+console.log(`[DEBUG] App object:`, typeof app);
 
-server.listen(PORT, HOST, () => {
-  console.log(`[SERVER] Listen callback executed`);
-  console.log(`[DEBUG] Server listening on ${HOST}:${PORT}`);
-  console.log(`Server running on ${HOST}:${PORT}`);
-  console.log(`Server accessible on localhost:${PORT} and all network interfaces`);
-  console.log(`Environment: ${process.env.NODE_ENV}`);
+try {
+  server.listen(PORT, HOST, () => {
+    console.log(`[SERVER] Listen callback STARTED - PID: ${process.pid}`);
+    console.log(`[SERVER] Listen callback executed`);
+    console.log(`[DEBUG] Server listening on ${HOST}:${PORT}`);
+    console.log(`Server running on ${HOST}:${PORT}`);
+    console.log(`Server accessible on localhost:${PORT} and all network interfaces`);
+    console.log(`Environment: ${process.env.NODE_ENV}`);
 
-  // Debug: Check if server is actually listening
-  console.log(`[DEBUG] Server address:`, server.address());
+    // Debug: Check if server is actually listening
+    console.log(`[DEBUG] Server address:`, server.address());
 
-  // Connect to database after server starts
-  logger.info('[DEBUG] About to call connectDB...');
-  connectDB().catch(() => { });
+    // Connect to database after server starts
+    logger.info('[DEBUG] About to call connectDB...');
+    connectDB().catch(() => { });
+  });
+} catch (listenError) {
+  console.error('[DEBUG] Error in server.listen():', listenError);
+  console.error('[DEBUG] Listen error stack:', listenError.stack);
+  process.exit(1);
+}
+
+server.on('listening', () => {
+  console.log('[SERVER] Server is now listening event fired');
+  console.log('[SERVER] Listening address:', server.address());
 });
 
 server.on('error', (error) => {
-  console.error('Server error:', error);
-  console.error('Stack:', error.stack);
-  process.exit(1);
+  console.error('Server error event:', error);
 });
 
 process.on('uncaughtException', (error) => {
-  console.error('Uncaught Exception:', error);
+  console.error('=== UNCAUGHT EXCEPTION ===');
+  console.error('Error:', error);
+  console.error('Message:', error.message);
   console.error('Stack:', error.stack);
-  // process.exit(1); // TEMPORARILY DISABLED
+  console.error('Name:', error.name);
+  console.error('Code:', error.code);
+  console.error('===========================');
+  process.exit(1);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  console.error('Stack:', reason?.stack);
-  // process.exit(1); // TEMPORARILY DISABLED
+  console.error('=== UNHANDLED REJECTION ===');
+  console.error('Reason:', reason);
+  console.error('Promise:', promise);
+  console.error('Reason Message:', reason?.message);
+  console.error('Reason Stack:', reason?.stack);
+  console.error('Reason Name:', reason?.name);
+  console.error('Reason Code:', reason?.code);
+  console.error('===========================');
+  process.exit(1);
 });
 
 

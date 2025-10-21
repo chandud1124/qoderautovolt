@@ -191,25 +191,38 @@ const deviceSchema = new mongoose.Schema({
   },
   pirGpio: {
     type: Number,
-    required: function() { return this.pirEnabled; },
+    required: false, // OPTIONAL - GPIO pins are now FIXED (34 for PIR, 35 for Microwave)
     min: [0, 'GPIO pin must be >= 0'],
-    max: [39, 'GPIO pin must be <= 39'], // Will be validated in pre-save
-    validate: {
-      validator: function(v) {
-        if (!this.pirEnabled) return true;
-        // Allow problematic pins for existing devices during updates
-        return gpioUtils.validateGpioPin(v, true, this.deviceType || 'esp32'); // Allow problematic pins
-      },
-      message: function(props) {
-        const status = gpioUtils.getGpioPinStatus(props.value, this.deviceType || 'esp32');
-        return status.reason;
-      }
-    }
+    max: [39, 'GPIO pin must be <= 39']
   },
   pirAutoOffDelay: {
     type: Number,
     min: 0,
     default: 30 // 30 seconds default
+  },
+  // Dual Sensor Configuration
+  // Note: GPIO pins are FIXED (GPIO 34 for PIR, GPIO 35 for Microwave)
+  pirSensorType: {
+    type: String,
+    enum: ['hc-sr501', 'rcwl-0516', 'both'],
+    default: 'hc-sr501'
+  },
+  pirSensitivity: {
+    type: Number,
+    min: 0,
+    max: 100,
+    default: 50 // 50% sensitivity default
+  },
+  pirDetectionRange: {
+    type: Number,
+    min: 1,
+    max: 10,
+    default: 7 // 7 meters default
+  },
+  motionDetectionLogic: {
+    type: String,
+    enum: ['and', 'or', 'weighted'],
+    default: 'and'
   },
   notificationSettings: {
     afterTime: {
@@ -354,6 +367,27 @@ deviceSchema.pre('save', function(next) {
   }
   next();
 });
+
+// ============================================
+// Database Indexes for Performance
+// ============================================
+// Unique index on macAddress for fast device lookups
+deviceSchema.index({ macAddress: 1 }, { unique: true });
+
+// Compound index for status and lastSeen queries (e.g., finding offline devices)
+deviceSchema.index({ status: 1, lastSeen: -1 });
+
+// Index for classroom-based queries
+deviceSchema.index({ classroom: 1 });
+
+// Index for device type queries
+deviceSchema.index({ type: 1 });
+
+// Compound index for location-based queries
+deviceSchema.index({ building: 1, floor: 1, room: 1 });
+
+// Index for switch state queries (finding devices with switches on/off)
+deviceSchema.index({ 'switches.state': 1 });
 
 const Device = mongoose.model('Device', deviceSchema);
 

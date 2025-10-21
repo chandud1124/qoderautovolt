@@ -4,6 +4,14 @@ const { logger } = require('../middleware/logger');
 const Device = require('../models/Device');
 const ActivityLog = require('../models/ActivityLog');
 const {
+  createVoiceSession,
+  voiceAuth,
+  voiceRateLimit,
+  revokeVoiceSession,
+  getUserVoiceSessions,
+  revokeAllUserSessions
+} = require('../middleware/voiceAuth');
+const {
   handleGoogleAssistantRequest,
   handleAlexaRequest,
   handleSiriRequest,
@@ -11,6 +19,172 @@ const {
 } = require('../controllers/voiceAssistantController');
 
 const router = express.Router();
+
+// ============================================
+// VOICE SESSION MANAGEMENT (User Authentication)
+// ============================================
+
+// Create voice session for authenticated user
+router.post('/session/create', auth, async (req, res) => {
+  try {
+    const user = req.user;
+
+    // Check if user has voice control permissions
+    if (user.role === 'student' && !user.permissions?.voiceControl?.enabled) {
+      return res.status(403).json({
+        success: false,
+        message: 'Voice control is not enabled for your account'
+      });
+    }
+
+    const sessionData = createVoiceSession(user);
+
+    logger.info('[Voice Session] Created for user:', user.name);
+
+    res.json({
+      success: true,
+      data: sessionData
+    });
+  } catch (error) {
+    logger.error('[Voice Session] Creation error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create voice session',
+      error: error.message
+    });
+  }
+});
+
+// Get user's active voice sessions
+router.get('/session/list', auth, async (req, res) => {
+  try {
+    const sessions = getUserVoiceSessions(req.user.id);
+
+    res.json({
+      success: true,
+      data: {
+        sessions,
+        total: sessions.length
+      }
+    });
+  } catch (error) {
+    logger.error('[Voice Session] List error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to list voice sessions',
+      error: error.message
+    });
+  }
+});
+
+// Revoke specific voice session
+router.delete('/session/revoke', auth, async (req, res) => {
+  try {
+    const { voiceToken } = req.body;
+
+    if (!voiceToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'Voice token required'
+      });
+    }
+
+    const revoked = revokeVoiceSession(voiceToken);
+
+    res.json({
+      success: true,
+      data: {
+        revoked,
+        message: revoked ? 'Voice session revoked' : 'Voice session not found'
+      }
+    });
+  } catch (error) {
+    logger.error('[Voice Session] Revoke error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to revoke voice session',
+      error: error.message
+    });
+  }
+});
+
+// Revoke all voice sessions for user
+router.post('/session/revoke-all', auth, async (req, res) => {
+  try {
+    const count = revokeAllUserSessions(req.user.id);
+
+    res.json({
+      success: true,
+      data: {
+        revokedCount: count,
+        message: `Revoked ${count} voice session(s)`
+      }
+    });
+  } catch (error) {
+    logger.error('[Voice Session] Revoke all error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to revoke voice sessions',
+      error: error.message
+    });
+  }
+});
+
+// ============================================
+// VOICE COMMAND PROCESSING (Authenticated)
+// ============================================
+
+// Voice Command Processing with authentication and rate limiting
+router.post('/voice/command', auth, voiceAuth, voiceRateLimit(100, 15 * 60 * 1000), async (req, res) => {
+  try {
+    const { command, deviceName, switchName, assistant } = req.body;
+
+    logger.info('[Voice Assistant] Authenticated voice command:', {
+      user: req.user.name,
+      command,
+      deviceName,
+      switchName,
+      assistant
+    });
+
+    const result = await processVoiceCommand(command, deviceName, switchName, req.user);
+
+    // Log voice assistant activity with session info
+    await ActivityLog.create({
+      action: 'voice_command',
+      triggeredBy: 'voice_assistant',
+      userId: req.user.id,
+      userName: req.user.name,
+      details: `Voice command: "${command}" via ${assistant || 'web'}`,
+      ip: req.ip,
+      userAgent: req.get('User-Agent'),
+      metadata: {
+        assistant: assistant || 'web',
+        command,
+        deviceName,
+        switchName,
+        result: result.success,
+        sessionInfo: {
+          commandCount: req.voiceSession?.commandCount,
+          sessionAge: req.voiceSession?.createdAt
+        }
+      }
+    });
+
+    res.json(result);
+  } catch (error) {
+    logger.error('[Voice Assistant] Voice command error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Voice command failed',
+      error: error.message
+    });
+  }
+});
+
+// ============================================
+// VOICE ASSISTANT PLATFORM INTEGRATIONS
+// ============================================
 
 // Voice Assistant Integration Routes
 // These routes handle requests from Google Assistant, Alexa, and other voice platforms
@@ -89,13 +263,23 @@ router.post('/siri/webhook', async (req, res) => {
   }
 });
 
-// Device Discovery for Voice Assistants
+// Device Discovery for Voice Assistants (Authenticated)
 router.get('/devices/discovery', auth, async (req, res) => {
   try {
-    // Get all devices accessible to the user
-    const devices = await Device.find({
-      // Add user access control logic here
-    }).populate('assignedUsers', 'name');
+    // Get devices accessible to the user based on role and permissions
+    let deviceQuery = {};
+
+    if (!['super-admin', 'admin', 'dean'].includes(req.user.role)) {
+      // Limited access for non-admin users
+      deviceQuery = {
+        $or: [
+          { assignedUsers: req.user.id },
+          { classroom: { $in: req.user.assignedRooms || [] } }
+        ]
+      };
+    }
+
+    const devices = await Device.find(deviceQuery).populate('assignedUsers', 'name');
 
     const discoveryResponse = {
       google: formatDevicesForGoogle(devices),
@@ -109,45 +293,15 @@ router.get('/devices/discovery', auth, async (req, res) => {
     });
   } catch (error) {
     logger.error('[Voice Assistant] Device discovery error:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
-  }
-});
-
-// Voice Command Processing
-router.post('/voice/command', auth, async (req, res) => {
-  try {
-    const { command, deviceName, switchName, assistant } = req.body;
-
-    logger.info('[Voice Assistant] Voice command:', { command, deviceName, switchName, assistant });
-
-    const result = await processVoiceCommand(command, deviceName, switchName, req.user);
-
-    // Log voice assistant activity
-    await ActivityLog.create({
-      action: 'voice_command',
-      triggeredBy: 'voice_assistant',
-      userId: req.user.id,
-      userName: req.user.name,
-      details: `Voice command: "${command}" via ${assistant}`,
-      ip: req.ip,
-      userAgent: req.get('User-Agent'),
-      metadata: {
-        assistant,
-        command,
-        deviceName,
-        switchName,
-        result: result.success
-      }
+    res.status(500).json({
+      success: false,
+      message: 'Device discovery failed',
+      error: error.message
     });
-
-    res.json(result);
-  } catch (error) {
-    logger.error('[Voice Assistant] Voice command error:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 
-// Status Reporting for Voice Assistants
+// Status Reporting for Voice Assistants (Authenticated)
 router.get('/devices/:deviceId/status', auth, async (req, res) => {
   try {
     const device = await Device.findById(req.params.deviceId);

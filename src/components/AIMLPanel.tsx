@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Info, Settings, RefreshCw, Monitor, Lightbulb, Fan, Server, Wifi, WifiOff, MapPin, Brain, TrendingUp, AlertTriangle, Zap, Calendar, Clock, BarChart3, Activity, Target, Layers, AlertCircle, CheckCircle, XCircle, TrendingDown, TrendingUp as TrendingUpIcon, Eye, EyeOff, DollarSign, Wrench, Shield } from 'lucide-react';
 import { LineChart, Line, AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { apiService } from '@/services/api';
+import { apiService, aiMlAPI } from '@/services/api';
 
 const CLASSROOMS = [
   { id: 'lab201', name: 'Lab 201', type: 'lab' },
@@ -144,6 +144,7 @@ const AIMLPanel: React.FC = () => {
   }, [classroom, availableDevices]);
 
   // Generate time-based labels for working hours only (6 AM - 10 PM)
+  // Note: Labels show full range but forecast only shows consumption during classroom hours (9 AM - 5 PM)
   const generateTimeLabel = (index: number, timeframe: string) => {
     const now = new Date();
 
@@ -190,19 +191,14 @@ const AIMLPanel: React.FC = () => {
       switch (type) {
         case 'forecast':
           try {
-            const res = await apiService.post('/aiml/forecast', {
-              device_id: device,
-              classroom_id: classroom,
-              history: generateHistoricalData(device, 24), // More historical data for better learning
-              periods: 16 // Only forecast working hours (6 AM - 10 PM)
-            });
+            const res = await aiMlAPI.forecast(device, generateHistoricalData(device, 24), 16);
             predictionData = {
               type: 'forecast',
               device_id: device,
               classroom_id: classroom,
-              forecast: res.data.forecast || generateMockForecast(),
-              costs: res.data.costs || generateMockCosts(),
-              peak_hours: res.data.peak_hours || generateMockPeakHours(),
+              forecast: res.data?.forecast || generateMockForecast(),
+              costs: res.data?.costs || generateMockCosts(),
+              peak_hours: res.data?.peak_hours || generateMockPeakHours(),
               timestamp: new Date().toISOString()
             };
           } catch (err) {
@@ -212,19 +208,17 @@ const AIMLPanel: React.FC = () => {
 
         case 'anomaly':
           try {
-            const res = await apiService.post('/aiml/anomaly', {
-              device_id: device,
-              classroom_id: classroom,
-              values: generateSensorData(device, 50),
-              sensor_data: generateSensorData(device, 50)
-            });
+            // Extract just the power consumption values for anomaly detection
+            const sensorData = generateSensorData(device, 50);
+            const powerValues = sensorData.map((reading: any) => reading.power_consumption);
+            const res = await aiMlAPI.anomaly(device, powerValues);
             predictionData = {
               type: 'anomaly',
               device_id: device,
               classroom_id: classroom,
-              anomalies: res.data.anomalies || [],
-              alerts: res.data.alerts || [],
-              severity_levels: res.data.severity_levels || [],
+              anomalies: res.data?.anomalies || [],
+              alerts: res.data?.alerts || [],
+              severity_levels: res.data?.severity_levels || [],
               timestamp: new Date().toISOString()
             };
           } catch (err) {
@@ -234,20 +228,16 @@ const AIMLPanel: React.FC = () => {
 
         case 'maintenance':
           try {
-            const res = await apiService.post('/aiml/maintenance', {
-              device_id: device,
-              classroom_id: classroom,
-              sensor_history: generateSensorHistory(device, 30), // 30 days of sensor data
-              usage_patterns: generateUsagePatterns(device, 30)
-            });
+            // Use schedule API for maintenance predictions (closest available)
+            const res = await aiMlAPI.schedule(device, { maintenance_check: true });
             predictionData = {
               type: 'maintenance',
               device_id: device,
               classroom_id: classroom,
-              health_score: res.data.health_score || 85,
-              failure_probability: res.data.failure_probability || 0.15,
-              estimated_lifetime: res.data.estimated_lifetime || 45,
-              recommendations: res.data.recommendations || [],
+              health_score: res.data?.health_score || 85,
+              failure_probability: res.data?.failure_probability || 0.15,
+              estimated_lifetime: res.data?.estimated_lifetime || 45,
+              recommendations: res.data?.recommendations || [],
               timestamp: new Date().toISOString()
             };
           } catch (err) {
@@ -347,30 +337,38 @@ const AIMLPanel: React.FC = () => {
 
   // Mock data generators
   const generateMockForecast = () => {
+    // Check if current device is online - if offline, return 0W usage
+    if (currentDevice && currentDevice.status !== 'online') {
+      return Array.from({ length: 16 }, () => 0);
+    }
+
+    // Get device power consumption (fallback to 100W if not specified)
+    const devicePower = currentDevice?.powerConsumption || 100;
+
     // Only forecast for working hours: 6 AM to 10 PM (16 hours)
+    // But only show consumption during actual classroom hours (9 AM - 5 PM)
+    // But only show consumption during actual classroom hours (9 AM - 5 PM)
     return Array.from({ length: 16 }, (_, i) => {
       const hourOfDay = 6 + i; // Start at 6 AM, end at 10 PM (9 PM is last hour)
-      let baseUsage = 0;
+      // Only show consumption during classroom hours (9 AM - 5 PM)
+      let usageMultiplier = 0;
 
-      // Simulate realistic classroom usage patterns
-      if (hourOfDay >= 8 && hourOfDay <= 12) {
-        // Morning classes (8 AM - 12 PM): High usage
-        baseUsage = 70 + Math.random() * 20; // 70-90%
-      } else if (hourOfDay >= 13 && hourOfDay <= 17) {
-        // Afternoon classes (1 PM - 5 PM): Peak usage
-        baseUsage = 75 + Math.random() * 15; // 75-90%
-      } else if (hourOfDay >= 18 && hourOfDay <= 20) {
-        // Evening study (6 PM - 8 PM): Moderate usage
-        baseUsage = 45 + Math.random() * 20; // 45-65%
-      } else if (hourOfDay >= 6 && hourOfDay < 8) {
-        // Early morning (6 AM - 8 AM): Low usage, setup time
-        baseUsage = 20 + Math.random() * 15; // 20-35%
-      } else if (hourOfDay >= 21) {
-        // Late evening (9 PM - 10 PM): Minimal usage, closing time
-        baseUsage = 10 + Math.random() * 15; // 10-25%
+      // Only show consumption during classroom hours: 9 AM - 5 PM
+      if (hourOfDay >= 9 && hourOfDay <= 17) {
+        // Simulate realistic classroom usage patterns as multipliers
+        if (hourOfDay >= 9 && hourOfDay <= 12) {
+          // Morning classes (9 AM - 12 PM): High usage
+          usageMultiplier = 0.7 + Math.random() * 0.2; // 70-90%
+        } else if (hourOfDay >= 13 && hourOfDay <= 17) {
+          // Afternoon classes (1 PM - 5 PM): Peak usage
+          usageMultiplier = 0.75 + Math.random() * 0.15; // 75-90%
+        }
       }
+      // Outside classroom hours (before 9 AM and after 5 PM): No consumption
+      // This includes early morning (6-8 AM) and evening (6-10 PM)
 
-      return Math.floor(baseUsage);
+      // Return actual power consumption in watts
+      return Math.floor(devicePower * usageMultiplier);
     });
   };
 
@@ -384,10 +382,11 @@ const AIMLPanel: React.FC = () => {
   };
 
   const generateMockPeakHours = () => {
+    const devicePower = currentDevice?.powerConsumption || 100;
     return [
-      { hour: '9:00 AM', usage: 88, reason: 'Morning classes start - labs & computers active' },
-      { hour: '2:00 PM', usage: 92, reason: 'Peak afternoon sessions - all devices in use' },
-      { hour: '6:00 PM', usage: 65, reason: 'Evening study hours - moderate usage' }
+      { hour: '10:00 AM', usage: Math.floor(devicePower * 0.88), reason: 'Morning classes start - labs & computers active' },
+      { hour: '2:00 PM', usage: Math.floor(devicePower * 0.92), reason: 'Peak afternoon sessions - all devices in use' },
+      { hour: '4:00 PM', usage: Math.floor(devicePower * 0.85), reason: 'Late afternoon classes - high usage period' }
     ];
   };
 
@@ -449,7 +448,7 @@ const AIMLPanel: React.FC = () => {
   const FEATURE_META: Record<string, { title: string; desc: string; action: string; icon: any }> = {
     forecast: {
       title: 'Energy Forecasting',
-      desc: 'Predict classroom electricity usage patterns during working hours (6 AM - 10 PM) and anticipate peak hours for better energy planning',
+      desc: 'Predict classroom electricity usage patterns during classroom hours (9 AM - 5 PM) and anticipate peak hours for better energy planning',
       action: 'Generate Forecast',
       icon: TrendingUp
     },
@@ -464,6 +463,12 @@ const AIMLPanel: React.FC = () => {
       desc: 'Monitor device health and forecast when maintenance is needed to prevent failures',
       action: 'Check Health',
       icon: Wrench
+    },
+    workflow: {
+      title: 'Smart Automation',
+      desc: 'Automated workflow combining forecasting, anomaly detection, and maintenance predictions for intelligent energy management',
+      action: 'Run Workflow',
+      icon: Layers
     },
   };
 
@@ -497,7 +502,7 @@ const AIMLPanel: React.FC = () => {
                   Energy Usage Forecast
                 </CardTitle>
                 <CardDescription>
-                  Working hours prediction (6 AM - 10 PM) based on historical patterns and current usage
+                  Classroom hours prediction (9 AM - 5 PM) based on historical patterns and current usage
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -514,8 +519,8 @@ const AIMLPanel: React.FC = () => {
                       <YAxis yAxisId='cost' orientation='right' />
                       <Tooltip
                         formatter={(value: any, name: string) => [
-                          name === 'usage' ? `${typeof value === 'number' ? value.toFixed(2) : value}%` : `$${typeof value === 'number' ? value.toFixed(2) : value}`,
-                          name === 'usage' ? 'Energy Usage' : 'Estimated Cost'
+                          name === 'usage' ? `${typeof value === 'number' ? value.toFixed(0) : value}W` : `$${typeof value === 'number' ? value.toFixed(2) : value}`,
+                          name === 'usage' ? 'Power Consumption' : 'Estimated Cost'
                         ]}
                       />
                       <Area
@@ -550,7 +555,7 @@ const AIMLPanel: React.FC = () => {
                           <div className='font-semibold'>{peak.hour}</div>
                           <div className='text-sm text-muted-foreground'>{peak.reason}</div>
                         </div>
-                        <Badge variant='outline'>{typeof peak.usage === 'number' ? peak.usage.toFixed(2) : peak.usage}% usage</Badge>
+                        <Badge variant='outline'>{typeof peak.usage === 'number' ? `${peak.usage}W` : peak.usage}</Badge>
                       </div>
                     ))}
                   </div>
@@ -568,18 +573,18 @@ const AIMLPanel: React.FC = () => {
                   <div className='space-y-4'>
                     <div className='text-center'>
                       <div className='text-3xl font-bold text-green-600'>
-                        
+                        ${costData.reduce((total, cost) => total + (cost?.cost || 0), 0).toFixed(2)}
                       </div>
                       <div className='text-sm text-muted-foreground'>Estimated daily cost</div>
                     </div>
                     <div className='space-y-2'>
                       <div className='flex justify-between text-sm'>
                         <span>Peak hour cost:</span>
-                        <span></span>
+                        <span>${Math.max(...costData.map(c => c?.cost || 0)).toFixed(2)}</span>
                       </div>
                       <div className='flex justify-between text-sm'>
                         <span>Average hourly cost:</span>
-                        <span></span>
+                        <span>${(costData.reduce((total, cost) => total + (cost?.cost || 0), 0) / costData.length).toFixed(2)}</span>
                       </div>
                     </div>
                   </div>
@@ -595,7 +600,7 @@ const AIMLPanel: React.FC = () => {
                   AI Energy Insights
                 </h4>
                 <ul className='text-sm text-blue-700 dark:text-blue-300 space-y-2'>
-                  <li> Peak usage expected during class hours (8 AM - 6 PM)</li>
+                  <li> Peak usage expected during class hours (9 AM - 5 PM)</li>
                   <li> Cost savings of 25% possible by optimizing peak hour usage</li>
                   <li> Weekend usage is 40% lower than weekdays</li>
                   <li> Consider shifting non-essential usage to off-peak hours</li>
@@ -847,6 +852,170 @@ const AIMLPanel: React.FC = () => {
           </div>
         );
 
+      case 'workflow':
+        // Smart workflow automation combining all AI predictions
+        const workflowForecastData = predictions.forecast || generateMockForecastData();
+        const anomalyData = predictions.anomaly || generateMockAnomalyData();
+        const maintenanceData = predictions.maintenance || generateMockMaintenanceData();
+
+        // Generate workflow insights based on combined analysis
+        const workflowInsights = generateWorkflowInsights(workflowForecastData, anomalyData, maintenanceData);
+
+        return (
+          <div className='space-y-6'>
+            {/* Workflow Overview */}
+            <Card>
+              <CardHeader>
+                <CardTitle className='flex items-center gap-2'>
+                  <Layers className='w-5 h-5 text-purple-500' />
+                  Smart Energy Workflow
+                </CardTitle>
+                <CardDescription>
+                  Automated analysis combining forecasting, anomaly detection, and maintenance predictions
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className='grid grid-cols-1 md:grid-cols-3 gap-4'>
+                  <div className='text-center p-4 bg-blue-50 dark:bg-blue-950/20 rounded-lg'>
+                    <TrendingUp className='w-8 h-8 text-blue-500 mx-auto mb-2' />
+                    <div className='text-lg font-semibold'>Forecasting</div>
+                    <div className='text-sm text-muted-foreground'>Energy prediction</div>
+                  </div>
+                  <div className='text-center p-4 bg-orange-50 dark:bg-orange-950/20 rounded-lg'>
+                    <AlertTriangle className='w-8 h-8 text-orange-500 mx-auto mb-2' />
+                    <div className='text-lg font-semibold'>Anomaly Detection</div>
+                    <div className='text-sm text-muted-foreground'>Pattern analysis</div>
+                  </div>
+                  <div className='text-center p-4 bg-green-50 dark:bg-green-950/20 rounded-lg'>
+                    <Wrench className='w-8 h-8 text-green-500 mx-auto mb-2' />
+                    <div className='text-lg font-semibold'>Maintenance</div>
+                    <div className='text-sm text-muted-foreground'>Health monitoring</div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Automated Recommendations */}
+            <Card>
+              <CardHeader>
+                <CardTitle className='flex items-center gap-2'>
+                  <Target className='w-5 h-5 text-purple-500' />
+                  Workflow Recommendations
+                </CardTitle>
+                <CardDescription>
+                  AI-driven actions based on combined analysis
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className='space-y-4'>
+                  {workflowInsights.recommendations.map((rec: any, index: number) => (
+                    <div key={index} className={`flex items-start gap-3 p-4 rounded-lg border ${
+                      rec.priority === 'high' ? 'bg-red-50 border-red-200 dark:bg-red-950/20' :
+                      rec.priority === 'medium' ? 'bg-yellow-50 border-yellow-200 dark:bg-yellow-950/20' :
+                      'bg-green-50 border-green-200 dark:bg-green-950/20'
+                    }`}>
+                      <rec.icon className={`w-5 h-5 mt-0.5 ${
+                        rec.priority === 'high' ? 'text-red-600' :
+                        rec.priority === 'medium' ? 'text-yellow-600' :
+                        'text-green-600'
+                      }`} />
+                      <div className='flex-1'>
+                        <div className='font-semibold'>{rec.title}</div>
+                        <div className='text-sm text-muted-foreground'>{rec.description}</div>
+                        <div className='text-xs mt-1'>
+                          <Badge variant='outline' className='capitalize'>{rec.priority} priority</Badge>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Workflow Metrics */}
+            <div className='grid grid-cols-1 md:grid-cols-2 gap-6'>
+              <Card>
+                <CardHeader>
+                  <CardTitle className='flex items-center gap-2'>
+                    <BarChart3 className='w-5 h-5 text-blue-500' />
+                    Efficiency Score
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className='text-center'>
+                    <div className='text-4xl font-bold text-blue-600 mb-2'>
+                      {workflowInsights.efficiencyScore.toFixed(1)}%
+                    </div>
+                    <div className='text-sm text-muted-foreground'>Overall system efficiency</div>
+                    <div className='mt-4 space-y-2'>
+                      <div className='flex justify-between text-sm'>
+                        <span>Energy optimization:</span>
+                        <span className='font-semibold'>{workflowInsights.energyOptimization}%</span>
+                      </div>
+                      <div className='flex justify-between text-sm'>
+                        <span>Maintenance readiness:</span>
+                        <span className='font-semibold'>{workflowInsights.maintenanceReadiness}%</span>
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className='flex items-center gap-2'>
+                    <Activity className='w-5 h-5 text-green-500' />
+                    System Health
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className='space-y-4'>
+                    <div className='flex items-center justify-between'>
+                      <span className='text-sm'>Device Health:</span>
+                      <Badge variant={maintenanceData.health_score > 80 ? 'default' : maintenanceData.health_score > 60 ? 'secondary' : 'destructive'}>
+                        {maintenanceData.health_score}%
+                      </Badge>
+                    </div>
+                    <div className='flex items-center justify-between'>
+                      <span className='text-sm'>Anomaly Risk:</span>
+                      <Badge variant={anomalyData.anomalies.length === 0 ? 'default' : anomalyData.anomalies.length < 3 ? 'secondary' : 'destructive'}>
+                        {anomalyData.anomalies.length === 0 ? 'Low' : anomalyData.anomalies.length < 3 ? 'Medium' : 'High'}
+                      </Badge>
+                    </div>
+                    <div className='flex items-center justify-between'>
+                      <span className='text-sm'>Cost Efficiency:</span>
+                      <Badge variant={workflowInsights.costEfficiency > 80 ? 'default' : workflowInsights.costEfficiency > 60 ? 'secondary' : 'destructive'}>
+                        {workflowInsights.costEfficiency}%
+                      </Badge>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Workflow Actions */}
+            <Card className='bg-purple-50 dark:bg-purple-950/20'>
+              <CardContent className='pt-6'>
+                <h4 className='font-semibold text-purple-800 dark:text-purple-200 mb-3 flex items-center gap-2'>
+                  <Zap className='w-4 h-4' />
+                  Automated Actions
+                </h4>
+                <div className='grid grid-cols-1 md:grid-cols-2 gap-4'>
+                  {workflowInsights.actions.map((action: any, index: number) => (
+                    <div key={index} className='flex items-center gap-3 p-3 bg-white dark:bg-gray-800 rounded-lg border'>
+                      <action.icon className='w-5 h-5 text-purple-600' />
+                      <div>
+                        <div className='font-medium text-sm'>{action.title}</div>
+                        <div className='text-xs text-muted-foreground'>{action.description}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        );
+
       default:
         return (
           <div className='flex items-center justify-center py-12'>
@@ -859,11 +1028,108 @@ const AIMLPanel: React.FC = () => {
     }
   };
 
+  // Generate workflow insights combining all AI predictions
+  const generateWorkflowInsights = (forecast: any, anomaly: any, maintenance: any) => {
+    const devicePower = currentDevice?.powerConsumption || 100;
+    const forecastData = forecast.forecast || [];
+    const anomalies = anomaly.anomalies || [];
+    const healthScore = maintenance.health_score || 85;
+    const failureProbability = maintenance.failure_probability || 0.15;
+
+    // Calculate efficiency score based on multiple factors
+    const energyEfficiency = Math.min(100, (devicePower * 0.9) / devicePower * 100);
+    const anomalyEfficiency = Math.max(0, 100 - (anomalies.length * 10));
+    const healthEfficiency = healthScore;
+    const efficiencyScore = (energyEfficiency + anomalyEfficiency + healthEfficiency) / 3;
+
+    // Generate recommendations based on combined analysis
+    const recommendations = [];
+
+    if (anomalies.length > 2) {
+      recommendations.push({
+        title: 'High Anomaly Detection',
+        description: 'Multiple anomalies detected. Schedule immediate inspection.',
+        priority: 'high',
+        icon: AlertTriangle
+      });
+    }
+
+    if (healthScore < 70) {
+      recommendations.push({
+        title: 'Device Health Check',
+        description: 'Device health below optimal. Consider maintenance.',
+        priority: 'high',
+        icon: Wrench
+      });
+    }
+
+    if (forecastData.some((usage: number) => usage > devicePower * 0.8)) {
+      recommendations.push({
+        title: 'Peak Usage Alert',
+        description: 'High energy consumption predicted. Optimize usage patterns.',
+        priority: 'medium',
+        icon: TrendingUp
+      });
+    }
+
+    if (failureProbability > 0.2) {
+      recommendations.push({
+        title: 'Failure Risk Mitigation',
+        description: 'High failure probability detected. Implement preventive measures.',
+        priority: 'medium',
+        icon: Shield
+      });
+    }
+
+    if (recommendations.length === 0) {
+      recommendations.push({
+        title: 'System Operating Normally',
+        description: 'All systems within optimal parameters. Continue monitoring.',
+        priority: 'low',
+        icon: CheckCircle
+      });
+    }
+
+    // Automated actions
+    const actions = [
+      {
+        title: 'Schedule Optimization',
+        description: 'Adjust device schedules based on usage patterns',
+        icon: Calendar
+      },
+      {
+        title: 'Alert Notifications',
+        description: 'Send maintenance alerts to appropriate teams',
+        icon: AlertCircle
+      },
+      {
+        title: 'Energy Optimization',
+        description: 'Implement energy-saving measures automatically',
+        icon: Zap
+      },
+      {
+        title: 'Performance Monitoring',
+        description: 'Continuous monitoring of device health metrics',
+        icon: Activity
+      }
+    ];
+
+    return {
+      efficiencyScore,
+      energyOptimization: Math.round(energyEfficiency),
+      maintenanceReadiness: Math.round(healthEfficiency),
+      costEfficiency: Math.round(85 + Math.random() * 10), // Mock cost efficiency
+      recommendations,
+      actions
+    };
+  };
+
   // Tab labels with simplified AI-focused descriptions
   const TABS = [
     { value: 'forecast', label: 'Energy Forecasting', icon: TrendingUp },
     { value: 'anomaly', label: 'Anomaly Detection', icon: AlertTriangle },
     { value: 'maintenance', label: 'Predictive Maintenance', icon: Wrench },
+    { value: 'workflow', label: 'Smart Automation', icon: Layers },
   ];
 
   return (

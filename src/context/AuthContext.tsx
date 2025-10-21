@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { User } from '../types';
 import { authAPI } from '../services/api';
+import { rolePermissionsAPI } from '../services/api';
 import socketService from '../services/socket';
 import { useToast } from '@/hooks/use-toast';
 
@@ -90,7 +91,30 @@ export function AuthProvider({ children }: AuthProviderProps) {
       try {
         // Verify token with backend by fetching the user profile
         const response = await authAPI.getProfile();
-        const userData = response.data.user;
+        let userData = response.data.user;
+
+        // Fetch role permissions and merge with user data
+        try {
+          const rolePermissionsResponse = await rolePermissionsAPI.getRolePermissions(userData.role);
+          if (rolePermissionsResponse.data?.data) {
+            const rolePermissions = rolePermissionsResponse.data.data;
+            
+            // Merge role permissions with user permissions
+            // Role permissions take precedence over individual user permissions
+            userData.permissions = {
+              ...userData.permissions,
+              ...rolePermissions.userManagement,
+              ...rolePermissions.deviceManagement,
+              ...rolePermissions.classroomManagement,
+              ...rolePermissions.scheduleManagement,
+              ...rolePermissions.systemManagement,
+              ...rolePermissions.extensionManagement,
+              // Add other permission categories as needed
+            };
+          }
+        } catch (roleError) {
+          console.warn('Failed to fetch role permissions, using default permissions:', roleError);
+        }
 
         setUser(userData);
         setIsAuthenticated(true);
@@ -110,7 +134,28 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   };
 
-  const login = (userData: User, token: string) => {
+  const login = async (userData: User, token: string) => {
+    try {
+      // Fetch role permissions and merge with user data
+      const rolePermissionsResponse = await rolePermissionsAPI.getRolePermissions(userData.role);
+      if (rolePermissionsResponse.data?.data) {
+        const rolePermissions = rolePermissionsResponse.data.data;
+        
+        // Merge role permissions with user permissions
+        userData.permissions = {
+          ...userData.permissions,
+          ...rolePermissions.userManagement,
+          ...rolePermissions.deviceManagement,
+          ...rolePermissions.classroomManagement,
+          ...rolePermissions.scheduleManagement,
+          ...rolePermissions.systemManagement,
+          ...rolePermissions.extensionManagement,
+        };
+      }
+    } catch (roleError) {
+      console.warn('Failed to fetch role permissions during login:', roleError);
+    }
+
     localStorage.setItem('auth_token', token);
     localStorage.setItem('user_data', JSON.stringify(userData));
     setUser(userData);

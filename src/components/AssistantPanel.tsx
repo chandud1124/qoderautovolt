@@ -2,6 +2,8 @@
 // In-app voice/NLP assistant using Web Speech API and Smart Home APIs
 
 import React, { useEffect, useRef, useState } from 'react';
+import { voiceAssistantAPI } from '@/services/api';
+import { toast } from 'sonner';
 
 const languages = [
   { code: 'en-US', label: 'English (US)' },
@@ -49,21 +51,55 @@ export const AssistantPanel: React.FC = () => {
   };
 
   // Simple NLP/command handler (expand as needed)
-  const handleCommand = (text: string) => {
-    // Example: "Turn off all lights in Room 101"
-    if (/turn off all lights in room (\d+)/i.test(text)) {
-      const room = text.match(/room (\d+)/i)?.[1];
-      setResponse(`✅ All lights in Room ${room} are now OFF.`);
-      // TODO: Send command to backend/Socket.IO/MQTT
-      return;
+  const handleCommand = async (text: string) => {
+    try {
+      // Example: "Turn off all lights in Room 101"
+      if (/turn off all lights in room (\d+)/i.test(text)) {
+        const room = text.match(/room (\d+)/i)?.[1];
+        
+        // Send voice command to backend
+        await voiceAssistantAPI.processVoiceCommand({
+          command: text,
+          voiceToken: 'web-assistant-session', // Use a session token for web interface
+        });
+        
+        setResponse(`✅ All lights in Room ${room} are now OFF.`);
+        toast.success(`Lights turned off in Room ${room}`);
+        return;
+      }
+      
+      if (/schedule ac to start (\d+) minutes before class/i.test(text)) {
+        const minutes = text.match(/(\d+) minutes/i)?.[1];
+        
+        // Send scheduling command to backend
+        await voiceAssistantAPI.processVoiceCommand({
+          command: text,
+          voiceToken: 'web-assistant-session',
+        });
+        
+        setResponse(`✅ AC scheduled to start ${minutes} minutes before class.`);
+        toast.success(`AC scheduled to start ${minutes} minutes before class`);
+        return;
+      }
+      
+      // Try to process any other command through the voice assistant API
+      try {
+        await voiceAssistantAPI.processVoiceCommand({
+          command: text,
+          voiceToken: 'web-assistant-session',
+        });
+        setResponse(`✅ Command processed: ${text}`);
+        toast.success('Command executed successfully');
+      } catch (apiError) {
+        console.error('Voice command processing failed:', apiError);
+        setResponse('Sorry, I could not process that command. Please try again.');
+        toast.error('Failed to process voice command');
+      }
+    } catch (error) {
+      console.error('Command execution error:', error);
+      setResponse('Sorry, there was an error processing your command.');
+      toast.error('Command execution failed');
     }
-    if (/schedule ac to start (\d+) minutes before class/i.test(text)) {
-      const minutes = text.match(/(\d+) minutes/i)?.[1];
-      setResponse(`✅ AC scheduled to start ${minutes} minutes before class.`);
-      // TODO: Send scheduling command
-      return;
-    }
-    setResponse('Sorry, I did not understand that command.');
   };
 
   return (

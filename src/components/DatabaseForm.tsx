@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -14,9 +14,21 @@ import { toast } from 'sonner';
 interface DatabaseFormProps {
   onSuccess?: () => void;
   onCancel?: () => void;
+  integration?: {
+    id: string;
+    name: string;
+    type: string;
+    config: {
+      dbType: string;
+      connectionString: string;
+      query: string;
+      updateInterval?: number;
+      autoPublish?: boolean;
+    };
+  };
 }
 
-const DatabaseForm: React.FC<DatabaseFormProps> = ({ onSuccess, onCancel }) => {
+const DatabaseForm: React.FC<DatabaseFormProps> = ({ onSuccess, onCancel, integration }) => {
   const [formData, setFormData] = useState({
     name: '',
     dbType: '',
@@ -27,6 +39,19 @@ const DatabaseForm: React.FC<DatabaseFormProps> = ({ onSuccess, onCancel }) => {
   });
   const [loading, setLoading] = useState(false);
   const [testing, setTesting] = useState(false);
+
+  useEffect(() => {
+    if (integration) {
+      setFormData({
+        name: integration.name || '',
+        dbType: integration.config?.dbType || '',
+        connectionString: integration.config?.connectionString || '',
+        query: integration.config?.query || '',
+        updateInterval: integration.config?.updateInterval ?? 60,
+        autoPublish: integration.config?.autoPublish ?? true
+      });
+    }
+  }, [integration]);
 
   const dbTypes = [
     { value: 'mysql', label: 'MySQL', example: 'mysql://user:pass@host:3306/database' },
@@ -44,19 +69,35 @@ const DatabaseForm: React.FC<DatabaseFormProps> = ({ onSuccess, onCancel }) => {
 
     try {
       setLoading(true);
-      await integrationsAPI.database.create({
-        name: formData.name,
-        dbType: formData.dbType as 'mysql' | 'postgres' | 'mssql',
-        connectionString: formData.connectionString,
-        query: formData.query,
-        updateInterval: formData.updateInterval,
-        autoPublish: formData.autoPublish
-      });
-      toast.success('Database integration created successfully');
+
+      if (integration) {
+        // Update existing database integration
+        await integrationsAPI.database.update(integration.id, {
+          name: formData.name,
+          dbType: formData.dbType,
+          connectionString: formData.connectionString,
+          query: formData.query,
+          updateInterval: formData.updateInterval,
+          autoPublish: formData.autoPublish
+        });
+        toast.success('Database integration updated successfully');
+      } else {
+        // Create new database integration
+        await integrationsAPI.database.create({
+          name: formData.name,
+          dbType: formData.dbType as 'mysql' | 'postgres' | 'mssql',
+          connectionString: formData.connectionString,
+          query: formData.query,
+          updateInterval: formData.updateInterval,
+          autoPublish: formData.autoPublish
+        });
+        toast.success('Database integration created successfully');
+      }
+
       onSuccess?.();
     } catch (error) {
-      console.error('Failed to create database integration:', error);
-      toast.error('Failed to create database integration');
+      console.error('Failed to save database integration:', error);
+      toast.error(`Failed to ${integration ? 'update' : 'create'} database integration`);
     } finally {
       setLoading(false);
     }
@@ -98,10 +139,13 @@ const DatabaseForm: React.FC<DatabaseFormProps> = ({ onSuccess, onCancel }) => {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Database className="h-5 w-5" />
-          Create Database Integration
+          {integration ? 'Edit Database Integration' : 'Create Database Integration'}
         </CardTitle>
         <CardDescription>
-          Connect to external databases to pull content and display it on your digital signage
+          {integration
+            ? 'Update your database connection and query configuration'
+            : 'Connect to external databases to pull content and display it on your digital signage'
+          }
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -246,10 +290,10 @@ const DatabaseForm: React.FC<DatabaseFormProps> = ({ onSuccess, onCancel }) => {
               {loading ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Creating...
+                  {integration ? 'Updating...' : 'Creating...'}
                 </>
               ) : (
-                'Create Database Integration'
+                integration ? 'Update Database Integration' : 'Create Database Integration'
               )}
             </Button>
             <Button type="button" variant="outline" onClick={onCancel}>

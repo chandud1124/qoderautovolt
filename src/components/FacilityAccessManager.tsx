@@ -11,7 +11,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Loader2, Users, Clock, Shield, AlertTriangle, RefreshCw } from 'lucide-react';
-import api from '@/services/api';
+import { api } from '@/services/api';
 
 interface FacilityAccess {
     _id: string;

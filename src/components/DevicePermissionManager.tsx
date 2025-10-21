@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAuth } from '@/hooks/useAuth';
 import { usePermissions } from '@/hooks/usePermissions';
-import api from '@/services/api';
+import { api } from '@/services/api';
 import { Clock, Shield, Settings, User, Monitor, AlertCircle, CheckCircle } from 'lucide-react';
 
 interface DevicePermission {

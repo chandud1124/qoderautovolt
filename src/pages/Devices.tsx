@@ -25,6 +25,7 @@ import DeleteDeviceDialog from '@/components/DeleteDeviceDialog';
 import { Device } from '@/types';
 import { useAuth } from '@/hooks/useAuth';
 import { useSocketConnection, useDeviceNotifications } from '@/hooks/useSocket';
+import { DevicesSkeleton } from '@/components/skeletons';
 
 type ViewMode = 'grid' | 'list';
 type FilterStatus = 'all' | 'online' | 'offline' | 'warning';
@@ -288,17 +289,7 @@ const Devices = () => {
   };
 
   if (!devices) {
-    return (
-      <div className="container mx-auto py-6">
-        <div className="flex items-center justify-center h-64">
-          <div className="text-center">
-            <RefreshCw className="w-8 h-8 animate-spin mx-auto mb-4 text-muted-foreground" />
-            <p className="text-muted-foreground">Loading devices...</p>
-//
-          </div>
-        </div>
-      </div>
-    );
+    return <DevicesSkeleton />;
   }
 
 

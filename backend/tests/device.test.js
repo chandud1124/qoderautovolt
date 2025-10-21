@@ -123,7 +123,7 @@ describe('Device API', () => {
             expect(response.body).toHaveProperty('success', true);
             expect(response.body).toHaveProperty('data');
             expect(response.body.data).toHaveProperty('name', 'Test Classroom Device');
-            expect(response.body.data).toHaveProperty('macAddress', 'AA:BB:CC:DD:EE:FF');
+            expect(response.body.data).toHaveProperty('macAddress', 'aa:bb:cc:dd:ee:ff');
             expect(response.body.data).toHaveProperty('switches');
             expect(Array.isArray(response.body.data.switches)).toBe(true);
         });
@@ -274,7 +274,7 @@ describe('Device API', () => {
             expect(response.body).toHaveProperty('success', true);
             expect(response.body).toHaveProperty('data');
             expect(response.body.data).toHaveProperty('name', 'New Test Device');
-            expect(response.body.data).toHaveProperty('macAddress', 'BB:CC:DD:EE:FF:AA');
+            expect(response.body.data).toHaveProperty('macAddress', 'bb:cc:dd:ee:ff:aa');
         });
 
         test('should reject device creation for non-admin', async () => {

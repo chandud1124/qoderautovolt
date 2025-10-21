@@ -25,11 +25,16 @@ export interface Device {
   pirGpio?: number;
   pirAutoOffDelay?: number;
   pirSensor?: PirSensor;
+  // Dual sensor support (Fixed GPIO: 34 for PIR, 35 for Microwave)
+  pirSensorType?: 'hc-sr501' | 'rcwl-0516' | 'both';
+  pirSensitivity?: number; // 0-100%
+  pirDetectionRange?: number; // 1-10 meters
+  motionDetectionLogic?: 'and' | 'or' | 'weighted';
   lastSeen: Date;
   location?: string;
   classroom?: string;
   assignedUsers?: string[];
-  deviceType?: 'esp32' | 'esp8266' | 'raspberry_pi'; // Device type for filtering
+  deviceType?: 'esp32' | 'esp8266'; // Device type for filtering
   notificationSettings?: DeviceNotificationSettings;
 }
 
@@ -61,6 +66,13 @@ export interface PirSensor {
   sensitivity: number;
   timeout: number; // auto-off timeout in seconds
   linkedSwitches: string[]; // switch IDs
+  // Dual sensor support
+  sensorType?: 'hc-sr501' | 'rcwl-0516' | 'both';
+  detectionRange?: number; // meters
+  secondaryGpio?: number;
+  secondaryType?: 'hc-sr501' | 'rcwl-0516';
+  secondaryTriggered?: boolean;
+  detectionLogic?: 'and' | 'or' | 'weighted';
   schedule?: {
     enabled: boolean;
     startTime: string;
@@ -311,3 +323,13 @@ export interface NoticeFilters {
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
 }
+
+// ============================================
+// Re-export new comprehensive type definitions
+// ============================================
+// Import all the newly defined types from separate files
+export * from './device';
+export * from './user';
+export * from './analytics';
+export * from './activityLog';
+export * from './common';

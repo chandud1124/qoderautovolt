@@ -24,7 +24,7 @@ import {
   Zap
 } from 'lucide-react';
 import { format, subDays, startOfDay, endOfDay } from 'date-fns';
-import api from '@/services/api';
+import { api } from '@/services/api';
 import { ActivityLog } from '@/types';
 
 

@@ -5,12 +5,9 @@ export const usePermissions = () => {
     const { user, refreshProfile } = useAuth();
 
     const role = user?.role || '';
-    const roleLevel = (user as any)?.roleLevel || 0;
-    const isApproved = (user as any)?.isApproved || false;
-    const isActive = (user as any)?.isActive || false;
-    const permissions = (user as any)?.permissions || {};
+    const permissions = (user?.permissions as any) || {};
 
-    // New role hierarchy
+    // Role hierarchy for backward compatibility
     const isSuperAdmin = role === 'super-admin';
     const isDean = role === 'dean';
     const isAdmin = role === 'admin';
@@ -20,14 +17,14 @@ export const usePermissions = () => {
     const isSecurity = role === 'security';
     const isGuest = role === 'guest';
 
-    // Permission groups based on role hierarchy
+    // Permission groups based on role hierarchy (fallback)
     const hasSuperAccess = isSuperAdmin;
-    const hasAdminAccess = hasSuperAccess || isAdmin;
+    const hasAdminAccess = hasSuperAccess || isAdmin || permissions.canManageUsers;
     const hasManagementAccess = hasAdminAccess || isDean;
     const hasStaffAccess = hasManagementAccess || isFaculty || isTeacher || isSecurity;
     const hasBasicAccess = hasStaffAccess || isStudent || isGuest;
 
-    // Specific permissions from user permissions object
+    // Use permissions from user object (which now includes role permissions)
     const canManageUsers = permissions.canManageUsers || hasAdminAccess;
     const canApproveUsers = permissions.canApproveUsers || hasManagementAccess;
     const canManageDevices = permissions.canManageDevices || hasStaffAccess;
@@ -105,9 +102,6 @@ export const usePermissions = () => {
         canSendNotifications,
         canManageAnnouncements,
         role,
-        roleLevel,
-        isApproved,
-        isActive,
         permissions,
         refreshProfile
     };

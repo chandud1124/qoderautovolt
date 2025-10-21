@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Bell, User, Wifi, WifiOff, Settings, LogOut, Home, Menu } from 'lucide-react';
+import { User, Wifi, WifiOff, Settings, LogOut, Home, Menu } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Sheet, SheetContent, SheetTrigger, SheetClose } from '@/components/ui/sheet';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -9,53 +9,42 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { useDevices } from '@/hooks/useDevices';
-import { useSecurityNotifications } from '@/hooks/useSecurityNotifications';
 import { navItems } from '@/nav-items';
 import { Sidebar } from './Sidebar';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { Logo } from '@/components/Logo';
-import { DeviceNotificationAlert } from '@/components/ScheduledNotificationAlert';
+import { NotificationDropdown } from '@/components/NotificationDropdown';
 
 export function Header() {
   const navigate = useNavigate();
   const location = useLocation();
   const { devices } = useDevices();
-  const { alerts: notifications } = useSecurityNotifications();
   const { user } = useAuth();
   const isMobile = useIsMobile();
   const { toast } = useToast();
 
   const currentPage = navItems.find(item => item.to === location.pathname) || navItems[0];
-  const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [showSidebar, setShowSidebar] = useState(false);
   
-  const notifRef = useRef(null);
   const userRef = useRef(null);
   const mobileMenuRef = useRef(null);
   const sidebarRef = useRef(null);
   
   // Global click handler ref
-  const isDropdownOpen = showNotifications || showUserMenu || showMobileMenu || showSidebar;
+  const isDropdownOpen = showUserMenu || showMobileMenu || showSidebar;
 
   const connectedDevices = devices.filter(device => device.status === 'online').length;
   const isConnected = connectedDevices > 0;
 
-  const handleBellClick = () => {
-    setShowNotifications(!showNotifications);
-    if (!showNotifications) setShowUserMenu(false);
-  };
-  
   const handleUserClick = () => {
     setShowUserMenu(!showUserMenu);
-    if (!showUserMenu) setShowNotifications(false);
   };
   
   const closeAll = () => {
-    setShowNotifications(false);
     setShowUserMenu(false);
     setShowSidebar(false);
   };
@@ -73,19 +62,16 @@ export function Header() {
     const handleClickOutside = (event) => {
       // Only process if at least one dropdown is open
       if (isDropdownOpen) {
-        // Check if click is within notification ref
-        const inNotifRef = notifRef.current?.contains(event.target);
         // Check if click is within user ref
         const inUserRef = userRef.current?.contains(event.target);
         
-        // If clicking inside either ref, don't close
-        if (inNotifRef || inUserRef) {
+        // If clicking inside user ref, don't close
+        if (inUserRef) {
           return;
         }
         
         // Check if click is outside all dropdown areas
         const isOutsideAll = (
-          (!notifRef.current || !notifRef.current.contains(event.target)) &&
           (!userRef.current || !userRef.current.contains(event.target)) &&
           (!mobileMenuRef.current || !mobileMenuRef.current.contains(event.target))
         );
@@ -160,65 +146,13 @@ export function Header() {
         </Button>
 
         {/* Notifications */}
-        <div className="relative flex-shrink-0" ref={notifRef}>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={handleBellClick}
-          >
-            <Bell className="h-5 w-5" />
-            {notifications.length > 0 && (
-              <Badge className="absolute -top-1 -right-1 h-4 w-4 p-0 flex items-center justify-center">
-                {notifications.length}
-              </Badge>
-            )}
-          </Button>
-
-          {showNotifications && (
-            <Card className={cn(
-              "shadow-lg z-[200]",
-              isMobile 
-                ? "fixed top-14 left-4 right-4 w-[calc(100vw-2rem)]" 
-                : "absolute right-0 top-full mt-2 w-80"
-            )}>
-              <CardHeader>
-                <CardTitle className="text-sm">Notifications</CardTitle>
-              </CardHeader>
-              <CardContent className="p-0">
-                <ScrollArea className="h-[300px]">
-                  {notifications.length > 0 ? (
-                    <div className="flex flex-col">
-                      {notifications.map((notification, index) => (
-                        <button
-                          key={index}
-                          className="flex items-start gap-2 p-3 text-left hover:bg-accent border-b last:border-0"
-                          onClick={() => {
-                            closeAll();
-                            navigate(`/alerts/${notification.id}`);
-                          }}
-                        >
-                          <div className="flex-1 space-y-1">
-                            <p className="text-xs font-medium">{notification.deviceName || 'System Alert'}</p>
-                            <p className="text-xs text-muted-foreground">{notification.message}</p>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="flex flex-col items-center justify-center h-full py-8 px-4 text-center">
-                      <Bell className="h-8 w-8 mb-2 opacity-50" />
-                      <p className="text-sm font-medium">No notifications</p>
-                    </div>
-                  )}
-                </ScrollArea>
-              </CardContent>
-            </Card>
-          )}
+        <div className="flex-shrink-0">
+          <NotificationDropdown />
         </div>
 
         {/* Time Limit Alerts */}
         <div className="hidden md:block flex-shrink-0">
-          <DeviceNotificationAlert />
+          {/* DeviceNotificationAlert removed - now using new notification system */}
         </div>
 
         {/* User menu */}
@@ -277,7 +211,7 @@ export function Header() {
       </div>
 
       {/* Backdrop */}
-      {(showNotifications || showUserMenu) && (
+      {showUserMenu && (
         <div 
           className="fixed inset-0 bg-black/30 backdrop-blur-[1px] z-[100]" 
           onClick={closeAll}

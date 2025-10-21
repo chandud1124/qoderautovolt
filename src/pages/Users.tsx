@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import api, { usersAPI } from '@/services/api';
+import { api, usersAPI } from '@/services/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -67,16 +67,104 @@ const Users = () => {
   };
 
   // CSV Import (basic)
-  const handleImportCSV = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImportCSV = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const text = ev.target?.result as string;
-      // TODO: Parse CSV and send to backend for bulk import
-      toast({ title: 'Import', description: 'CSV import not yet implemented', variant: 'default' });
-    };
-    reader.readAsText(file);
+
+    try {
+      const reader = new FileReader();
+      reader.onload = async (ev) => {
+        const text = ev.target?.result as string;
+        if (!text) return;
+
+        // Parse CSV
+        const lines = text.split('\n').filter(line => line.trim());
+        if (lines.length < 2) {
+          toast({ title: 'Import Error', description: 'CSV file must contain at least a header row and one data row', variant: 'destructive' });
+          return;
+        }
+
+        const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+        const requiredHeaders = ['name', 'email'];
+
+        // Check for required headers
+        const missingHeaders = requiredHeaders.filter(h => !headers.includes(h));
+        if (missingHeaders.length > 0) {
+          toast({ title: 'Import Error', description: `Missing required columns: ${missingHeaders.join(', ')}`, variant: 'destructive' });
+          return;
+        }
+
+        // Parse data rows
+        const usersToImport: any[] = [];
+        const errors: string[] = [];
+
+        for (let i = 1; i < lines.length; i++) {
+          const values = lines[i].split(',').map(v => v.trim());
+          if (values.length !== headers.length) {
+            errors.push(`Row ${i + 1}: Column count mismatch`);
+            continue;
+          }
+
+          const userData: any = {};
+          headers.forEach((header, index) => {
+            const value = values[index];
+            if (header === 'name' || header === 'email') {
+              userData[header] = value;
+            } else if (header === 'role') {
+              userData[header] = value || 'student';
+            } else if (header === 'department') {
+              userData[header] = value || 'Other';
+            } else if (header === 'phone') {
+              userData[header] = value;
+            } else if (header === 'employeeid') {
+              userData.employeeId = value;
+            } else if (header === 'designation') {
+              userData[header] = value;
+            }
+          });
+
+          // Basic validation
+          if (!userData.name || !userData.email) {
+            errors.push(`Row ${i + 1}: Missing name or email`);
+            continue;
+          }
+
+          // Email validation
+          const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+          if (!emailRegex.test(userData.email)) {
+            errors.push(`Row ${i + 1}: Invalid email format`);
+            continue;
+          }
+
+          usersToImport.push(userData);
+        }
+
+        if (errors.length > 0) {
+          toast({ title: 'Import Validation Errors', description: errors.slice(0, 3).join('; ') + (errors.length > 3 ? '...' : ''), variant: 'destructive' });
+          return;
+        }
+
+        if (usersToImport.length === 0) {
+          toast({ title: 'Import Error', description: 'No valid users found to import', variant: 'destructive' });
+          return;
+        }
+
+        // Send to backend for bulk import
+        try {
+          const response = await api.post('/users/bulk-import', { users: usersToImport });
+          toast({ title: 'Import Success', description: `Successfully imported ${response.data.imported} users`, variant: 'default' });
+          fetchUsers(); // Refresh the user list
+        } catch (error: any) {
+          toast({ title: 'Import Error', description: error.response?.data?.message || 'Failed to import users', variant: 'destructive' });
+        }
+      };
+      reader.readAsText(file);
+    } catch (error) {
+      toast({ title: 'Import Error', description: 'Failed to read CSV file', variant: 'destructive' });
+    }
+
+    // Reset file input
+    e.target.value = '';
   };
   // Advanced filter states
   const [roleFilter, setRoleFilter] = useState<string>('all');

@@ -61,8 +61,31 @@ const activityLogSchema = new mongoose.Schema({
   timestamps: false
 });
 
+// ============================================
+// Database Indexes for Performance
+// ============================================
+// Compound index for device activity queries (most common query pattern)
 activityLogSchema.index({ deviceId: 1, timestamp: -1 });
+
+// Index for user activity history
 activityLogSchema.index({ userId: 1, timestamp: -1 });
+
+// Index for classroom-based queries
 activityLogSchema.index({ classroom: 1, timestamp: -1 });
+
+// Index for action-based queries (e.g., finding all 'on' actions)
+activityLogSchema.index({ action: 1, timestamp: -1 });
+
+// Index for time-based queries (e.g., logs from last 24 hours)
+activityLogSchema.index({ timestamp: -1 });
+
+// Index for trigger source queries (e.g., all schedule-triggered actions)
+activityLogSchema.index({ triggeredBy: 1, timestamp: -1 });
+
+// Compound index for switch-specific queries
+activityLogSchema.index({ deviceId: 1, switchId: 1, timestamp: -1 });
+
+// Index for conflict detection queries
+activityLogSchema.index({ 'conflictResolution.hasConflict': 1, timestamp: -1 });
 
 module.exports = mongoose.model('ActivityLog', activityLogSchema);

@@ -290,7 +290,7 @@ const Register: React.FC = () => {
               <Input
                 id="name"
                 name="name"
-                placeholder="John Doe"
+                placeholder="Enter your full name"
                 value={form.name}
                 onChange={handleChange}
                 className={errors.name ? 'border-red-500' : ''}

@@ -83,6 +83,7 @@ const IntegrationsPage: React.FC = () => {
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [integrationType, setIntegrationType] = useState<string>('');
   const [showFormDialog, setShowFormDialog] = useState(false);
+  const [editingIntegration, setEditingIntegration] = useState<Integration | null>(null);
 
   useEffect(() => {
     loadIntegrations();
@@ -238,7 +239,12 @@ const IntegrationsPage: React.FC = () => {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => {/* TODO: Implement edit */}}
+            onClick={() => {
+              setSelectedIntegration(integration);
+              setIntegrationType(integration.type);
+              setEditingIntegration(integration);
+              setShowFormDialog(true);
+            }}
           >
             <Edit className="h-4 w-4 mr-1" />
             Edit
@@ -446,66 +452,81 @@ const IntegrationsPage: React.FC = () => {
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           {integrationType === 'rss' && (
             <RSSFeedForm
+              integration={editingIntegration}
               onSuccess={() => {
                 setShowFormDialog(false);
                 setIntegrationType('');
+                setEditingIntegration(null);
                 loadIntegrations();
               }}
               onCancel={() => {
                 setShowFormDialog(false);
                 setIntegrationType('');
+                setEditingIntegration(null);
               }}
             />
           )}
           {integrationType === 'social-media' && (
             <SocialMediaForm
+              integration={editingIntegration}
               onSuccess={() => {
                 setShowFormDialog(false);
                 setIntegrationType('');
+                setEditingIntegration(null);
                 loadIntegrations();
               }}
               onCancel={() => {
                 setShowFormDialog(false);
                 setIntegrationType('');
+                setEditingIntegration(null);
               }}
             />
           )}
           {integrationType === 'weather' && (
             <WeatherForm
+              integration={editingIntegration}
               onSuccess={() => {
                 setShowFormDialog(false);
                 setIntegrationType('');
+                setEditingIntegration(null);
                 loadIntegrations();
               }}
               onCancel={() => {
                 setShowFormDialog(false);
                 setIntegrationType('');
+                setEditingIntegration(null);
               }}
             />
           )}
           {integrationType === 'webhook' && (
             <WebhookForm
+              integration={editingIntegration}
               onSuccess={() => {
                 setShowFormDialog(false);
                 setIntegrationType('');
+                setEditingIntegration(null);
                 loadIntegrations();
               }}
               onCancel={() => {
                 setShowFormDialog(false);
                 setIntegrationType('');
+                setEditingIntegration(null);
               }}
             />
           )}
           {integrationType === 'database' && (
             <DatabaseForm
+              integration={editingIntegration}
               onSuccess={() => {
                 setShowFormDialog(false);
                 setIntegrationType('');
+                setEditingIntegration(null);
                 loadIntegrations();
               }}
               onCancel={() => {
                 setShowFormDialog(false);
                 setIntegrationType('');
+                setEditingIntegration(null);
               }}
             />
           )}

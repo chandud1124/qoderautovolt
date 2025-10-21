@@ -22,4 +22,24 @@ int manualSwitchPins[6] = {25, 26, 27, 32, 33, 23};
 #define RELAY_ACTIVE_HIGH false  // Set to true if relays are active HIGH, false if active LOW
 #define MANUAL_ACTIVE_LOW true  // Set to true if manual switches are active LOW (pulled up), false if active HIGH
 
+// Motion Sensor Configuration (Dual Sensor Support)
+// Using INPUT-ONLY GPIO pins (34-39) - NO conflict with relays or manual switches!
+// NOTE: These are DEFAULT values. Actual configuration is set via web application
+// and received through MQTT from backend (esp32/config topic)
+#define MOTION_SENSOR_ENABLED false     // Default: disabled (configured via web UI)
+#define MOTION_SENSOR_TYPE "hc-sr501"   // Default: HC-SR501 PIR (configured via web UI)
+#define MOTION_SENSOR_PIN 34            // DEFAULT PRIMARY sensor GPIO (configured via web UI)
+#define SECONDARY_SENSOR_PIN 35         // DEFAULT SECONDARY sensor GPIO (configured via web UI)
+#define MOTION_AUTO_OFF_DELAY 30        // Default: 30 seconds (configured via web UI)
+#define MOTION_SENSITIVITY 50           // Default: 50% (configured via web UI)
+#define MOTION_DETECTION_RANGE 7        // Default: 7 meters (configured via web UI)
+#define DETECTION_LOGIC "and"           // Default: AND logic (configured via web UI)
+
+// GPIO Pin Usage Summary:
+// Relays:         16, 17, 18, 19, 21, 22 (OUTPUT)
+// Manual Switches: 25, 26, 27, 32, 33, 23 (INPUT with pull-up)
+// PIR Sensor:     34 (INPUT-ONLY, no conflict!)
+// Microwave Sensor: 35 (INPUT-ONLY, no conflict!)
+// Available:      36, 39 (INPUT-ONLY), 0, 2, 4, 5, 12, 13, 14, 15 (I/O)
+
 #endif // CONFIG_H

@@ -31,7 +31,7 @@ import {
   Eye
 } from 'lucide-react';
 import { toast } from 'sonner';
-import api from '@/services/api';
+import { api } from '@/services/api';
 
 interface ScheduledContent {
   _id: string;

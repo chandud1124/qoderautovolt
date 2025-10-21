@@ -141,6 +141,7 @@ const userSchema = new mongoose.Schema({
   notificationPreferences: {
     email: { type: Boolean, default: true },
     inApp: { type: Boolean, default: true },
+    telegram: { type: Boolean, default: false }, // Enable Telegram notifications
     securityAlerts: { type: Boolean, default: false } // Only security personnel
   },
   registrationReason: {
@@ -351,5 +352,26 @@ userSchema.pre('save', async function (next) {
 userSchema.methods.matchPassword = async function (password) {
   return await bcrypt.compare(password, this.password);
 };
+
+// ============================================
+// Database Indexes for Performance
+// ============================================
+// Note: email and role already have indexes defined in schema
+// These are additional compound indexes for common query patterns
+
+// Compound index for filtering active approved users
+userSchema.index({ isActive: 1, isApproved: 1 });
+
+// Compound index for department-based queries
+userSchema.index({ department: 1, role: 1 });
+
+// Index for employee ID lookups (sparse to allow nulls)
+userSchema.index({ employeeId: 1 }, { sparse: true });
+
+// Index for online status queries
+userSchema.index({ isOnline: 1, lastSeen: -1 });
+
+// Compound index for classroom permissions
+userSchema.index({ 'classroomPermissions.canAccessAllClassrooms': 1, role: 1 });
 
 module.exports = mongoose.model('User', userSchema);

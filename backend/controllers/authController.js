@@ -399,14 +399,14 @@ const login = async (req, res) => {
 
     // Extra debug (only in non-production)
     if (process.env.NODE_ENV !== 'production') {
-       
+
       console.log('[auth:login] attempt', { email });
     }
 
     const user = await User.findOne({ email }).select('+password');
     if (!user || !(await user.matchPassword(password))) {
       if (process.env.NODE_ENV !== 'production') {
-         
+
         console.log('[auth:login] invalid credentials', { email, found: !!user });
       }
       return res.status(401).json({ message: 'Invalid credentials' });
@@ -425,6 +425,41 @@ const login = async (req, res) => {
 
     const token = generateToken(user._id);
 
+    // Fetch role permissions if available
+    let rolePermissions = null;
+    try {
+      const RolePermissions = mongoose.model('RolePermissions');
+      const rolePerms = await RolePermissions.findOne({
+        role: user.role,
+        'metadata.isActive': true
+      });
+
+      if (rolePerms) {
+        rolePermissions = {
+          userManagement: rolePerms.userManagement,
+          deviceManagement: rolePerms.deviceManagement,
+          classroomManagement: rolePerms.classroomManagement,
+          scheduleManagement: rolePerms.scheduleManagement,
+          activityManagement: rolePerms.activityManagement,
+          securityManagement: rolePerms.securityManagement,
+          ticketManagement: rolePerms.ticketManagement,
+          systemManagement: rolePerms.systemManagement,
+          extensionManagement: rolePerms.extensionManagement,
+          calendarIntegration: rolePerms.calendarIntegration,
+          esp32Management: rolePerms.esp32Management,
+          bulkOperations: rolePerms.bulkOperations,
+          departmentRestrictions: rolePerms.departmentRestrictions,
+          timeRestrictions: rolePerms.timeRestrictions,
+          notifications: rolePerms.notifications,
+          apiAccess: rolePerms.apiAccess,
+          audit: rolePerms.audit
+        };
+      }
+    } catch (roleError) {
+      console.warn('Failed to fetch role permissions during login:', roleError);
+      // Continue without role permissions - user will have default permissions
+    }
+
     res.json({
       success: true,
       token,
@@ -435,12 +470,13 @@ const login = async (req, res) => {
         role: user.role,
         department: user.department,
         accessLevel: user.accessLevel,
-        assignedDevices: user.assignedDevices
+        assignedDevices: user.assignedDevices,
+        rolePermissions: rolePermissions
       }
     });
   } catch (error) {
     if (process.env.NODE_ENV !== 'production') {
-       
+
       console.error('[auth:login] error', error);
     }
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -459,6 +495,42 @@ const getProfile = async (req, res) => {
     if (cached && (now - cached.ts) < 5000) { // 5s TTL
       return res.json({ success: true, user: cached.data });
     }
+
+    // Fetch role permissions if available
+    let rolePermissions = null;
+    try {
+      const RolePermissions = mongoose.model('RolePermissions');
+      const rolePerms = await RolePermissions.findOne({
+        role: user.role,
+        'metadata.isActive': true
+      });
+
+      if (rolePerms) {
+        rolePermissions = {
+          userManagement: rolePerms.userManagement,
+          deviceManagement: rolePerms.deviceManagement,
+          classroomManagement: rolePerms.classroomManagement,
+          scheduleManagement: rolePerms.scheduleManagement,
+          activityManagement: rolePerms.activityManagement,
+          securityManagement: rolePerms.securityManagement,
+          ticketManagement: rolePerms.ticketManagement,
+          systemManagement: rolePerms.systemManagement,
+          extensionManagement: rolePerms.extensionManagement,
+          calendarIntegration: rolePerms.calendarIntegration,
+          esp32Management: rolePerms.esp32Management,
+          bulkOperations: rolePerms.bulkOperations,
+          departmentRestrictions: rolePerms.departmentRestrictions,
+          timeRestrictions: rolePerms.timeRestrictions,
+          notifications: rolePerms.notifications,
+          apiAccess: rolePerms.apiAccess,
+          audit: rolePerms.audit
+        };
+      }
+    } catch (roleError) {
+      console.warn('Failed to fetch role permissions during profile fetch:', roleError);
+      // Continue without role permissions
+    }
+
     const safeUser = {
       _id: user._id,
       id: user.id,
@@ -480,7 +552,8 @@ const getProfile = async (req, res) => {
       profilePicture: user.profilePicture,
       idDocument: user.idDocument,
       registrationReason: user.registrationReason,
-      lastProfileUpdate: user.lastProfileUpdate
+      lastProfileUpdate: user.lastProfileUpdate,
+      rolePermissions: rolePermissions
     };
     global.__profileCache.set(key, { ts: now, data: safeUser });
     res.json({ success: true, user: safeUser });

@@ -220,4 +220,6 @@ async def get_model_info(device_id: str):
     }
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8002, reload=True)
+    import uvicorn
+    print("Starting uvicorn server...")
+    uvicorn.run(app, host="127.0.0.1", port=8002)

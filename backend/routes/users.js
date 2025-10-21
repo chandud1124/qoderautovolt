@@ -252,4 +252,73 @@ router.post('/bulk/delete', authorize('admin', 'super-admin'), bulkDeleteUsers);
 // POST /api/users/bulk/assign-role - bulk assign role to users
 router.post('/bulk/assign-role', authorize('admin', 'super-admin'), bulkAssignRole);
 
+// POST /api/users/bulk-import - bulk import users from CSV
+router.post('/bulk-import', authorize('admin', 'super-admin'), async (req, res) => {
+  try {
+    const { users } = req.body;
+    if (!users || !Array.isArray(users) || users.length === 0) {
+      return res.status(400).json({ message: 'Users array is required' });
+    }
+
+    const User = require('../models/User');
+    const results = {
+      imported: 0,
+      skipped: 0,
+      errors: []
+    };
+
+    for (const userData of users) {
+      try {
+        // Check if user already exists
+        const existingUser = await User.findOne({ email: userData.email });
+        if (existingUser) {
+          results.skipped++;
+          results.errors.push(`User with email ${userData.email} already exists`);
+          continue;
+        }
+
+        // Generate temporary password
+        const tempPassword = crypto.randomBytes(8).toString('hex');
+
+        // Create user
+        const newUser = new User({
+          name: userData.name,
+          email: userData.email,
+          password: tempPassword, // Will be hashed by pre-save hook
+          role: userData.role || 'student',
+          department: userData.department || 'Other',
+          phone: userData.phone,
+          employeeId: userData.employeeId,
+          designation: userData.designation,
+          isActive: true,
+          isApproved: true, // Auto-approve bulk imports
+          firstLoginResetRequired: true
+        });
+
+        await newUser.save();
+
+        // Send welcome email with temporary password
+        try {
+          await sendTempPasswordEmail(newUser.email, tempPassword);
+        } catch (emailError) {
+          console.warn(`Failed to send welcome email to ${newUser.email}:`, emailError.message);
+        }
+
+        results.imported++;
+      } catch (error) {
+        results.errors.push(`Error importing ${userData.email}: ${error.message}`);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Imported ${results.imported} users, skipped ${results.skipped}`,
+      data: results
+    });
+  } catch (error) {
+    console.error('Bulk import error:', error);
+    res.status(500).json({ message: 'Error during bulk import' });
+  }
+});
+
 module.exports = router;

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -12,11 +12,12 @@ import { integrationsAPI } from '@/services/api';
 import { toast } from 'sonner';
 
 interface SocialMediaFormProps {
+  integration?: any;
   onSuccess?: () => void;
   onCancel?: () => void;
 }
 
-const SocialMediaForm: React.FC<SocialMediaFormProps> = ({ onSuccess, onCancel }) => {
+const SocialMediaForm: React.FC<SocialMediaFormProps> = ({ integration, onSuccess, onCancel }) => {
   const [formData, setFormData] = useState({
     name: '',
     platform: '',
@@ -28,6 +29,21 @@ const SocialMediaForm: React.FC<SocialMediaFormProps> = ({ onSuccess, onCancel }
   });
   const [loading, setLoading] = useState(false);
   const [testing, setTesting] = useState(false);
+
+  // Populate form data when editing an existing integration
+  useEffect(() => {
+    if (integration) {
+      setFormData({
+        name: integration.name || '',
+        platform: integration.config?.platform || '',
+        accessToken: integration.config?.accessToken || '',
+        accounts: integration.config?.accounts ? integration.config.accounts.join(', ') : '',
+        hashtags: integration.config?.hashtags ? integration.config.hashtags.join(', ') : '',
+        updateInterval: integration.config?.updateInterval || 30,
+        autoPublish: integration.config?.autoPublish ?? true
+      });
+    }
+  }, [integration]);
 
   const platforms = [
     { value: 'twitter', label: 'Twitter', icon: Twitter, color: 'text-blue-500' },
@@ -45,7 +61,7 @@ const SocialMediaForm: React.FC<SocialMediaFormProps> = ({ onSuccess, onCancel }
 
     try {
       setLoading(true);
-      await integrationsAPI.socialMedia.create({
+      const integrationData = {
         name: formData.name,
         platform: formData.platform as 'instagram' | 'twitter' | 'facebook',
         accessToken: formData.accessToken,
@@ -53,12 +69,21 @@ const SocialMediaForm: React.FC<SocialMediaFormProps> = ({ onSuccess, onCancel }
         hashtags: formData.hashtags ? formData.hashtags.split(',').map(h => h.trim()).filter(h => h) : undefined,
         updateInterval: formData.updateInterval,
         autoPublish: formData.autoPublish
-      });
-      toast.success('Social media integration created successfully');
+      };
+
+      if (integration) {
+        // Update existing integration
+        await integrationsAPI.socialMedia.update(integration._id, integrationData);
+        toast.success('Social media integration updated successfully');
+      } else {
+        // Create new integration
+        await integrationsAPI.socialMedia.create(integrationData);
+        toast.success('Social media integration created successfully');
+      }
       onSuccess?.();
     } catch (error) {
-      console.error('Failed to create social media integration:', error);
-      toast.error('Failed to create social media integration');
+      console.error('Failed to save social media integration:', error);
+      toast.error(`Failed to ${integration ? 'update' : 'create'} social media integration`);
     } finally {
       setLoading(false);
     }
@@ -98,9 +123,9 @@ const SocialMediaForm: React.FC<SocialMediaFormProps> = ({ onSuccess, onCancel }
   return (
     <Card className="w-full max-w-2xl">
       <CardHeader>
-        <CardTitle>Create Social Media Integration</CardTitle>
+        <CardTitle>{integration ? 'Edit' : 'Create'} Social Media Integration</CardTitle>
         <CardDescription>
-          Connect to social media platforms to automatically fetch and publish posts as notices
+          {integration ? 'Update' : 'Connect to'} social media platforms to automatically fetch and publish posts as notices
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -243,10 +268,10 @@ const SocialMediaForm: React.FC<SocialMediaFormProps> = ({ onSuccess, onCancel }
               {loading ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Creating...
+                  {integration ? 'Updating...' : 'Creating...'}
                 </>
               ) : (
-                'Create Social Media Integration'
+                `${integration ? 'Update' : 'Create'} Social Media Integration`
               )}
             </Button>
             <Button type="button" variant="outline" onClick={onCancel}>

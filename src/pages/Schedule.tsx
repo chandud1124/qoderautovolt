@@ -1,7 +1,7 @@
 
 
 import React, { useState, useEffect } from 'react';
-import api from '@/services/api';
+import { api } from '@/services/api';
 import { scheduleAPI } from '@/services/api';
 import { useToast } from '@/hooks/use-toast';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';

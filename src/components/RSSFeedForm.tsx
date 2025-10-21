@@ -11,21 +11,24 @@ import { integrationsAPI } from '@/services/api';
 import { toast } from 'sonner';
 
 interface RSSFeedFormProps {
+  integration?: any;
   onSuccess?: () => void;
   onCancel?: () => void;
 }
 
-const RSSFeedForm: React.FC<RSSFeedFormProps> = ({ onSuccess, onCancel }) => {
+const RSSFeedForm: React.FC<RSSFeedFormProps> = ({ integration, onSuccess, onCancel }) => {
+  const isEditing = !!integration;
+  
   const [formData, setFormData] = useState({
-    name: '',
-    url: '',
-    updateInterval: 30,
-    maxItems: 10,
-    autoPublish: true,
+    name: integration?.name || '',
+    url: integration?.config?.url || '',
+    updateInterval: integration?.config?.updateInterval || 30,
+    maxItems: integration?.config?.maxItems || 10,
+    autoPublish: integration?.config?.autoPublish ?? true,
     filters: {
-      keywords: '',
-      excludeKeywords: '',
-      categories: ''
+      keywords: integration?.config?.filters?.keywords || '',
+      excludeKeywords: integration?.config?.filters?.excludeKeywords || '',
+      categories: integration?.config?.filters?.categories || ''
     }
   });
   const [loading, setLoading] = useState(false);
@@ -41,19 +44,31 @@ const RSSFeedForm: React.FC<RSSFeedFormProps> = ({ onSuccess, onCancel }) => {
 
     try {
       setLoading(true);
-      await integrationsAPI.rss.create({
-        name: formData.name,
-        url: formData.url,
-        updateInterval: formData.updateInterval,
-        maxItems: formData.maxItems,
-        autoPublish: formData.autoPublish,
-        filters: formData.filters
-      });
-      toast.success('RSS feed created successfully');
+      if (isEditing) {
+        await integrationsAPI.rss.update(integration._id, {
+          name: formData.name,
+          url: formData.url,
+          updateInterval: formData.updateInterval,
+          maxItems: formData.maxItems,
+          autoPublish: formData.autoPublish,
+          filters: formData.filters
+        });
+        toast.success('RSS feed updated successfully');
+      } else {
+        await integrationsAPI.rss.create({
+          name: formData.name,
+          url: formData.url,
+          updateInterval: formData.updateInterval,
+          maxItems: formData.maxItems,
+          autoPublish: formData.autoPublish,
+          filters: formData.filters
+        });
+        toast.success('RSS feed created successfully');
+      }
       onSuccess?.();
     } catch (error) {
-      console.error('Failed to create RSS feed:', error);
-      toast.error('Failed to create RSS feed');
+      console.error(`Failed to ${isEditing ? 'update' : 'create'} RSS feed:`, error);
+      toast.error(`Failed to ${isEditing ? 'update' : 'create'} RSS feed`);
     } finally {
       setLoading(false);
     }
@@ -102,9 +117,9 @@ const RSSFeedForm: React.FC<RSSFeedFormProps> = ({ onSuccess, onCancel }) => {
   return (
     <Card className="w-full max-w-2xl">
       <CardHeader>
-        <CardTitle>Create RSS Feed Integration</CardTitle>
+        <CardTitle>{isEditing ? 'Edit RSS Feed Integration' : 'Create RSS Feed Integration'}</CardTitle>
         <CardDescription>
-          Configure an RSS feed to automatically fetch and publish content as notices
+          {isEditing ? 'Update the RSS feed configuration' : 'Configure an RSS feed to automatically fetch and publish content as notices'}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -237,10 +252,10 @@ const RSSFeedForm: React.FC<RSSFeedFormProps> = ({ onSuccess, onCancel }) => {
               {loading ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Creating...
+                  {isEditing ? 'Updating...' : 'Creating...'}
                 </>
               ) : (
-                'Create RSS Feed'
+                isEditing ? 'Update RSS Feed' : 'Create RSS Feed'
               )}
             </Button>
             <Button type="button" variant="outline" onClick={onCancel}>

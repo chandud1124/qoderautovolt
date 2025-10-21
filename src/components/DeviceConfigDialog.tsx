@@ -97,6 +97,11 @@ const formSchema = z.object({
   pirEnabled: z.boolean().default(false),
   pirGpio: z.number().min(0).max(39).optional(),
   pirAutoOffDelay: z.number().min(0).default(30),
+  // Dual sensor support - Fixed GPIO pins (34 for PIR, 35 for Microwave)
+  pirSensorType: z.enum(['hc-sr501', 'rcwl-0516', 'both']).default('hc-sr501').optional(),
+  pirSensitivity: z.number().min(0).max(100).default(50).optional(),
+  pirDetectionRange: z.number().min(1).max(10).default(7).optional(),
+  motionDetectionLogic: z.enum(['and', 'or', 'weighted']).default('and').optional(),
   deviceNotifications: deviceNotificationSchema.optional(),
   switches: z.array(switchSchema).min(1).max(8).refine(sw => {
     const prim = sw.map(s => s.gpio);
@@ -523,149 +528,178 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
             <Separator />
             <div className="space-y-4">
               <FormField control={form.control} name="pirEnabled" render={({ field }) => (<FormItem className="flex items-center gap-2"><FormControl><UiSwitch checked={!!field.value} onCheckedChange={field.onChange} /></FormControl><FormLabel className="!mt-0">Enable PIR Sensor</FormLabel></FormItem>)} />
+              {/* Auto-Off Delay moved to dual sensor section below */}
+
+              {/* Dual Sensor Configuration */}
               {form.watch('pirEnabled') && (
-                <div className="grid gap-4 md:grid-cols-2">
-                  <FormField control={form.control} name="pirGpio" render={({ field }) => {
-                    const deviceType = form.getValues('deviceType') || 'esp32';
-                    
-                    // Device-specific recommended PIR pins
-                    const recommendedPirPins = deviceType === 'esp8266' 
-                      ? [4, 5, 12, 13, 14, 16]  // ESP8266 safe pins
-                      : [34, 35, 36, 39, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33]; // ESP32 pins
-                    
-                    const availablePins = gpioInfo.filter(p => p.safe && recommendedPirPins.includes(p.pin));
-                    const list = [...availablePins];
+                <>
+                  <FormField control={form.control} name="pirSensorType" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Motion Sensor Type</FormLabel>
+                      <Select value={field.value || 'hc-sr501'} onValueChange={field.onChange}>
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select sensor type" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="hc-sr501">
+                            <div className="flex flex-col items-start py-1">
+                              <span className="font-medium">HC-SR501 (PIR Only)</span>
+                              <span className="text-xs text-muted-foreground">Passive Infrared • 5-20V • 7m range</span>
+                            </div>
+                          </SelectItem>
+                          <SelectItem value="rcwl-0516">
+                            <div className="flex flex-col items-start py-1">
+                              <span className="font-medium">RCWL-0516 (Microwave Only)</span>
+                              <span className="text-xs text-muted-foreground">Microwave Radar • 3.3V • Through walls</span>
+                            </div>
+                          </SelectItem>
+                          <SelectItem value="both">
+                            <div className="flex flex-col items-start py-1">
+                              <span className="font-medium">🔥 Both Sensors (Dual Mode)</span>
+                              <span className="text-xs text-muted-foreground">PIR + Microwave • 95%+ accuracy</span>
+                            </div>
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FormDescription>
+                        {field.value === 'both' 
+                          ? '✅ Recommended: Dual mode provides best accuracy with redundancy'
+                          : field.value === 'rcwl-0516'
+                          ? '⚠️ Microwave detects through walls - may trigger from adjacent rooms'
+                          : 'PIR detects body heat and motion in line-of-sight only'}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
 
-                    // If current pin is not in recommended list, add it to the list so user can see it but with warning
-                    if (field.value !== undefined && !list.find(p => p.pin === field.value)) {
-                      const currentPin = gpioInfo.find(p => p.pin === field.value);
-                      if (currentPin) list.push(currentPin);
-                    }
-                    list.sort((a, b) => a.pin - b.pin);
+                  {/* Fixed GPIO Pin Information */}
+                  {form.watch('pirSensorType') && (
+                    <Alert className="border-primary/50 bg-primary/10">
+                      <Info className="h-4 w-4 text-primary" />
+                      <AlertDescription>
+                        <strong>GPIO Pin Configuration (Fixed):</strong>
+                        <ul className="text-xs mt-1 space-y-1 list-disc list-inside">
+                          {form.watch('pirSensorType') === 'hc-sr501' && (
+                            <li>GPIO 34: HC-SR501 PIR sensor (Input-only pin)</li>
+                          )}
+                          {form.watch('pirSensorType') === 'rcwl-0516' && (
+                            <li>GPIO 35: RCWL-0516 Microwave sensor (Input-only pin)</li>
+                          )}
+                          {form.watch('pirSensorType') === 'both' && (
+                            <>
+                              <li>GPIO 34: HC-SR501 PIR sensor (Primary)</li>
+                              <li>GPIO 35: RCWL-0516 Microwave sensor (Secondary)</li>
+                            </>
+                          )}
+                          <li>No pin conflicts with relays (16,17,18,19,21,22) ✅</li>
+                          <li>No pin conflicts with manual switches (25,26,27,32,33,23) ✅</li>
+                        </ul>
+                      </AlertDescription>
+                    </Alert>
+                  )}
 
-                    const getPinStatusIcon = (pin: GpioPinInfo) => {
-                      if (pin.status === 'safe') return <CheckCircle className="w-4 h-4 text-success" />;
-                      if (pin.status === 'problematic') return <AlertTriangle className="w-4 h-4 text-warning" />;
-                      return <XCircle className="w-4 h-4 text-danger" />;
-                    };
-
-                    const getPinStatusDot = (pin: GpioPinInfo) => {
-                      const dotClass = "w-2 h-2 rounded-full flex-shrink-0";
-                      if (pin.status === 'safe') return <div className={`${dotClass} bg-success`} />;
-                      if (pin.status === 'problematic') return <div className={`${dotClass} bg-warning`} />;
-                      return <div className={`${dotClass} bg-danger`} />;
-                    };
-
-                    const getPinStatusColor = (pin: GpioPinInfo) => {
-                      if (pin.status === 'safe') return 'text-foreground hover:bg-accent';
-                      if (pin.status === 'problematic') return 'text-foreground hover:bg-accent';
-                      return 'text-foreground hover:bg-accent';
-                    };
-
-                    const getPirPinRecommendation = (pin: GpioPinInfo) => {
-                      if (deviceType === 'esp8266') {
-                        return 'Safe for ESP8266';
-                      }
-                      const primaryPirPins = [34, 35, 36, 39];
-                      const secondaryPirPins = [16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33];
-                      if (primaryPirPins.includes(pin.pin)) return 'Primary (Recommended)';
-                      if (secondaryPirPins.includes(pin.pin)) return 'Secondary (Alternative)';
-                      return 'Not Recommended';
-                    };
-
-                    return (
+                  {/* Detection Logic (only for dual mode) */}
+                  {form.watch('pirSensorType') === 'both' && (
+                    <FormField control={form.control} name="motionDetectionLogic" render={({ field }) => (
                       <FormItem>
-                        <FormLabel>PIR GPIO (Motion Sensor)</FormLabel>
-                        <Select value={field.value !== undefined ? String(field.value) : ''} onValueChange={v => field.onChange(v === '' ? undefined : Number(v))}>
+                        <FormLabel>Detection Logic</FormLabel>
+                        <Select value={field.value || 'and'} onValueChange={field.onChange}>
                           <FormControl>
                             <SelectTrigger>
-                              <SelectValue placeholder="Select recommended GPIO pin for PIR sensor" />
+                              <SelectValue placeholder="Select detection logic" />
                             </SelectTrigger>
                           </FormControl>
-                          <SelectContent className="max-h-64">
-                            <SelectItem value="select" disabled>Select</SelectItem>
-                            {list.map(pin => (
-                              <SelectItem
-                                key={pin.pin}
-                                value={String(pin.pin)}
-                                className={getPinStatusColor(pin)}
-                                disabled={pin.status !== 'safe'}
-                              >
-                                <div className="flex items-center gap-2">
-                                  {getPinStatusDot(pin)}
-                                  {getPinStatusIcon(pin)}
-                                  <span>{getPinDisplayName(pin.pin, deviceType)}</span>
-                                  {pin.status === 'safe' && (
-                                    <Badge variant="outline" className="text-xs bg-success/50 text-white border-success/70">
-                                      {getPirPinRecommendation(pin)}
-                                    </Badge>
-                                  )}
-                                  {pin.status === 'problematic' && (
-                                    <Badge variant="outline" className="text-xs bg-warning/50 text-white border-warning/70">
-                                      Problematic
-                                    </Badge>
-                                  )}
-                                  {pin.status === 'reserved' && (
-                                    <Badge variant="outline" className="text-xs bg-danger/50 text-white border-danger/70">
-                                      Reserved
-                                    </Badge>
-                                  )}
-                                </div>
-                              </SelectItem>
-                            ))}
+                          <SelectContent>
+                            <SelectItem value="and">
+                              <div className="flex flex-col items-start py-1">
+                                <span className="font-medium">AND Logic (Strict)</span>
+                                <span className="text-xs text-muted-foreground">Both must detect • 95%+ accuracy</span>
+                              </div>
+                            </SelectItem>
+                            <SelectItem value="or">
+                              <div className="flex flex-col items-start py-1">
+                                <span className="font-medium">OR Logic (Sensitive)</span>
+                                <span className="text-xs text-muted-foreground">Either triggers • Fast response</span>
+                              </div>
+                            </SelectItem>
+                            <SelectItem value="weighted">
+                              <div className="flex flex-col items-start py-1">
+                                <span className="font-medium">Weighted Fusion (Balanced)</span>
+                                <span className="text-xs text-muted-foreground">Confidence-based • Adaptive</span>
+                              </div>
+                            </SelectItem>
                           </SelectContent>
                         </Select>
-                        {fieldErrors.pirGpio && (
-                          <Alert className="mt-2 border-danger/70 bg-danger/20">
-                            <XCircle className="h-4 w-4 text-danger" />
-                            <AlertDescription className="text-foreground whitespace-pre-line">
-                              {fieldErrors.pirGpio}
-                            </AlertDescription>
-                          </Alert>
-                        )}
-                        {field.value !== undefined && gpioInfo.find(p => p.pin === field.value)?.status === 'problematic' && (
-                          <Alert className="mt-2 border-warning/70 bg-warning/20">
-                            <AlertTriangle className="h-4 w-4 text-warning" />
-                            <AlertDescription className="text-foreground">
-                              <strong>Warning:</strong> {gpioInfo.find(p => p.pin === field.value)?.reason}
-                              {gpioInfo.find(p => p.pin === field.value)?.alternativePins && (
-                                <div className="mt-2">
-                                  <strong>Recommended PIR pins:</strong> GPIO {gpioInfo.find(p => p.pin === field.value)?.alternativePins?.join(', ')}
-                                </div>
-                              )}
-                            </AlertDescription>
-                          </Alert>
-                        )}
-                        {field.value !== undefined && gpioInfo.find(p => p.pin === field.value)?.status === 'reserved' && (
-                          <Alert className="mt-2 border-danger/70 bg-danger/20">
-                            <XCircle className="h-4 w-4 text-danger" />
-                            <AlertDescription className="text-foreground">
-                              <strong>Warning:</strong> This pin is reserved and may cause system instability.
-                              {gpioInfo.find(p => p.pin === field.value)?.alternativePins && (
-                                <div className="mt-2">
-                                  <strong>Use recommended PIR pins:</strong> GPIO {gpioInfo.find(p => p.pin === field.value)?.alternativePins?.join(', ')}
-                                </div>
-                              )}
-                            </AlertDescription>
-                          </Alert>
-                        )}
-                        {!recommendedPirPins.includes(field.value) && gpioInfo.find(p => p.pin === field.value)?.status === 'safe' && (
-                          <Alert className="mt-2 border-success/70 bg-success/20">
-                            <Info className="h-4 w-4 text-success" />
-                            <AlertDescription className="text-foreground">
-                              <strong>Note:</strong> This pin is safe but not recommended for PIR sensor.
-                              <div className="mt-2">
-                                <strong>Recommended PIR pins:</strong> GPIO 34, 35, 36, 39 (Primary) or 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33 (Secondary)
-                              </div>
-                            </AlertDescription>
-                          </Alert>
-                        )}
+                        <FormDescription>
+                          AND logic recommended for classrooms (low false positives)
+                        </FormDescription>
                         <FormMessage />
                       </FormItem>
-                    );
-                  }} />
-                  <FormField control={form.control} name="pirAutoOffDelay" render={({ field }) => (<FormItem><FormLabel>Auto-off Delay (s)</FormLabel><FormControl><Input type="number" {...field} onChange={e => field.onChange(Number(e.target.value || 0))} /></FormControl><FormMessage /></FormItem>)} />
-                </div>
+                    )} />
+                  )}
+
+                  {/* Advanced Settings */}
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <FormField control={form.control} name="pirSensitivity" render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Sensitivity (%)</FormLabel>
+                        <FormControl>
+                          <Input 
+                            type="number" 
+                            min="0" 
+                            max="100" 
+                            value={field.value ?? 50}
+                            onChange={e => field.onChange(Number(e.target.value || 50))} 
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          Adjust detection sensitivity (0-100%, default: 50%)
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
+
+                    <FormField control={form.control} name="pirDetectionRange" render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Detection Range (m)</FormLabel>
+                        <FormControl>
+                          <Input 
+                            type="number" 
+                            min="1" 
+                            max="10" 
+                            value={field.value ?? 7}
+                            onChange={e => field.onChange(Number(e.target.value || 7))} 
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          Maximum detection distance in meters (1-10m)
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
+
+                    <FormField control={form.control} name="pirAutoOffDelay" render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Auto-off Delay (seconds)</FormLabel>
+                        <FormControl>
+                          <Input 
+                            type="number" 
+                            min="0" 
+                            max="300" 
+                            value={field.value ?? 30}
+                            onChange={e => field.onChange(Number(e.target.value || 30))} 
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          Seconds after motion stops before turning off (0-300s)
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
+                  </div>
+                </>
               )}
             </div>
             <Separator />

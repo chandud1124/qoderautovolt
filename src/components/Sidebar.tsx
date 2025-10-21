@@ -20,13 +20,14 @@ import {
   Monitor,
   Ticket,
   Settings2,
-  Server
+  Server,
+  ExternalLink
 } from 'lucide-react';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useAuth } from '@/hooks/useAuth';
 import { useDevices } from '@/hooks/useDevices';
 import { scheduleAPI } from '@/services/api';
-import api from '@/services/api';
+import { api } from '@/services/api';
 import { useGlobalLoading } from '@/hooks/useGlobalLoading';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -67,8 +68,7 @@ const navigationSections = [
       { name: 'System Health', icon: Server, href: '/dashboard/system-health', adminOnly: true },
       { name: 'Analytics & Monitoring', icon: BarChart3, href: '/dashboard/analytics', adminOnly: true },
       { name: 'AI/ML Insights', icon: Brain, href: '/dashboard/aiml', adminOnly: true },
-      { name: 'Grafana Analytics', icon: BarChart3, href: '/dashboard/grafana', adminOnly: true },
-      { name: 'Prometheus Metrics', icon: Monitor, href: '/dashboard/prometheus', adminOnly: true },
+      { name: 'Grafana', icon: Activity, href: '/dashboard/grafana', adminOnly: true },
     ]
   },
   {
@@ -112,11 +112,20 @@ export const Sidebar: React.FC<SidebarProps> = ({ className, onNavigateClose }) 
   const deviceRelated = new Set(['/dashboard', '/dashboard/devices', '/dashboard/switches', '/dashboard/master']);
   // Future: add schedule/users background prefetch similarly without blocking
 
-  const handleNavigation = (href: string) => {
+  const handleNavigation = (href: string, isExternal?: boolean) => {
     if (navLock) return;
     setNavLock(true);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => setNavLock(false), 400);
+    
+    // Handle external links
+    if (isExternal) {
+      window.open(href, '_blank', 'noopener,noreferrer');
+      if (onNavigateClose) onNavigateClose();
+      return;
+    }
+    
+    // Handle internal navigation
     if (deviceRelated.has(href)) {
       const token = start('nav');
       refreshDevices({ background: true }).finally(() => stop(token));
@@ -189,7 +198,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ className, onNavigateClose }) 
                 <div className="space-y-0.5">
                   {visibleItems.map((item) => {
                     const Icon = item.icon;
-                    const isCurrentPage = location.pathname === item.href;
+                    const isExternal = Boolean('external' in item && item.external);
+                    const isCurrentPage = !isExternal && location.pathname === item.href;
                     const isAdminItem = 'adminOnly' in item && item.adminOnly;
                     const isPermissionItem = 'requiresPermission' in item && item.requiresPermission;
 
@@ -203,7 +213,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ className, onNavigateClose }) 
                           !isCurrentPage && "hover:bg-accent/50 hover:shadow-sm",
                           collapsed && "px-2 justify-center tooltip-trigger"
                         )}
-                        onClick={() => handleNavigation(item.href)}
+                        onClick={() => handleNavigation(item.href, isExternal)}
                         title={collapsed ? item.name : undefined}
                       >
                         {/* Active indicator bar */}
@@ -227,16 +237,27 @@ export const Sidebar: React.FC<SidebarProps> = ({ className, onNavigateClose }) 
                               {item.name}
                             </span>
                             
-                            {/* Subtle badges for special items */}
-                            {(isAdminItem || isPermissionItem) && (
-                              <span className={cn(
-                                "text-[10px] font-medium px-1.5 py-0.5 rounded-md ml-2 flex-shrink-0",
-                                isCurrentPage && "bg-primary-foreground/20 text-primary-foreground",
-                                !isCurrentPage && "bg-muted text-muted-foreground"
-                              )}>
-                                {isAdminItem ? "Admin" : "Auth"}
-                              </span>
-                            )}
+                            <div className="flex items-center gap-1">
+                              {/* External link indicator */}
+                              {isExternal && (
+                                <ExternalLink className={cn(
+                                  "w-3.5 h-3.5 flex-shrink-0",
+                                  isCurrentPage && "text-primary-foreground",
+                                  !isCurrentPage && "text-muted-foreground group-hover:text-foreground"
+                                )} />
+                              )}
+                              
+                              {/* Subtle badges for special items */}
+                              {(isAdminItem || isPermissionItem) && (
+                                <span className={cn(
+                                  "text-[10px] font-medium px-1.5 py-0.5 rounded-md ml-1 flex-shrink-0",
+                                  isCurrentPage && "bg-primary-foreground/20 text-primary-foreground",
+                                  !isCurrentPage && "bg-muted text-muted-foreground"
+                                )}>
+                                  {isAdminItem ? "Admin" : "Auth"}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         )}
                       </Button>

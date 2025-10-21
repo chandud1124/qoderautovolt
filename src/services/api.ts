@@ -58,6 +58,12 @@ const api = axios.create({
   withCredentials: true
 });
 
+// Export the api instance for use in hooks
+export { api };
+
+// Alias for backward compatibility
+export const apiService = api;
+
 // Helper to get backend origin (strip trailing /api)
 export const getBackendOrigin = () => {
   if (isDevelopment) {
@@ -611,7 +617,41 @@ export const integrationsAPI = {
   delete: (id: string) => api.delete(`/integrations/${id}`),
 };
 
-// Export the main axios instance as apiService for backward compatibility
-export const apiService = api;
+export const voiceAssistantAPI = {
+  // Voice session management
+  createSession: () => api.post('/voice-assistant/session/create'),
+  listSessions: () => api.get('/voice-assistant/session/list'),
+  revokeSession: (voiceToken: string) => api.delete('/voice-assistant/session/revoke', { data: { voiceToken } }),
+  revokeAllSessions: () => api.post('/voice-assistant/session/revoke-all'),
 
-export default api;
+  // Voice command processing
+  processVoiceCommand: (data: {
+    command: string;
+    deviceName?: string;
+    switchName?: string;
+    assistant?: string;
+    voiceToken: string;
+  }) => api.post('/voice-assistant/voice/command', data),
+
+  // Device discovery for voice assistants
+  discoverDevices: () => api.get('/voice-assistant/devices/discovery'),
+
+  // Get device status
+  getDeviceStatus: (deviceId: string) => api.get(`/voice-assistant/devices/${deviceId}/status`),
+
+  // Google Assistant integration
+  handleGoogleAction: (inputs: unknown[], requestId: string) =>
+    api.post('/voice-assistant/google/action', { inputs, requestId }),
+
+  // Amazon Alexa integration
+  handleAlexaRequest: (directive: unknown) =>
+    api.post('/voice-assistant/alexa/smart-home', { directive }),
+
+  // Siri/HomeKit integration
+  handleSiriRequest: (data: {
+    intent: string;
+    deviceId?: string;
+    command?: string;
+    parameters?: Record<string, unknown>;
+  }) => api.post('/voice-assistant/siri/webhook', data),
+};

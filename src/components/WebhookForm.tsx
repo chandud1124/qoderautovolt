@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -11,11 +11,12 @@ import { integrationsAPI } from '@/services/api';
 import { toast } from 'sonner';
 
 interface WebhookFormProps {
+  integration?: any;
   onSuccess?: () => void;
   onCancel?: () => void;
 }
 
-const WebhookForm: React.FC<WebhookFormProps> = ({ onSuccess, onCancel }) => {
+const WebhookForm: React.FC<WebhookFormProps> = ({ integration, onSuccess, onCancel }) => {
   const [formData, setFormData] = useState({
     name: '',
     autoPublish: true
@@ -27,6 +28,24 @@ const WebhookForm: React.FC<WebhookFormProps> = ({ onSuccess, onCancel }) => {
     secret: string;
   } | null>(null);
 
+  // Populate form data when editing an existing integration
+  useEffect(() => {
+    if (integration) {
+      setFormData({
+        name: integration.name || '',
+        autoPublish: integration.config?.autoPublish ?? true
+      });
+      // For editing, we don't recreate the webhook, just show existing info
+      if (integration.config?.webhookId) {
+        setCreatedWebhook({
+          webhookId: integration.config.webhookId,
+          webhookUrl: integration.config.webhookUrl || '',
+          secret: integration.config.secret || ''
+        });
+      }
+    }
+  }, [integration]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -37,24 +56,35 @@ const WebhookForm: React.FC<WebhookFormProps> = ({ onSuccess, onCancel }) => {
 
     try {
       setLoading(true);
-      const response = await integrationsAPI.webhooks.create({
-        name: formData.name,
-        autoPublish: formData.autoPublish
-      });
 
-      // Extract webhook details from response
-      const webhookData = response.data;
-      setCreatedWebhook({
-        webhookId: webhookData.config.webhookId,
-        webhookUrl: `${window.location.origin}/webhooks/${webhookData.config.webhookId}`,
-        secret: webhookData.config.secret
-      });
+      if (integration) {
+        // Update existing webhook
+        await integrationsAPI.webhooks.update(integration.id, {
+          name: formData.name,
+          autoPublish: formData.autoPublish
+        });
+        toast.success('Webhook integration updated successfully');
+      } else {
+        // Create new webhook
+        const response = await integrationsAPI.webhooks.create({
+          name: formData.name,
+          autoPublish: formData.autoPublish
+        });
 
-      toast.success('Webhook integration created successfully');
+        // Extract webhook details from response
+        const webhookData = response.data;
+        setCreatedWebhook({
+          webhookId: webhookData.config.webhookId,
+          webhookUrl: `${window.location.origin}/webhooks/${webhookData.config.webhookId}`,
+          secret: webhookData.config.secret
+        });
+        toast.success('Webhook integration created successfully');
+      }
+
       onSuccess?.();
     } catch (error) {
-      console.error('Failed to create webhook integration:', error);
-      toast.error('Failed to create webhook integration');
+      console.error('Failed to save webhook integration:', error);
+      toast.error(`Failed to ${integration ? 'update' : 'create'} webhook integration`);
     } finally {
       setLoading(false);
     }
@@ -184,10 +214,13 @@ const WebhookForm: React.FC<WebhookFormProps> = ({ onSuccess, onCancel }) => {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Webhook className="h-5 w-5" />
-          Create Webhook Integration
+          {integration ? 'Edit Webhook Integration' : 'Create Webhook Integration'}
         </CardTitle>
         <CardDescription>
-          Create a webhook endpoint to receive real-time content from external systems
+          {integration
+            ? 'Update your webhook endpoint configuration'
+            : 'Create a webhook endpoint to receive real-time content from external systems'
+          }
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -257,10 +290,10 @@ const WebhookForm: React.FC<WebhookFormProps> = ({ onSuccess, onCancel }) => {
               {loading ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Creating...
+                  {integration ? 'Updating...' : 'Creating...'}
                 </>
               ) : (
-                'Create Webhook'
+                integration ? 'Update Webhook' : 'Create Webhook'
               )}
             </Button>
             <Button type="button" variant="outline" onClick={onCancel}>

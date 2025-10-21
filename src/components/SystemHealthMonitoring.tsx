@@ -36,7 +36,7 @@ import {
   UserCheck,
   UserX
 } from 'lucide-react';
-import api from '@/services/api';
+import { api } from '@/services/api';
 import { formatDistanceToNow, format } from 'date-fns';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 
