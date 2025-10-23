@@ -370,7 +370,6 @@ void sendHeartbeat() {
   char buf[128];
   size_t n = serializeJson(doc, buf);
   mqttClient.publish(TELEMETRY_TOPIC, buf, n);
-  Serial.println("[HEARTBEAT] Sent heartbeat telemetry");
 }
 
 
@@ -462,7 +461,9 @@ void updateConnectionStatus() {
     connState = BACKEND_CONNECTED;
   }
   if (connState != lastConnState) {
-    Serial.printf("[STATUS] Connection state changed: %d -> %d\n", lastConnState, connState);
+    if (connState == BACKEND_CONNECTED) {
+      Serial.println("[STATUS] Connected to backend");
+    }
     lastConnState = connState;
     lastStatusChange = now;
     sendStateUpdate(true);
@@ -620,48 +621,58 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
             }
 
             // ========================================
-            // PARSE MOTION SENSOR CONFIGURATION
+            // PARSE MOTION SENSOR CONFIGURATION (NESTED STRUCTURE)
             // ========================================
+            // Parse PIR config from nested motionSensor object
+            bool wasEnabled = motionConfig.enabled;
             if (doc.containsKey("motionSensor")) {
-              JsonObject motion = doc["motionSensor"];
-              
-              bool wasEnabled = motionConfig.enabled;
-              motionConfig.enabled = motion["enabled"] | false;
-              motionConfig.type = motion["type"] | "hc-sr501";
-              motionConfig.primaryGpio = motion["gpio"] | 34;  // Fixed GPIO 34
-              motionConfig.autoOffDelay = motion["autoOffDelay"] | 30;
-              motionConfig.sensitivity = motion["sensitivity"] | 50;
-              motionConfig.detectionRange = motion["detectionRange"] | 7;
-              motionConfig.dualMode = motion["dualMode"] | false;
-              motionConfig.secondaryGpio = motion["secondaryGpio"] | 35;  // Fixed GPIO 35
-              motionConfig.detectionLogic = motion["detectionLogic"] | "and";
+              JsonObject motionSensor = doc["motionSensor"];
+              motionConfig.enabled = motionSensor["enabled"] | false;
+              motionConfig.type = motionSensor["type"] | "hc-sr501";
+              motionConfig.primaryGpio = 34;  // Fixed GPIO 34 for PIR
+              motionConfig.autoOffDelay = motionSensor["autoOffDelay"] | 30;
+              // Note: sensitivity and detectionRange are not used in hardware
+              motionConfig.sensitivity = 50;  // Default value (not hardware-controlled)
+              motionConfig.detectionRange = 7;  // Default value (not hardware-controlled)
 
-              // Save motion sensor config to NVS
-              prefs.begin("motion_cfg", false);
-              prefs.putBool("enabled", motionConfig.enabled);
-              prefs.putString("type", motionConfig.type);
-              prefs.putInt("gpio", motionConfig.primaryGpio);
-              prefs.putInt("autoOff", motionConfig.autoOffDelay);
-              prefs.putInt("sensitivity", motionConfig.sensitivity);
-              prefs.putInt("range", motionConfig.detectionRange);
-              prefs.putBool("dualMode", motionConfig.dualMode);
-              prefs.putInt("secGpio", motionConfig.secondaryGpio);
-              prefs.putString("logic", motionConfig.detectionLogic);
-              prefs.end();
-
-              // Re-initialize if enabled state changed
-              if (motionConfig.enabled != wasEnabled || motionConfig.enabled) {
-                initMotionSensor();
-              }
-
-              Serial.printf("[CONFIG] Motion sensor config updated: enabled=%d, type=%s, gpio=%d, autoOff=%ds\n",
-                motionConfig.enabled, motionConfig.type.c_str(), motionConfig.primaryGpio, motionConfig.autoOffDelay);
-              
-              if (motionConfig.dualMode) {
-                Serial.printf("[CONFIG] Dual mode: primary=%d, secondary=%d, logic=%s\n",
-                  motionConfig.primaryGpio, motionConfig.secondaryGpio, motionConfig.detectionLogic.c_str());
-              }
+              // Determine dual mode from sensor type
+              motionConfig.dualMode = (motionConfig.type == "both");
+              motionConfig.secondaryGpio = 35;  // Fixed GPIO 35 for Microwave
+              motionConfig.detectionLogic = motionSensor["detectionLogic"] | "and";
+            } else {
+              // Fallback to flat structure for backward compatibility
+              motionConfig.enabled = doc["pirEnabled"] | false;
+              motionConfig.type = doc["pirSensorType"] | "hc-sr501";
+              motionConfig.primaryGpio = 34;  // Fixed GPIO 34 for PIR
+              motionConfig.autoOffDelay = doc["pirAutoOffDelay"] | 30;
+              motionConfig.sensitivity = 50;  // Default value (not hardware-controlled)
+              motionConfig.detectionRange = 7;  // Default value (not hardware-controlled)
+              motionConfig.dualMode = (motionConfig.type == "both");
+              motionConfig.secondaryGpio = 35;  // Fixed GPIO 35 for Microwave
+              motionConfig.detectionLogic = doc["motionDetectionLogic"] | "and";
             }
+
+            // Save motion sensor config to NVS
+            prefs.begin("motion_cfg", false);
+            prefs.putBool("enabled", motionConfig.enabled);
+            prefs.putString("type", motionConfig.type);
+            prefs.putInt("gpio", motionConfig.primaryGpio);
+            prefs.putInt("autoOff", motionConfig.autoOffDelay);
+            prefs.putInt("sensitivity", motionConfig.sensitivity);
+            prefs.putInt("range", motionConfig.detectionRange);
+            prefs.putBool("dualMode", motionConfig.dualMode);
+            prefs.putInt("secGpio", motionConfig.secondaryGpio);
+            prefs.putString("logic", motionConfig.detectionLogic);
+            prefs.end();
+
+            // Re-initialize if enabled state changed
+            if (motionConfig.enabled != wasEnabled || motionConfig.enabled) {
+              initMotionSensor();
+            }
+
+            Serial.printf("[CONFIG] Motion sensor config updated: enabled=%d, type=%s, gpio=%d, autoOff=%ds, dualMode=%d, logic=%s\n",
+              motionConfig.enabled, motionConfig.type.c_str(), motionConfig.primaryGpio, motionConfig.autoOffDelay,
+              motionConfig.dualMode, motionConfig.detectionLogic.c_str());
 
           } else {
             Serial.println("[CONFIG] Invalid secret, ignoring config update");
@@ -834,6 +845,15 @@ void handleMotionSensor() {
   unsigned long now = millis();
   bool currentMotion = readMotionSensor();
 
+  // Debug: Log sensor states periodically
+  static unsigned long lastSensorDebug = 0;
+  if (now - lastSensorDebug > 2000) { // Every 2 seconds
+    bool pirState = digitalRead(motionConfig.primaryGpio) == HIGH;
+    bool microwaveState = motionConfig.dualMode ? (digitalRead(motionConfig.secondaryGpio) == HIGH) : false;
+    Serial.printf("[MOTION] Sensors - PIR:%d, MW:%d, Motion:%d\n", pirState, microwaveState, currentMotion);
+    lastSensorDebug = now;
+  }
+
   // Motion started
   if (currentMotion && !motionDetected) {
     motionDetected = true;
@@ -841,27 +861,38 @@ void handleMotionSensor() {
     lastMotionTime = now;
     autoOffActive = false;
 
-    Serial.println("[MOTION] 🔴 Motion DETECTED - Turning ON switches (respecting manual override & usePir)");
+    // Check if any switches will be turned on before logging
+    bool switchesTurnedOn = false;
+    for (int i = 0; i < NUM_SWITCHES; i++) {
+      if (switchesLocal[i].usePir && !switchesLocal[i].manualOverride && !switchesLocal[i].state) {
+        switchesTurnedOn = true;
+        break;
+      }
+    }
+
+    if (switchesTurnedOn) {
+      Serial.println("[MOTION] 🔴 Motion DETECTED - Turning ON switches");
+    }
 
     // Turn ON switches that respond to PIR (skip manually overridden switches and switches with usePir=false)
     for (int i = 0; i < NUM_SWITCHES; i++) {
       // ✅ Skip if switch doesn't respond to PIR
       if (!switchesLocal[i].usePir) {
-        Serial.printf("[MOTION] Switch %d (GPIO %d) SKIPPED - usePir=false (not PIR-controlled)\n", i, switchesLocal[i].relayGpio);
         continue;
       }
-      
+
       // Skip if switch has manual override (user has manually controlled this switch)
       if (switchesLocal[i].manualOverride) {
-        Serial.printf("[MOTION] Switch %d (GPIO %d) SKIPPED - manual override active\n", i, switchesLocal[i].relayGpio);
         continue;
       }
-      
+
       if (!switchesLocal[i].state) {
         switchesLocal[i].state = true;
         digitalWrite(switchesLocal[i].relayGpio, RELAY_ACTIVE_HIGH ? HIGH : LOW);
         affectedSwitches[i] = 1; // Mark as turned on by motion
-        Serial.printf("[MOTION] Switch %d (GPIO %d) turned ON\n", i, switchesLocal[i].relayGpio);
+        if (switchesTurnedOn) {
+          Serial.printf("[MOTION] Switch %d (GPIO %d) turned ON\n", i, switchesLocal[i].relayGpio);
+        }
       }
     }
 
@@ -878,29 +909,25 @@ void handleMotionSensor() {
   // Motion stopped - start auto-off timer
   if (!currentMotion && motionDetected && !autoOffActive) {
     unsigned long timeSinceLastMotion = (now - lastMotionTime) / 1000;
-    
+
     if (timeSinceLastMotion >= motionConfig.autoOffDelay) {
       autoOffActive = true;
       motionDetected = false;
-      
-      Serial.printf("[MOTION] ⚫ No motion for %d seconds - Turning OFF switches (respecting manual override & dontAutoOff)\n", motionConfig.autoOffDelay);
+
+      Serial.printf("[MOTION] ⚫ No motion for %d seconds - Turning OFF switches\n", motionConfig.autoOffDelay);
 
       // Turn OFF only switches that were turned on by motion (skip manually overridden and dontAutoOff switches)
       for (int i = 0; i < NUM_SWITCHES; i++) {
         // ✅ Skip if switch has dontAutoOff flag (should stay ON)
         if (switchesLocal[i].dontAutoOff) {
-          Serial.printf("[MOTION] Switch %d (GPIO %d) SKIPPED - dontAutoOff=true (stays ON permanently)\n", i, switchesLocal[i].relayGpio);
-          affectedSwitches[i] = -1; // Reset tracking but keep switch ON
           continue;
         }
-        
+
         // Skip if switch has manual override (user manually controlled this switch)
         if (switchesLocal[i].manualOverride) {
-          Serial.printf("[MOTION] Switch %d (GPIO %d) SKIPPED - manual override active, keeping state\n", i, switchesLocal[i].relayGpio);
-          affectedSwitches[i] = -1; // Reset tracking but don't change state
           continue;
         }
-        
+
         if (affectedSwitches[i] == 1 && switchesLocal[i].state) {
           switchesLocal[i].state = false;
           digitalWrite(switchesLocal[i].relayGpio, RELAY_ACTIVE_HIGH ? LOW : HIGH);
@@ -1029,13 +1056,6 @@ void loop() {
       digitalWrite(switchesLocal[i].relayGpio, switchesLocal[i].state ? (RELAY_ACTIVE_HIGH ? HIGH : LOW) : (RELAY_ACTIVE_HIGH ? LOW : HIGH));
     }
     lastRelayCheck = now;
-    Serial.println("[RELAY] Re-applied all relay states");
-  }
-
-  // Safety check: ensure loop doesn't take too long (should complete in < 100ms normally)
-  unsigned long loopDuration = millis() - loopStartTime;
-  if (loopDuration > 500) {
-    Serial.printf("[WARNING] Loop took %lu ms - possible performance issue\n", loopDuration);
   }
 
   delay(10);

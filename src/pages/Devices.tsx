@@ -221,6 +221,11 @@ const Devices = () => {
   const handleUpdateDevice = async (deviceId: string, data: Partial<Device>) => {
     try {
       await updateDevice(deviceId, data);
+      // Update the selectedDevice state with the updated device data
+      const updatedDevice = devices.find(d => d.id === deviceId);
+      if (updatedDevice) {
+        setSelectedDevice({ ...updatedDevice }); // Create a new object to trigger re-render
+      }
       toast({
         title: "Success",
         description: "Device updated successfully"

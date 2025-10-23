@@ -92,6 +92,10 @@ const createDevice = async (req, res) => {
       pirEnabled = false,
       pirGpio,
       pirAutoOffDelay = 300, // 5 minutes default
+      pirSensorType = 'hc-sr501',
+      pirSensitivity = 50,
+      pirDetectionRange = 5,
+      motionDetectionLogic = 'and',
       switches = []
     } = req.body;
 
@@ -193,6 +197,10 @@ const createDevice = async (req, res) => {
       pirEnabled,
       pirGpio,
       pirAutoOffDelay,
+      pirSensorType,
+      pirSensitivity,
+      pirDetectionRange,
+      motionDetectionLogic,
       switches: switches.map(sw => ({
         name: sw.name,
         gpio: sw.gpio,
@@ -282,7 +290,11 @@ const createDevice = async (req, res) => {
             })),
             pirEnabled: device.pirEnabled,
             pirGpio: device.pirGpio,
-            pirAutoOffDelay: device.pirAutoOffDelay
+            pirAutoOffDelay: device.pirAutoOffDelay,
+            pirSensorType: device.pirSensorType,
+            pirSensitivity: device.pirSensitivity,
+            pirDetectionRange: device.pirDetectionRange,
+            motionDetectionLogic: device.motionDetectionLogic
           };
           ws.send(JSON.stringify(cfgMsg));
         }
@@ -308,7 +320,11 @@ const createDevice = async (req, res) => {
         })),
         pirEnabled: device.pirEnabled,
         pirGpio: device.pirGpio,
-        pirAutoOffDelay: device.pirAutoOffDelay
+        pirAutoOffDelay: device.pirAutoOffDelay,
+        pirSensorType: device.pirSensorType,
+        pirSensitivity: device.pirSensitivity,
+        pirDetectionRange: device.pirDetectionRange,
+        motionDetectionLogic: device.motionDetectionLogic
       };
       req.app.get('io').emit('config_update', cfgMsg);
       if (global.wsDevices && device.macAddress) {
@@ -343,6 +359,10 @@ const updateDevice = async (req, res) => {
       pirEnabled,
       pirGpio,
       pirAutoOffDelay,
+      pirSensorType,
+      pirSensitivity,
+      pirDetectionRange,
+      motionDetectionLogic,
       switches,
       status,
       lastSeen
@@ -403,6 +423,10 @@ const updateDevice = async (req, res) => {
     device.pirEnabled = pirEnabled !== undefined ? pirEnabled : device.pirEnabled;
     device.pirGpio = pirGpio || device.pirGpio;
     device.pirAutoOffDelay = pirAutoOffDelay || device.pirAutoOffDelay;
+    device.pirSensorType = pirSensorType || device.pirSensorType;
+    device.pirSensitivity = pirSensitivity !== undefined ? pirSensitivity : device.pirSensitivity;
+    device.pirDetectionRange = pirDetectionRange !== undefined ? pirDetectionRange : device.pirDetectionRange;
+    device.motionDetectionLogic = motionDetectionLogic || device.motionDetectionLogic;
     device.status = status || device.status;
     device.lastSeen = lastSeen ? new Date(lastSeen) : device.lastSeen;
 
@@ -561,7 +585,11 @@ const updateDevice = async (req, res) => {
         })),
         pirEnabled: device.pirEnabled,
         pirGpio: device.pirGpio,
-        pirAutoOffDelay: device.pirAutoOffDelay
+        pirAutoOffDelay: device.pirAutoOffDelay,
+        pirSensorType: device.pirSensorType,
+        pirSensitivity: device.pirSensitivity,
+        pirDetectionRange: device.pirDetectionRange,
+        motionDetectionLogic: device.motionDetectionLogic
       };
       req.app.get('io').emit('config_update', cfgMsg);
       if (global.wsDevices && device.macAddress) {

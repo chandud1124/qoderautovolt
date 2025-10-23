@@ -462,29 +462,97 @@
         }
       },
       {
-        "id": 16,
-        "title": "Classroom Power Distribution",
+        "id": 17,
+        "title": "30-Day Energy Consumption Chart",
         "type": "timeseries",
-        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 54},
+        "gridPos": {"h": 10, "w": 24, "x": 0, "y": 62},
         "targets": [
           {
-            "expr": "sum(power_usage_watts) by (classroom)",
-            "legendFormat": "{{classroom}}"
+            "expr": "esp32_energy_consumption_total_daily_kwh",
+            "legendFormat": "Total Daily Consumption (kWh)"
+          },
+          {
+            "expr": "sum(esp32_energy_consumption_daily_kwh) by (classroom)",
+            "legendFormat": "{{classroom}} Daily (kWh)"
+          },
+          {
+            "expr": "esp32_energy_consumption_daily_kwh",
+            "legendFormat": "{{device_name}} ({{classroom}}) Daily (kWh)"
           }
         ],
         "fieldConfig": {
           "defaults": {
-            "unit": "watt",
+            "unit": "kwatth",
+            "decimals": 3,
             "custom": {
               "drawStyle": "line",
               "lineInterpolation": "smooth",
-              "fillOpacity": 15,
-              "stacking": {
-                "mode": "normal"
-              }
+              "lineWidth": 2,
+              "fillOpacity": 20,
+              "gradientMode": "hue",
+              "showPoints": "auto"
+            },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 0.5, "color": "yellow"},
+                {"value": 1.0, "color": "orange"},
+                {"value": 2.0, "color": "red"}
+              ]
             }
           }
-        }
+        },
+        "options": {
+          "legend": {
+            "displayMode": "table",
+            "placement": "bottom",
+            "calcs": ["lastNotNull", "max", "mean", "min", "sum"]
+          },
+          "tooltip": {
+            "mode": "multi",
+            "sort": "desc"
+          }
+        },
+        "timeFrom": "now-30d",
+        "timeShift": null
+      },
+      {
+        "id": 18,
+        "title": "Daily Energy Consumption by Device (Last 30 Days)",
+        "type": "barchart",
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 72},
+        "targets": [
+          {
+            "expr": "esp32_energy_consumption_daily_kwh",
+            "legendFormat": "{{device_name}} ({{classroom}}) - Daily (kWh)"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "kwatth",
+            "decimals": 3,
+            "color": {
+              "mode": "palette-classic"
+            },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 0.1, "color": "yellow"},
+                {"value": 0.5, "color": "orange"},
+                {"value": 1.0, "color": "red"}
+              ]
+            }
+          }
+        },
+        "options": {
+          "orientation": "horizontal",
+          "xTickLabelRotation": 0,
+          "showValue": "always",
+          "stacking": "normal"
+        },
+        "timeFrom": "now-30d"
       }
     ],
     "templating": {

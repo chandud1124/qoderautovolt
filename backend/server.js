@@ -797,7 +797,6 @@ const connectDB = async (retries = 5) => {
     maxPoolSize: 10, // Reduced from 20 to prevent connection exhaustion
     minPoolSize: 2,  // Reduced from 5 to be more conservative
     maxIdleTimeMS: 60000, // Increased from 30000ms to 60 seconds
-    bufferMaxEntries: 0, // Disable mongoose buffering to prevent timeout issues
     bufferCommands: false, // Disable command buffering
     directConnection: primaryUri.startsWith('mongodb://') ? true : undefined,
     heartbeatFrequencyMS: 10000, // Check connection every 10 seconds
@@ -1651,27 +1650,32 @@ console.log(`[DEBUG] PORT: ${PORT}, HOST: ${HOST}`);
 console.log(`[DEBUG] Server object:`, typeof server);
 console.log(`[DEBUG] App object:`, typeof app);
 
-try {
-  server.listen(PORT, HOST, () => {
-    console.log(`[SERVER] Listen callback STARTED - PID: ${process.pid}`);
-    console.log(`[SERVER] Listen callback executed`);
-    console.log(`[DEBUG] Server listening on ${HOST}:${PORT}`);
-    console.log(`Server running on ${HOST}:${PORT}`);
-    console.log(`Server accessible on localhost:${PORT} and all network interfaces`);
-    console.log(`Environment: ${process.env.NODE_ENV}`);
+// Connect to database BEFORE starting the server
+logger.info('[DEBUG] Connecting to database before starting server...');
+connectDB().then(() => {
+  console.log('[DEBUG] Database connected, now starting server...');
+  
+  try {
+    server.listen(PORT, HOST, () => {
+      console.log(`[SERVER] Listen callback STARTED - PID: ${process.pid}`);
+      console.log(`[SERVER] Listen callback executed`);
+      console.log(`[DEBUG] Server listening on ${HOST}:${PORT}`);
+      console.log(`Server running on ${HOST}:${PORT}`);
+      console.log(`Server accessible on localhost:${PORT} and all network interfaces`);
+      console.log(`Environment: ${process.env.NODE_ENV}`);
 
-    // Debug: Check if server is actually listening
-    console.log(`[DEBUG] Server address:`, server.address());
-
-    // Connect to database after server starts
-    logger.info('[DEBUG] About to call connectDB...');
-    connectDB().catch(() => { });
-  });
-} catch (listenError) {
-  console.error('[DEBUG] Error in server.listen():', listenError);
-  console.error('[DEBUG] Listen error stack:', listenError.stack);
+      // Debug: Check if server is actually listening
+      console.log(`[DEBUG] Server address:`, server.address());
+    });
+  } catch (listenError) {
+    console.error('[DEBUG] Error in server.listen():', listenError);
+    console.error('[DEBUG] Listen error stack:', listenError.stack);
+    process.exit(1);
+  }
+}).catch((dbError) => {
+  console.error('[DEBUG] Database connection failed, exiting:', dbError);
   process.exit(1);
-}
+});
 
 server.on('listening', () => {
   console.log('[SERVER] Server is now listening event fired');

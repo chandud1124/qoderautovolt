@@ -12,6 +12,8 @@ class TelegramService {
     this.baseUrl = null;
     this.webhookUrl = null;
     this.isInitialized = false;
+    this.pollingInterval = null;
+    this.lastUpdateId = 0;
   }
 
   // Initialize the bot
@@ -28,13 +30,23 @@ class TelegramService {
       if (!this.botToken) {
         throw new Error('TELEGRAM_BOT_TOKEN environment variable is not set');
       }
-      if (!this.webhookUrl) {
-        throw new Error('TELEGRAM_WEBHOOK_URL environment variable is not set');
+
+      // Try to set webhook if URL is provided
+      let webhookSet = false;
+      if (this.webhookUrl) {
+        try {
+          await this.setWebhook(this.webhookUrl);
+          webhookSet = true;
+          console.log('Telegram webhook mode enabled');
+        } catch (webhookError) {
+          console.warn('Webhook setup failed, falling back to polling mode:', webhookError.message);
+        }
       }
 
-      // Set webhook if URL is provided
-      if (this.webhookUrl) {
-        await this.setWebhook(this.webhookUrl);
+      // If webhook is not set or failed, start polling
+      if (!webhookSet) {
+        this.startPolling();
+        console.log('Telegram polling mode enabled');
       }
 
       // Clean up expired registration tokens
@@ -92,6 +104,18 @@ class TelegramService {
     } catch (error) {
       console.error('Error sending Telegram message:', error);
       throw error;
+    }
+  }
+
+  // Update message count for user
+  async updateMessageCount(chatId) {
+    try {
+      await TelegramUser.findOneAndUpdate(
+        { chatId },
+        { $inc: { messagesReceived: 1 }, lastInteraction: new Date() }
+      );
+    } catch (error) {
+      console.error('Error updating message count:', error);
     }
   }
 
@@ -520,39 +544,56 @@ class TelegramService {
     }
   }
 
-  // Update message count for user
-  async updateMessageCount(chatId) {
-    try {
-      await TelegramUser.findOneAndUpdate(
-        { chatId },
-        { $inc: { messagesReceived: 1 }, lastInteraction: new Date() }
-      );
-    } catch (error) {
-      console.error('Error updating message count:', error);
+  // Start polling for updates
+  startPolling() {
+    if (this.pollingInterval) {
+      clearInterval(this.pollingInterval);
+    }
+
+    // Poll every 2 seconds
+    this.pollingInterval = setInterval(() => {
+      this.pollUpdates().catch(error => {
+        console.error('Error polling for updates:', error);
+      });
+    }, 2000);
+
+    console.log('Telegram polling started');
+  }
+
+  // Stop polling
+  stopPolling() {
+    if (this.pollingInterval) {
+      clearInterval(this.pollingInterval);
+      this.pollingInterval = null;
+      console.log('Telegram polling stopped');
     }
   }
 
-  // Get bot info
-  async getBotInfo() {
+  // Poll for updates
+  async pollUpdates() {
     try {
-      const response = await axios.get(`${this.baseUrl}/getMe`);
-      return response.data.result;
+      const response = await axios.get(`${this.baseUrl}/getUpdates`, {
+        params: {
+          offset: this.lastUpdateId + 1,
+          timeout: 30, // Long polling timeout
+          allowed_updates: ['message', 'callback_query']
+        }
+      });
+
+      if (response.data.ok && response.data.result.length > 0) {
+        for (const update of response.data.result) {
+          // Process each update
+          await this.processWebhookUpdate(update);
+
+          // Update last processed update ID
+          if (update.update_id > this.lastUpdateId) {
+            this.lastUpdateId = update.update_id;
+          }
+        }
+      }
     } catch (error) {
-      console.error('Error getting bot info:', error);
-      throw error;
+      console.error('Error polling updates:', error);
     }
-  }
-
-  // Check if message is a device-related query
-  isDeviceQuery(text) {
-    const queryIndicators = [
-      'status', 'offline', 'online', 'device', 'devices',
-      'classroom', 'room', 'show', 'list', 'what', 'how many',
-      'computer_lab', 'iot_lab', 'lh_19g', 'lh_28', 'lh_d_28'
-    ];
-
-    const lowerText = text.toLowerCase();
-    return queryIndicators.some(indicator => lowerText.includes(indicator));
   }
 }
 

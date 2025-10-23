@@ -52,6 +52,24 @@ export interface Device {
   tags?: string[];
   createdAt: Date | string;
   updatedAt: Date | string;
+  // PIR/Motion Sensor Configuration
+  pirEnabled?: boolean;
+  pirGpio?: number;
+  pirAutoOffDelay?: number;
+  // Dual Sensor Configuration
+  pirSensorType?: 'hc-sr501' | 'rcwl-0516' | 'both';
+  pirSensitivity?: number;
+  pirDetectionRange?: number;
+  motionDetectionLogic?: 'and' | 'or' | 'weighted';
+  // Notification Settings
+  notificationSettings?: {
+    afterTime?: string;
+    daysOfWeek?: number[];
+    enabled?: boolean;
+    lastTriggered?: Date | string;
+  };
+  // Device Type (for backward compatibility)
+  deviceType?: DeviceType;
 }
 
 export interface DeviceUpdate {

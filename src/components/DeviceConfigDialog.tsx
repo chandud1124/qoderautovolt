@@ -99,8 +99,6 @@ const formSchema = z.object({
   pirAutoOffDelay: z.number().min(0).default(30),
   // Dual sensor support - Fixed GPIO pins (34 for PIR, 35 for Microwave)
   pirSensorType: z.enum(['hc-sr501', 'rcwl-0516', 'both']).default('hc-sr501').optional(),
-  pirSensitivity: z.number().min(0).max(100).default(50).optional(),
-  pirDetectionRange: z.number().min(1).max(10).default(7).optional(),
   motionDetectionLogic: z.enum(['and', 'or', 'weighted']).default('and').optional(),
   deviceNotifications: deviceNotificationSchema.optional(),
   switches: z.array(switchSchema).min(1).max(8).refine(sw => {
@@ -214,6 +212,8 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
         pirEnabled: initialData.pirEnabled || false,
         pirGpio: initialData.pirGpio,
         pirAutoOffDelay: initialData.pirAutoOffDelay || 30,
+        pirSensorType: initialData.pirSensorType || 'hc-sr501',
+        motionDetectionLogic: initialData.motionDetectionLogic || 'and',
         deviceNotifications: notifSettings,
     switches: initialData.switches.map((sw: import('@/types').Switch) => ({
     id: sw.id,
@@ -389,7 +389,11 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
   };
   const submit = async (data: FormValues) => {
     console.log('[DeviceConfigDialog] submit() called', { initialDataId: initialData?.id });
-    // Ensure every switch has a string id before validation and submission
+    console.log('[DeviceConfigDialog] submit data sensor fields:', {
+      pirSensorType: data.pirSensorType,
+      motionDetectionLogic: data.motionDetectionLogic,
+      pirEnabled: data.pirEnabled
+    });
     const switchesWithId = data.switches.map(sw => ({
       id: typeof sw.id === 'string' && sw.id.length > 0 ? sw.id : `switch-${Date.now()}-${Math.floor(Math.random()*10000)}`,
       name: sw.name || 'Unnamed Switch',
@@ -536,7 +540,7 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
                   <FormField control={form.control} name="pirSensorType" render={({ field }) => (
                     <FormItem>
                       <FormLabel>Motion Sensor Type</FormLabel>
-                      <Select value={field.value || 'hc-sr501'} onValueChange={field.onChange}>
+                      <Select value={field.value} onValueChange={field.onChange}>
                         <FormControl>
                           <SelectTrigger>
                             <SelectValue placeholder="Select sensor type" />
@@ -641,64 +645,24 @@ export const DeviceConfigDialog: React.FC<Props> = ({ open, onOpenChange, onSubm
                   )}
 
                   {/* Advanced Settings */}
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <FormField control={form.control} name="pirSensitivity" render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Sensitivity (%)</FormLabel>
-                        <FormControl>
-                          <Input 
-                            type="number" 
-                            min="0" 
-                            max="100" 
-                            value={field.value ?? 50}
-                            onChange={e => field.onChange(Number(e.target.value || 50))} 
-                          />
-                        </FormControl>
-                        <FormDescription>
-                          Adjust detection sensitivity (0-100%, default: 50%)
-                        </FormDescription>
-                        <FormMessage />
-                      </FormItem>
-                    )} />
-
-                    <FormField control={form.control} name="pirDetectionRange" render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Detection Range (m)</FormLabel>
-                        <FormControl>
-                          <Input 
-                            type="number" 
-                            min="1" 
-                            max="10" 
-                            value={field.value ?? 7}
-                            onChange={e => field.onChange(Number(e.target.value || 7))} 
-                          />
-                        </FormControl>
-                        <FormDescription>
-                          Maximum detection distance in meters (1-10m)
-                        </FormDescription>
-                        <FormMessage />
-                      </FormItem>
-                    )} />
-
-                    <FormField control={form.control} name="pirAutoOffDelay" render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Auto-off Delay (seconds)</FormLabel>
-                        <FormControl>
-                          <Input 
-                            type="number" 
-                            min="0" 
-                            max="300" 
-                            value={field.value ?? 30}
-                            onChange={e => field.onChange(Number(e.target.value || 30))} 
-                          />
-                        </FormControl>
-                        <FormDescription>
-                          Seconds after motion stops before turning off (0-300s)
-                        </FormDescription>
-                        <FormMessage />
-                      </FormItem>
-                    )} />
-                  </div>
+                  <FormField control={form.control} name="pirAutoOffDelay" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Auto-off Delay (seconds)</FormLabel>
+                      <FormControl>
+                        <Input 
+                          type="number" 
+                          min="0" 
+                          max="300" 
+                          value={field.value ?? 30}
+                          onChange={e => field.onChange(Number(e.target.value || 30))} 
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        Seconds after motion stops before turning off (0-300s)
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
                 </>
               )}
             </div>

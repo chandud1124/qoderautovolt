@@ -179,6 +179,10 @@ Desktop.ini
 *.swp
 *.bak
 
+# Executables and binaries
+*.exe
+*.zip
+
 # IDE files
 .vscode/settings.json
 .idea/workspace.xml

@@ -584,6 +584,15 @@ const useDevicesInternal = () => {
           relayGpio: (sw as any).relayGpio ?? (sw as any).gpio
         }));
       }
+      // Ensure dual sensor fields are included in the update
+      if (updates.pirSensorType !== undefined) outbound.pirSensorType = updates.pirSensorType;
+      if (updates.pirSensitivity !== undefined) outbound.pirSensitivity = updates.pirSensitivity;
+      if (updates.pirDetectionRange !== undefined) outbound.pirDetectionRange = updates.pirDetectionRange;
+      if (updates.motionDetectionLogic !== undefined) outbound.motionDetectionLogic = updates.motionDetectionLogic;
+      if (updates.pirEnabled !== undefined) outbound.pirEnabled = updates.pirEnabled;
+      if (updates.pirAutoOffDelay !== undefined) outbound.pirAutoOffDelay = updates.pirAutoOffDelay;
+      if (updates.notificationSettings !== undefined) outbound.notificationSettings = updates.notificationSettings;
+
       const response = await deviceAPI.updateDevice(deviceId, outbound);
       setDevices(prev =>
         prev.map(device =>

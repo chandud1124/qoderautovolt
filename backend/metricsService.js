@@ -302,6 +302,14 @@ async function initializeMetrics() {
       return;
     }
 
+    // Initialize device_power_usage_by_type_watts with all configured device types at 0
+    // This ensures Grafana always shows all device types, even when no devices are consuming power
+    Object.keys(devicePowerSettings).forEach(type => {
+      if (type !== 'relay') { // Skip the default relay type
+        powerUsageByTypeWatts.set({ device_type: type }, 0);
+      }
+    });
+
   const nowDate = new Date();
   const nowMs = nowDate.getTime();
   const dayStart = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate(), 0, 0, 0, 0);
@@ -472,6 +480,14 @@ async function updateMetrics() {
     esp32EnergyConsumptionMonthly.reset();
     powerUsageByTypeWatts.reset();
     powerUsageByClassroomTypeWatts.reset();
+
+    // Initialize device_power_usage_by_type_watts with all configured device types at 0
+    // This ensures Grafana always shows all device types, even when consumption is 0
+    Object.keys(devicePowerSettings).forEach(type => {
+      if (type !== 'relay') { // Skip the default relay type
+        powerUsageByTypeWatts.set({ device_type: type }, 0);
+      }
+    });
 
     if (!devices || devices.length === 0) {
       esp32EnergyConsumptionTotalDaily.set(energyTracker.esp32DailyTotalAll);
