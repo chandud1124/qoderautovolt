@@ -23,6 +23,11 @@ function buildDeviceAccessQuery(user) {
     return {}; // Admin can access all devices
   }
 
+  // Allow security personnel and users explicitly granted monitoring access to view all devices/classrooms
+  if (user.role === 'security' || (user.permissions && user.permissions.canMonitorSecurity) || (user.classroomPermissions && user.classroomPermissions.canAccessAllClassrooms)) {
+    return {};
+  }
+
   const accessConditions = [];
 
   // Direct device assignments
@@ -47,6 +52,34 @@ function buildDeviceAccessQuery(user) {
   }
 
   return { $or: accessConditions };
+}
+
+// Per-device access check. Returns true if user may view/control the specific device.
+function userHasAccessToDevice(user, device) {
+  if (!user || !device) return false;
+  // Admins and security personnel have blanket access/control
+  if (user.role === 'admin' || user.role === 'super-admin' || user.role === 'security') return true;
+
+  // Explicit permission flags
+  if (user.permissions && (user.permissions.canMonitorSecurity || user.permissions.canControlDevices)) return true;
+  if (user.classroomPermissions && user.classroomPermissions.canAccessAllClassrooms) return true;
+
+  // Direct device assignment
+  if (Array.isArray(user.assignedDevices) && user.assignedDevices.some(d => d && d.toString() === (device._id ? device._id.toString() : device.toString()))) return true;
+
+  // Room / classroom assignment
+  if (Array.isArray(user.assignedRooms) && device.classroom && user.assignedRooms.includes(device.classroom)) return true;
+
+  // Department-level access for management/faculty
+  if ((user.role === 'principal' || user.role === 'dean' || user.role === 'hod' || user.role === 'faculty') && user.department && device.classroom) {
+    try {
+      return device.classroom.toLowerCase().startsWith(`${user.department.toLowerCase()}-`);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  return false;
 }
 
 const getAllDevices = async (req, res) => {
@@ -622,6 +655,11 @@ const toggleSwitch = async (req, res) => {
     dbQueryTime = Date.now() - startTime;
     if (!device) {
       return res.status(404).json({ message: 'Device not found' });
+    }
+
+    // Authorization: ensure user has access to control this device. Security role is allowed to control any device.
+    if (!userHasAccessToDevice(req.user, device)) {
+      return res.status(403).json({ message: 'You do not have permission to control this device' });
     }
 
     // Check device connectivity with MQTT-based logic
@@ -1270,6 +1308,11 @@ const controlDevice = async (req, res) => {
     const device = await Device.findById(deviceId);
     if (!device) {
       return res.status(404).json({ message: 'Device not found' });
+    }
+
+    // Authorization: allow security and admins to control device settings as well
+    if (!userHasAccessToDevice(req.user, device)) {
+      return res.status(403).json({ message: 'You do not have permission to control this device' });
     }
 
     // Update device settings

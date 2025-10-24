@@ -39,29 +39,12 @@ const sanitizeTicket = (ticket) => ({
 // Create a new ticket
 const createTicket = async (req, res) => {
     try {
-        // Mock user for testing (remove after fixing auth)
+        // Check if user is authenticated
         if (!req.user) {
-            // Try to find an existing user, or use mock data
-            let existingUser = await User.findOne({ role: 'admin' });
-            if (!existingUser) {
-                existingUser = await User.findOne();
-            }
-            
-            if (existingUser) {
-                req.user = {
-                    id: existingUser._id,
-                    name: existingUser.name,
-                    department: existingUser.department || 'IT',
-                    role: existingUser.role || 'admin'
-                };
-            } else {
-                req.user = {
-                    id: '507f1f77bcf86cd799439011', // Mock ObjectId
-                    name: 'Test User',
-                    department: 'IT',
-                    role: 'admin' // Add role for testing
-                };
-            }
+            return res.status(401).json({
+                error: 'Authentication required',
+                details: 'You must be logged in to create a ticket'
+            });
         }
         const {
             title,
@@ -102,7 +85,7 @@ const createTicket = async (req, res) => {
             description,
             category,
             priority,
-            department: department || req.user.department,
+            department: req.user.department, // Always use user's actual department, ignore frontend input
             location,
             deviceId,
             tags,
@@ -204,29 +187,12 @@ const createTicket = async (req, res) => {
 // Get all tickets (with role-based filtering)
 const getTickets = async (req, res) => {
     try {
-        // Mock user for testing (remove after fixing auth)
+        // Check if user is authenticated
         if (!req.user) {
-            // Try to find an existing user, or use mock data
-            let existingUser = await User.findOne({ role: 'admin' });
-            if (!existingUser) {
-                existingUser = await User.findOne();
-            }
-            
-            if (existingUser) {
-                req.user = {
-                    id: existingUser._id,
-                    name: existingUser.name,
-                    department: existingUser.department || 'IT',
-                    role: existingUser.role || 'admin'
-                };
-            } else {
-                req.user = {
-                    id: '507f1f77bcf86cd799439011', // Mock ObjectId
-                    name: 'Test User',
-                    department: 'IT',
-                    role: 'admin' // Add role for testing
-                };
-            }
+            return res.status(401).json({
+                error: 'Authentication required',
+                details: 'You must be logged in to view tickets'
+            });
         }
         const page = Math.max(parseInt(req.query.page) || 1, 1);
         const limit = Math.min(Math.max(parseInt(req.query.limit) || 10, 1), 50);
@@ -243,32 +209,32 @@ const getTickets = async (req, res) => {
             // No filtering needed
         } else if (req.user.role === 'dean' || req.user.role === 'hod') {
             // Dean and HOD can see tickets from their department OR tickets they created/assigned to
-            const userId = mongoose.Types.ObjectId.isValid(req.user.id) 
-                ? new mongoose.Types.ObjectId(req.user.id)
-                : req.user.id;
-            
-            console.log('[DEBUG] Dean/HOD User ID:', req.user.id);
-            console.log('[DEBUG] Converted userId:', userId);
-            console.log('[DEBUG] Department:', req.user.department);
-            
+            console.log('[DEBUG] Dean/HOD User:', {
+                id: req.user.id,
+                name: req.user.name,
+                role: req.user.role,
+                department: req.user.department,
+                idType: typeof req.user.id
+            });
+
             query.$or = [
                 { department: req.user.department },
-                { createdBy: userId },
-                { assignedTo: userId }
+                { createdBy: req.user.id },
+                { assignedTo: req.user.id }
             ];
         } else {
             // Regular users can only see tickets they created or are assigned to
-            const userId = mongoose.Types.ObjectId.isValid(req.user.id) 
-                ? new mongoose.Types.ObjectId(req.user.id)
-                : req.user.id;
-            
-            console.log('[DEBUG] Regular User ID:', req.user.id);
-            console.log('[DEBUG] Converted userId:', userId);
-            console.log('[DEBUG] User role:', req.user.role);
-            
+            console.log('[DEBUG] Regular User:', {
+                id: req.user.id,
+                name: req.user.name,
+                role: req.user.role,
+                department: req.user.department,
+                idType: typeof req.user.id
+            });
+
             query.$or = [
-                { createdBy: userId },
-                { assignedTo: userId }
+                { createdBy: req.user.id },
+                { assignedTo: req.user.id }
             ];
         }
 
@@ -337,29 +303,12 @@ const getTickets = async (req, res) => {
 // Get single ticket
 const getTicket = async (req, res) => {
     try {
-        // Mock user for testing (remove after fixing auth)
+        // Check if user is authenticated
         if (!req.user) {
-            // Try to find an existing user, or use mock data
-            let existingUser = await User.findOne({ role: 'admin' });
-            if (!existingUser) {
-                existingUser = await User.findOne();
-            }
-            
-            if (existingUser) {
-                req.user = {
-                    id: existingUser._id,
-                    name: existingUser.name,
-                    department: existingUser.department || 'IT',
-                    role: existingUser.role || 'admin'
-                };
-            } else {
-                req.user = {
-                    id: '507f1f77bcf86cd799439011', // Mock ObjectId
-                    name: 'Test User',
-                    department: 'IT',
-                    role: 'admin' // Add role for testing
-                };
-            }
+            return res.status(401).json({
+                error: 'Authentication required',
+                details: 'You must be logged in to view tickets'
+            });
         }
         const ticket = await Ticket.findById(req.params.id)
             .populate('createdBy', 'name email role department')
@@ -412,29 +361,12 @@ const getTicket = async (req, res) => {
 // Update ticket (admin only for assignment/status, users can add comments)
 const updateTicket = async (req, res) => {
     try {
-        // Mock user for testing (remove after fixing auth)
+        // Check if user is authenticated
         if (!req.user) {
-            // Try to find an existing user, or use mock data
-            let existingUser = await User.findOne({ role: 'admin' });
-            if (!existingUser) {
-                existingUser = await User.findOne();
-            }
-            
-            if (existingUser) {
-                req.user = {
-                    id: existingUser._id,
-                    name: existingUser.name,
-                    department: existingUser.department || 'IT',
-                    role: existingUser.role || 'admin'
-                };
-            } else {
-                req.user = {
-                    id: '507f1f77bcf86cd799439011', // Mock ObjectId
-                    name: 'Test User',
-                    department: 'IT',
-                    role: 'admin' // Add role for testing
-                };
-            }
+            return res.status(401).json({
+                error: 'Authentication required',
+                details: 'You must be logged in to update tickets'
+            });
         }
         const ticket = await Ticket.findById(req.params.id);
         if (!ticket) {
@@ -674,29 +606,12 @@ const updateTicket = async (req, res) => {
 // Delete ticket (admin only)
 const deleteTicket = async (req, res) => {
     try {
-        // Mock user for testing (remove after fixing auth)
+        // Check if user is authenticated
         if (!req.user) {
-            // Try to find an existing user, or use mock data
-            let existingUser = await User.findOne({ role: 'admin' });
-            if (!existingUser) {
-                existingUser = await User.findOne();
-            }
-            
-            if (existingUser) {
-                req.user = {
-                    id: existingUser._id,
-                    name: existingUser.name,
-                    department: existingUser.department || 'IT',
-                    role: existingUser.role || 'admin'
-                };
-            } else {
-                req.user = {
-                    id: '507f1f77bcf86cd799439011', // Mock ObjectId
-                    name: 'Test User',
-                    department: 'IT',
-                    role: 'admin' // Add role for testing
-                };
-            }
+            return res.status(401).json({
+                error: 'Authentication required',
+                details: 'You must be logged in to delete tickets'
+            });
         }
         const ticket = await Ticket.findById(req.params.id);
         if (!ticket) {
@@ -733,29 +648,12 @@ const deleteTicket = async (req, res) => {
 // Get ticket statistics (admin only)
 const getTicketStats = async (req, res) => {
     try {
-        // Mock user for testing (remove after fixing auth)
+        // Check if user is authenticated
         if (!req.user) {
-            // Try to find an existing user, or use mock data
-            let existingUser = await User.findOne({ role: 'admin' });
-            if (!existingUser) {
-                existingUser = await User.findOne();
-            }
-            
-            if (existingUser) {
-                req.user = {
-                    id: existingUser._id,
-                    name: existingUser.name,
-                    department: existingUser.department || 'IT',
-                    role: existingUser.role || 'admin'
-                };
-            } else {
-                req.user = {
-                    id: '507f1f77bcf86cd799439011', // Mock ObjectId
-                    name: 'Test User',
-                    department: 'IT',
-                    role: 'admin' // Add role for testing
-                };
-            }
+            return res.status(401).json({
+                error: 'Authentication required',
+                details: 'You must be logged in to view ticket statistics'
+            });
         }
         if (req.user.role !== 'admin' && req.user.role !== 'super-admin' && req.user.role !== 'dean' && req.user.role !== 'hod') {
             return res.status(403).json({

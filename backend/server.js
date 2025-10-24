@@ -1,6 +1,6 @@
-﻿require('dotenv').config();
+﻿const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 const express = require('express');
-const path = require('path');
 console.log('[startup] Starting server.js ...');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -797,7 +797,7 @@ const connectDB = async (retries = 5) => {
     maxPoolSize: 10, // Reduced from 20 to prevent connection exhaustion
     minPoolSize: 2,  // Reduced from 5 to be more conservative
     maxIdleTimeMS: 60000, // Increased from 30000ms to 60 seconds
-    bufferCommands: false, // Disable command buffering
+    bufferCommands: true, // Enable command buffering
     directConnection: primaryUri.startsWith('mongodb://') ? true : undefined,
     heartbeatFrequencyMS: 10000, // Check connection every 10 seconds
     maxConnecting: 2, // Limit concurrent connection attempts
@@ -873,6 +873,7 @@ const connectDB = async (retries = 5) => {
       return connectDB(retries - 1);
     } else {
       logger.warn('MongoDB not connected. API running in LIMITED MODE (DB-dependent routes may fail).');
+      return; // Return undefined to indicate failure but don't throw
     }
   }
 };
@@ -1350,19 +1351,6 @@ if (process.env.NODE_ENV === 'development') {
 }
 
 
-// Initialize Telegram service
-const telegramService = require('./services/telegramService');
-telegramService.initialize().catch(error => {
-  console.error('Failed to initialize Telegram service:', error);
-});
-
-// Initialize Smart Notification service
-const smartNotificationService = require('./services/smartNotificationService');
-smartNotificationService.setTelegramService(telegramService);
-smartNotificationService.start().catch(error => {
-  console.error('Failed to initialize Smart Notification service:', error);
-});
-
 // Create default admin user
 const createAdminUser = async () => {
   try {
@@ -1652,30 +1640,48 @@ console.log(`[DEBUG] App object:`, typeof app);
 
 // Connect to database BEFORE starting the server
 logger.info('[DEBUG] Connecting to database before starting server...');
-connectDB().then(() => {
-  console.log('[DEBUG] Database connected, now starting server...');
-  
+(async () => {
   try {
-    server.listen(PORT, HOST, () => {
-      console.log(`[SERVER] Listen callback STARTED - PID: ${process.pid}`);
-      console.log(`[SERVER] Listen callback executed`);
-      console.log(`[DEBUG] Server listening on ${HOST}:${PORT}`);
-      console.log(`Server running on ${HOST}:${PORT}`);
-      console.log(`Server accessible on localhost:${PORT} and all network interfaces`);
-      console.log(`Environment: ${process.env.NODE_ENV}`);
+    await connectDB();
+    console.log('[DEBUG] Database connected, now starting server...');
 
-      // Debug: Check if server is actually listening
-      console.log(`[DEBUG] Server address:`, server.address());
+    // Initialize Telegram service AFTER database connection
+    const telegramService = require('./services/telegramService');
+    telegramService.initialize().catch(error => {
+      console.error('Failed to initialize Telegram service:', error);
     });
-  } catch (listenError) {
-    console.error('[DEBUG] Error in server.listen():', listenError);
-    console.error('[DEBUG] Listen error stack:', listenError.stack);
+
+    // Initialize Smart Notification service
+    const smartNotificationService = require('./services/smartNotificationService');
+    smartNotificationService.setTelegramService(telegramService);
+    smartNotificationService.start();
+
+    // Initialize Evening Lights Monitor service
+    const eveningLightsMonitor = require('./services/eveningLightsMonitor');
+    eveningLightsMonitor.start();
+
+    try {
+      server.listen(PORT, HOST, () => {
+        console.log(`[SERVER] Listen callback STARTED - PID: ${process.pid}`);
+        console.log(`[SERVER] Listen callback executed`);
+        console.log(`[DEBUG] Server listening on ${HOST}:${PORT}`);
+        console.log(`Server running on ${HOST}:${PORT}`);
+        console.log(`Server accessible on localhost:${PORT} and all network interfaces`);
+        console.log(`Environment: ${process.env.NODE_ENV}`);
+
+        // Debug: Check if server is actually listening
+        console.log(`[DEBUG] Server address:`, server.address());
+      });
+    } catch (listenError) {
+      console.error('[DEBUG] Error in server.listen():', listenError);
+      console.error('[DEBUG] Listen error stack:', listenError.stack);
+      process.exit(1);
+    }
+  } catch (dbError) {
+    console.error('[DEBUG] Database connection failed, exiting:', dbError);
     process.exit(1);
   }
-}).catch((dbError) => {
-  console.error('[DEBUG] Database connection failed, exiting:', dbError);
-  process.exit(1);
-});
+})();
 
 server.on('listening', () => {
   console.log('[SERVER] Server is now listening event fired');
@@ -1708,7 +1714,6 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('===========================');
   process.exit(1);
 });
-
 
 
 module.exports = { app, io, server };

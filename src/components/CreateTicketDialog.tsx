@@ -5,7 +5,6 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription } from '@/components/ui/dialog';
-import { MentionInput } from '@/components/ui/MentionInput';
 import { Ticket } from 'lucide-react';
 import { ticketAPI, usersAPI } from '@/services/api';
 import { useToast } from '@/hooks/use-toast';
@@ -14,15 +13,6 @@ import { useDevices } from '@/hooks/useDevices';
 
 interface CreateTicketDialogProps {
     onTicketCreated?: () => void;
-}
-
-interface User {
-    _id: string;
-    id?: string;
-    name: string;
-    email: string;
-    role?: string;
-    department?: string;
 }
 
 const CreateTicketDialog: React.FC<CreateTicketDialogProps> = ({ onTicketCreated }) => {
@@ -36,12 +26,28 @@ const CreateTicketDialog: React.FC<CreateTicketDialogProps> = ({ onTicketCreated
         description: '',
         category: '',
         priority: 'medium',
-        department: user?.department || '',
+        department: user?.department || '', // Will be set by backend, not user-editable
         location: '',
         deviceId: '',
-        tags: [] as string[],
-        mentionedUsers: [] as User[]
+        tags: [] as string[]
     });
+
+    // Helper function to format department names for display
+    const formatDepartmentName = (department: string | undefined): string => {
+        if (!department) return 'Not specified';
+
+        const departmentNames: Record<string, string> = {
+            'School of IT': 'School of Information Technology',
+            'School of Business': 'School of Business',
+            'School of Hospitality': 'School of Hospitality',
+            'Admission Department': 'Admission Department',
+            'Other': 'Other',
+            'IT': 'Information Technology',
+            'IT Department': 'IT Department'
+        };
+
+        return departmentNames[department] || department;
+    };
 
     const categories = [
         { value: 'technical_issue', label: 'Technical Issue' },
@@ -61,20 +67,7 @@ const CreateTicketDialog: React.FC<CreateTicketDialogProps> = ({ onTicketCreated
         { value: 'urgent', label: 'Urgent' }
     ];
 
-    const departments = [
-        'IT',
-        'HR',
-        'Finance',
-        'Operations',
-        'Marketing',
-        'Sales',
-        'Engineering',
-        'Support',
-        'Administration',
-        'Other'
-    ];
-
-    const handleInputChange = (field: string, value: string | User[]) => {
+    const handleInputChange = (field: string, value: string) => {
         setFormData(prev => ({ ...prev, [field]: value }));
     };
 
@@ -94,13 +87,12 @@ const CreateTicketDialog: React.FC<CreateTicketDialogProps> = ({ onTicketCreated
         try {
             // Extract user IDs from mentionedUsers
             const ticketPayload = {
-                ...formData,
-                mentionedUsers: formData.mentionedUsers.map(u => u._id || u.id || '')
+                ...formData
             };
             await ticketAPI.createTicket(ticketPayload);
             toast({
                 title: "Ticket Created",
-                description: "Your support ticket has been submitted successfully. Mentioned users will be notified.",
+                description: "Your support ticket has been submitted successfully.",
             });
             setOpen(false);
             setFormData({
@@ -111,8 +103,7 @@ const CreateTicketDialog: React.FC<CreateTicketDialogProps> = ({ onTicketCreated
                 department: user?.department || '',
                 location: '',
                 deviceId: '',
-                tags: [],
-                mentionedUsers: []
+                tags: []
             });
             onTicketCreated?.();
         } catch (error: unknown) {
@@ -207,22 +198,19 @@ const CreateTicketDialog: React.FC<CreateTicketDialogProps> = ({ onTicketCreated
                         />
                     </div>
 
-                    {/* Department and Location */}
+                    {/* Department (Read-only) and Location */}
                     <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-2">
                             <Label>Department</Label>
-                            <Select value={formData.department} onValueChange={(value) => handleInputChange('department', value)}>
-                                <SelectTrigger>
-                                    <SelectValue placeholder="Select department" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {departments.map((dept) => (
-                                        <SelectItem key={dept} value={dept}>
-                                            {dept}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
+                            <Input
+                                value={formatDepartmentName(user?.department)}
+                                disabled
+                                className="bg-muted"
+                                placeholder="Your department"
+                            />
+                            <p className="text-xs text-muted-foreground">
+                                Tickets are automatically assigned to your department
+                            </p>
                         </div>
 
                         <div className="space-y-2">
@@ -253,24 +241,6 @@ const CreateTicketDialog: React.FC<CreateTicketDialogProps> = ({ onTicketCreated
                             </SelectContent>
                         </Select>
                     </div>
-
-                    {/* Mention Users */}
-                    <MentionInput
-                        mentionedUsers={formData.mentionedUsers}
-                        onMentionedUsersChange={(users) => handleInputChange('mentionedUsers', users as any)}
-                        onSearchUsers={async (query) => {
-                            try {
-                                const response = await usersAPI.searchUsersForMention(query);
-                                return response.data?.data || [];
-                            } catch (error) {
-                                console.error('Error searching users:', error);
-                                return [];
-                            }
-                        }}
-                        placeholder="Type @ to mention users..."
-                        label="Mention Users (Optional)"
-                        maxMentions={10}
-                    />
 
                     {/* Submit Buttons */}
                     <div className="flex justify-end gap-3 pt-4">

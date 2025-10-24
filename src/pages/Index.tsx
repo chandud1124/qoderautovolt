@@ -74,7 +74,15 @@ const Index = () => {
         // Debounce apply to avoid tiny flickers when devices array is changing
         clearTimeout(t);
         t = setTimeout(() => {
-          setStats(newStats);
+          // Defensive: ensure we never set stats to undefined (API may return empty payload)
+          setStats(newStats || {
+            totalDevices: devices.length,
+            onlineDevices: devices.filter(d => d.status === 'online').length,
+            totalSwitches: devices.reduce((s, d) => s + d.switches.length, 0),
+            activeSwitches: devices.filter(d => d.status === 'online').reduce((s, d) => s + d.switches.filter(sw => sw.state).length, 0),
+            totalPirSensors: devices.filter(d => d.pirEnabled && d.pirGpio !== undefined && d.pirGpio !== null).length,
+            activePirSensors: 0
+          });
           setLastUpdated(new Date());
           setIsConnected(true);
         }, 120);

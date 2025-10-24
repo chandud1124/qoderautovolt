@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { authAPI } from '@/services/api';
 import { socketService } from '@/services/socket';
+import { useAuth } from './AuthContext';
 
 export interface Notification {
   _id: string;
@@ -57,6 +58,8 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({ chil
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  const { isAuthenticated } = useAuth();
 
   // Fetch notifications
   const fetchNotifications = async (params?: { limit?: number; unreadOnly?: boolean }) => {
@@ -160,11 +163,13 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({ chil
     };
   }, [socketService]);
 
-  // Initial load
+  // Initial load - only when authenticated
   useEffect(() => {
-    fetchNotifications({ limit: 20 });
-    refreshUnreadCount();
-  }, []);
+    if (isAuthenticated) {
+      fetchNotifications({ limit: 20 });
+      refreshUnreadCount();
+    }
+  }, [isAuthenticated]);
 
   const value: NotificationContextType = {
     notifications,

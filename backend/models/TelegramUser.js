@@ -141,32 +141,29 @@ telegramUserSchema.pre('save', async function(next) {
       const user = await User.findById(this.user);
 
       if (user) {
-        // Set role-based subscriptions
+        // Check if user role is allowed for Telegram registration
+        const allowedRoles = ['super-admin', 'dean', 'hod', 'admin', 'security'];
+        if (!allowedRoles.includes(user.role)) {
+          const error = new Error(`Telegram registration is restricted to admin and security personnel only. Your role (${user.role}) is not authorized.`);
+          return next(error);
+        }
+
+        // Set role-based subscriptions based on restricted access
         const roleSubscriptions = [];
 
-        switch (user.role) {
-          case 'super-admin':
-          case 'admin':
-            roleSubscriptions.push('admin_alerts', 'security_alerts', 'maintenance_alerts', 'energy_alerts', 'system_alerts', 'user_alerts');
-            break;
-          case 'security':
-            roleSubscriptions.push('security_alerts', 'energy_alerts');
-            break;
-          case 'faculty':
-          case 'teacher':
-            roleSubscriptions.push('energy_alerts', 'maintenance_alerts');
-            break;
-          case 'student':
-            roleSubscriptions.push('energy_alerts');
-            break;
-          default:
-            roleSubscriptions.push('energy_alerts');
+        if (['super-admin', 'dean', 'hod', 'admin'].includes(user.role)) {
+          // Admins get ALL alerts
+          roleSubscriptions.push('admin_alerts', 'security_alerts', 'maintenance_alerts', 'energy_alerts', 'system_alerts', 'user_alerts');
+        } else if (user.role === 'security') {
+          // Security only gets security and evening lights alerts
+          roleSubscriptions.push('security_alerts', 'energy_alerts');
         }
 
         this.roleSubscriptions = roleSubscriptions;
       }
     } catch (error) {
       console.error('Error setting role subscriptions:', error);
+      return next(error);
     }
   }
   next();
@@ -196,7 +193,40 @@ telegramUserSchema.methods.shouldReceiveAlert = function(alertType, alertLabels 
     return false;
   }
 
-  // Check role-based subscriptions
+  // Role-based alert restrictions:
+  // - Only admins (super-admin, dean, hod, admin) can receive ALL alerts
+  // - Security personnel can receive security and energy alerts
+  // - Evening lights alerts (switchesOnAfter5PM) go only to security
+
+  const adminRoles = ['super-admin', 'dean', 'hod', 'admin'];
+
+  // Special handling for different alert types
+  switch (alertType) {
+    case 'security_alerts':
+      // Security alerts go to admins AND security personnel
+      return this.roleSubscriptions.includes('admin_alerts') || this.roleSubscriptions.includes('security_alerts');
+
+    case 'energy_alerts':
+      // Energy alerts go to admins AND security personnel (for evening lights monitoring)
+      return this.roleSubscriptions.includes('admin_alerts') || this.roleSubscriptions.includes('energy_alerts');
+
+    case 'switchesOnAfter5PM':
+      // Evening lights alerts go only to security personnel (who have both security_alerts and energy_alerts)
+      return this.roleSubscriptions.includes('security_alerts') && this.roleSubscriptions.includes('energy_alerts');
+
+    case 'admin_alerts':
+    case 'maintenance_alerts':
+    case 'system_alerts':
+    case 'user_alerts':
+      // Admin-only alerts
+      return this.roleSubscriptions.includes('admin_alerts');
+
+    default:
+      // For any other alert types, check if user has the specific subscription
+      return this.roleSubscriptions.includes(alertType);
+  }
+
+  // Legacy role-based checks (kept for backward compatibility but overridden above)
   const roleBasedChecks = {
     deviceOffline: ['admin_alerts', 'maintenance_alerts'],
     switchesOnAfter5PM: ['admin_alerts', 'energy_alerts', 'security_alerts'],
@@ -238,15 +268,26 @@ telegramUserSchema.statics.getActiveSubscribers = function(alertType, alertLabel
     isActive: true,
     isVerified: true
   }).populate('user').then(users => {
-    return users.filter(user => user.shouldReceiveAlert(alertType, alertLabels));
+    // Filter users who should receive this alert type based on their role and subscriptions
+    const eligibleUsers = users.filter(user => user.shouldReceiveAlert(alertType, alertLabels));
+
+    return eligibleUsers;
   });
 };
 
 telegramUserSchema.statics.cleanupExpiredTokens = function() {
   return this.updateMany(
     { tokenExpires: { $lt: new Date() } },
-    { $unset: { registrationToken: 1, tokenExpires: 1 } }
-  );
+    { $unset: { registrationToken: 1, tokenExpires: 1 } },
+    { 
+      maxTimeMS: 5000, // 5 second timeout
+      wtimeoutMS: 5000  // Write timeout
+    }
+  ).catch(error => {
+    console.warn('Token cleanup operation failed:', error.message);
+    // Don't throw - this is a maintenance operation
+    return null;
+  });
 };
 
 module.exports = mongoose.model('TelegramUser', telegramUserSchema);

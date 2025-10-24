@@ -1,5 +1,5 @@
 // --- AI/ML Microservice API ---
-const AI_ML_BASE_URL = 'http://127.0.0.1:8002'; // Update if deployed elsewhere
+const AI_ML_BASE_URL = import.meta.env.VITE_AI_ML_SERVICE_URL || 'http://127.0.0.1:8004';
 
 export const aiMlAPI = {
   forecast: (device_id: string, history: number[], periods = 5) =>

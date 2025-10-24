@@ -51,13 +51,6 @@ interface Ticket {
     location?: string;
     deviceId?: string;
     tags: string[];
-    mentionedUsers?: Array<{
-        _id?: string;
-        id?: string;
-        name: string;
-        email: string;
-        role?: string;
-    }>;
     resolution?: string;
     resolvedAt?: string;
     closedAt?: string;
@@ -202,6 +195,17 @@ const TicketList: React.FC = () => {
             other: 'Other'
         };
         return categories[category] || category;
+    };
+
+    const formatDepartmentName = (department: string) => {
+        const departmentMap: Record<string, string> = {
+            'School of IT': 'School of Information Technology',
+            'School of Business': 'School of Business',
+            'School of Hospitality': 'School of Hospitality',
+            'Admission Department': 'Admission Department',
+            'Other': 'Other'
+        };
+        return departmentMap[department] || department;
     };
 
     const handleViewDetails = (ticket: Ticket) => {
@@ -581,7 +585,7 @@ const TicketList: React.FC = () => {
                                 {selectedTicket.department && (
                                     <div>
                                         <Label>Department</Label>
-                                        <p>{selectedTicket.department}</p>
+                                        <p>{formatDepartmentName(selectedTicket.department)}</p>
                                     </div>
                                 )}
                                 {selectedTicket.location && (
@@ -601,26 +605,6 @@ const TicketList: React.FC = () => {
                                             <Badge key={tag} variant="outline">
                                                 <Tag className="w-3 h-3 mr-1" />
                                                 {tag}
-                                            </Badge>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Mentioned Users */}
-                            {selectedTicket.mentionedUsers && selectedTicket.mentionedUsers.length > 0 && (
-                                <div>
-                                    <Label>Mentioned Users</Label>
-                                    <div className="flex flex-wrap gap-2 mt-1">
-                                        {selectedTicket.mentionedUsers.map((user) => (
-                                            <Badge key={user._id || user.id} variant="secondary" className="gap-1">
-                                                <User className="w-3 h-3" />
-                                                {user.name}
-                                                {user.role && (
-                                                    <span className="text-xs text-muted-foreground ml-1">
-                                                        ({user.role})
-                                                    </span>
-                                                )}
                                             </Badge>
                                         ))}
                                     </div>

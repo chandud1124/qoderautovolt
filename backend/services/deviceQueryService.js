@@ -4,44 +4,50 @@ class DeviceQueryService {
   // Handle device-related queries from Telegram
   static async handleDeviceQuery(chatId, query, telegramService, telegramUser) {
     try {
-      const lowerQuery = query.toLowerCase().trim();
-
-      // Handle specific device queries
-      if (lowerQuery.includes('status') || lowerQuery.includes('what')) {
-        return await this.handleDeviceStatusQuery(chatId, query, telegramService);
+      // If no query provided, show numbered menu
+      if (!query) {
+        return await this.showDeviceQueryMenu(chatId, telegramService);
       }
 
-      // Handle offline devices query
-      if (lowerQuery.includes('offline')) {
-        return await this.handleOfflineDevicesQuery(chatId, telegramService, telegramUser);
-      }
+      const lowerQuery = typeof query === 'string' ? query.toLowerCase().trim() : query;
 
-      // Handle device list query
-      if (lowerQuery.includes('list') || lowerQuery.includes('show') || lowerQuery.includes('all')) {
-        return await this.handleDeviceListQuery(chatId, telegramService);
-      }
+      // Handle specific numbered queries
+      switch (lowerQuery) {
+        case 'offline':
+        case '1':
+          return await this.handleOfflineDevicesQuery(chatId, telegramService, telegramUser);
 
-      // Handle specific device queries
-      const deviceName = this.extractDeviceName(query);
-      if (deviceName) {
-        return await this.handleSpecificDeviceQuery(chatId, deviceName, telegramService);
-      }
+        case 'online':
+        case '2':
+          return await this.handleOnlineDevicesQuery(chatId, telegramService);
 
-      // Handle classroom queries
-      const classroom = this.extractClassroom(query);
-      if (classroom) {
-        return await this.handleClassroomQuery(chatId, classroom, telegramService);
-      }
+        case 'all':
+        case '3':
+          return await this.handleDeviceListQuery(chatId, telegramService);
 
-      // Default response
-      return await telegramService.sendMessage(
-        chatId,
-        `I can help you with device queries! Try asking:\n\n` +
-        `• "Show offline devices"\n` +
-        `• "What's the status of Computer_Lab?"\n` +
-        `• "Devices in LH_19g"\n` +
-        `• "List all devices"`
-      );
+        case 'status':
+        case '4':
+          return await this.handleDeviceStatusQuery(chatId, telegramService);
+
+        case 'classrooms':
+        case '5':
+          return await this.handleClassroomDevicesQuery(chatId, telegramService);
+
+        case 'maintenance':
+        case '6':
+          return await this.handleMaintenanceDevicesQuery(chatId, telegramService);
+
+        default:
+          // Handle natural language queries for backward compatibility
+          if (typeof query === 'string') {
+            return await this.handleNaturalLanguageQuery(chatId, query, telegramService, telegramUser);
+          }
+
+          return await telegramService.sendMessage(
+            chatId,
+            `❌ Invalid device query option.\n\nUse \`/devices\` to see available numbered options.`
+          );
+      }
 
     } catch (error) {
       console.error('Error handling device query:', error);
@@ -52,47 +58,175 @@ class DeviceQueryService {
     }
   }
 
-  // Handle device status queries
-  static async handleDeviceStatusQuery(chatId, query, telegramService) {
+  // Show device query menu with numbered options
+  static async showDeviceQueryMenu(chatId, telegramService) {
+    const options = telegramService.getDeviceQueryOptions();
+    const queryList = Object.entries(options)
+      .map(([num, option]) => `${num}. ${option.name} - ${option.description}`)
+      .join('\n');
+
+    return await telegramService.sendMessage(
+      chatId,
+      `🔧 *Device Management Menu*\n\n${queryList}\n\n` +
+      `💡 *How to use:*\n` +
+      `• Type a number: \`/devices 1\` (for Offline Devices)\n` +
+      `• Or use the command: \`/devices offline\`\n\n` +
+      `Example: \`/devices 4\` for Device Status Summary`
+    );
+  }
+
+  // Handle online devices query
+  static async handleOnlineDevicesQuery(chatId, telegramService) {
     try {
-      const devices = await Device.find({}).sort({ lastSeen: -1 });
+      const onlineDevices = await Device.find({ status: 'online' }).sort({ name: 1 });
+
+      if (onlineDevices.length === 0) {
+        return await telegramService.sendMessage(chatId, '❌ No devices are currently online.');
+      }
+
+      let message = `🟢 *Online Devices* (${onlineDevices.length})\n\n`;
+
+      onlineDevices.forEach(device => {
+        const classroom = device.classroom || 'Unknown';
+        const lastSeen = device.lastSeen ?
+          new Date(device.lastSeen).toLocaleString() : 'Unknown';
+        message += `• *${device.name}*\n  Classroom: ${classroom}\n  Last seen: ${lastSeen}\n\n`;
+      });
+
+      return await telegramService.sendMessage(chatId, message);
+    } catch (error) {
+      console.error('Error in online devices query:', error);
+      return await telegramService.sendMessage(chatId, 'Error retrieving online devices.');
+    }
+  }
+
+  // Handle classroom devices query (grouped by classroom)
+  static async handleClassroomDevicesQuery(chatId, telegramService) {
+    try {
+      const devices = await Device.find({}).sort({ classroom: 1, name: 1 });
 
       if (devices.length === 0) {
         return await telegramService.sendMessage(chatId, 'No devices found in the system.');
       }
 
-      const onlineDevices = devices.filter(d => d.status === 'online');
-      const offlineDevices = devices.filter(d => d.status === 'offline');
-
-      let message = `📊 *Device Status Summary*\n\n`;
-      message += `🟢 Online: ${onlineDevices.length}\n`;
-      message += `🔴 Offline: ${offlineDevices.length}\n\n`;
-
-      if (offlineDevices.length > 0) {
-        message += `*Offline Devices:*\n`;
-        offlineDevices.forEach(device => {
-          const lastSeen = device.lastSeen ?
-            new Date(device.lastSeen).toLocaleString() : 'Never';
-          message += `• ${device.name} (${device.macAddress})\n  Last seen: ${lastSeen}\n`;
-        });
-        message += `\n`;
-      }
-
-      if (onlineDevices.length > 0) {
-        message += `*Online Devices:*\n`;
-        onlineDevices.slice(0, 5).forEach(device => {
-          message += `• ${device.name} (${device.macAddress})\n`;
-        });
-        if (onlineDevices.length > 5) {
-          message += `• ... and ${onlineDevices.length - 5} more\n`;
+      // Group devices by classroom
+      const classroomGroups = {};
+      devices.forEach(device => {
+        const classroom = device.classroom || 'Unknown';
+        if (!classroomGroups[classroom]) {
+          classroomGroups[classroom] = [];
         }
-      }
+        classroomGroups[classroom].push(device);
+      });
+
+      let message = `🏫 *Devices by Classroom*\n\n`;
+
+      Object.keys(classroomGroups).sort().forEach(classroom => {
+        const devicesInClassroom = classroomGroups[classroom];
+        const onlineCount = devicesInClassroom.filter(d => d.status === 'online').length;
+        const totalCount = devicesInClassroom.length;
+
+        message += `*${classroom}:* ${onlineCount}/${totalCount} online\n`;
+
+        devicesInClassroom.forEach(device => {
+          const status = device.status === 'online' ? '🟢' : '🔴';
+          message += `  ${status} ${device.name}\n`;
+        });
+
+        message += `\n`;
+      });
 
       return await telegramService.sendMessage(chatId, message);
     } catch (error) {
-      console.error('Error in device status query:', error);
-      return await telegramService.sendMessage(chatId, 'Error retrieving device status.');
+      console.error('Error in classroom devices query:', error);
+      return await telegramService.sendMessage(chatId, 'Error retrieving classroom devices.');
     }
+  }
+
+  // Handle maintenance devices query
+  static async handleMaintenanceDevicesQuery(chatId, telegramService) {
+    try {
+      // Find devices that might need maintenance (offline for more than 24 hours)
+      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const maintenanceDevices = await Device.find({
+        $or: [
+          { status: 'offline' },
+          { lastSeen: { $lt: oneDayAgo } }
+        ]
+      }).sort({ lastSeen: -1 });
+
+      if (maintenanceDevices.length === 0) {
+        return await telegramService.sendMessage(chatId, '🎉 All devices are in good condition!');
+      }
+
+      let message = `🔧 *Devices Needing Attention* (${maintenanceDevices.length})\n\n`;
+
+      maintenanceDevices.forEach(device => {
+        const status = device.status === 'online' ? '🟢 Online' : '🔴 Offline';
+        const lastSeen = device.lastSeen ?
+          new Date(device.lastSeen).toLocaleString() : 'Never';
+        const classroom = device.classroom || 'Unknown';
+        const daysSinceLastSeen = device.lastSeen ?
+          Math.floor((Date.now() - new Date(device.lastSeen)) / (1000 * 60 * 60 * 24)) : 'Unknown';
+
+        message += `• *${device.name}*\n`;
+        message += `  Status: ${status}\n`;
+        message += `  Classroom: ${classroom}\n`;
+        message += `  Last seen: ${lastSeen}\n`;
+        if (daysSinceLastSeen !== 'Unknown' && daysSinceLastSeen > 0) {
+          message += `  Days offline: ${daysSinceLastSeen}\n`;
+        }
+        message += `\n`;
+      });
+
+      return await telegramService.sendMessage(chatId, message);
+    } catch (error) {
+      console.error('Error in maintenance devices query:', error);
+      return await telegramService.sendMessage(chatId, 'Error retrieving maintenance devices.');
+    }
+  }
+
+  // Handle natural language queries (backward compatibility)
+  static async handleNaturalLanguageQuery(chatId, query, telegramService, telegramUser) {
+    const lowerQuery = query.toLowerCase().trim();
+
+    // Handle specific device queries
+    if (lowerQuery.includes('status') || lowerQuery.includes('what')) {
+      return await this.handleDeviceStatusQuery(chatId, query, telegramService);
+    }
+
+    // Handle offline devices query
+    if (lowerQuery.includes('offline')) {
+      return await this.handleOfflineDevicesQuery(chatId, telegramService, telegramUser);
+    }
+
+    // Handle device list query
+    if (lowerQuery.includes('list') || lowerQuery.includes('show') || lowerQuery.includes('all')) {
+      return await this.handleDeviceListQuery(chatId, telegramService);
+    }
+
+    // Handle specific device queries
+    const deviceName = this.extractDeviceName(query);
+    if (deviceName) {
+      return await this.handleSpecificDeviceQuery(chatId, deviceName, telegramService);
+    }
+
+    // Handle classroom queries
+    const classroom = this.extractClassroom(query);
+    if (classroom) {
+      return await this.handleClassroomQuery(chatId, classroom, telegramService);
+    }
+
+    // Default response
+    return await telegramService.sendMessage(
+      chatId,
+      `I can help you with device queries! Try asking:\n\n` +
+      `• "Show offline devices"\n` +
+      `• "What's the status of Computer_Lab?"\n` +
+      `• "Devices in LH_19g"\n` +
+      `• "List all devices"\n\n` +
+      `Or use numbered options: \`/devices\` to see the menu!`
+    );
   }
 
   // Handle offline devices query
