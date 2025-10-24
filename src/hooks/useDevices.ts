@@ -655,11 +655,23 @@ const useDevicesInternal = () => {
     lastStatsCallTimeRef.current = Date.now();
     try {
       const response = await deviceAPI.getStats();
-      const statsData = response.data?.data;
-      if (!statsData || typeof statsData !== 'object') {
-        throw new Error('Invalid stats response format');
+      const data = response?.data?.data;
+      if (!data) {
+        // Defensive: if backend returns an empty/invalid payload, fall back to computed stats
+        console.warn('[getStats] warning: API returned no stats data, using local fallback');
+        return {
+          totalDevices: devices.length,
+          onlineDevices: devices.filter(d => d.status === 'online').length,
+          totalSwitches: devices.reduce((sum, d) => sum + d.switches.length, 0),
+          activeSwitches: devices.filter(d => d.status === 'online').reduce(
+            (sum, d) => sum + d.switches.filter(s => s.state).length,
+            0
+          ),
+          totalPirSensors: devices.filter(d => d.pirEnabled).length,
+          activePirSensors: devices.filter(d => d.pirSensor?.triggered).length
+        };
       }
-      return statsData;
+      return data;
     } catch (err: any) {
       console.error('Error getting stats:', err);
       // Return fallback stats based on local device data

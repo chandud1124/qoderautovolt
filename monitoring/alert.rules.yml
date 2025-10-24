@@ -167,5 +167,15 @@ groups:
           severity: warning
           channel: telegram
         annotations:
-          summary: "Switches are ON after 5 PM"
-          description: "IoT classroom switches are still ON after 5:00 PM. Please turn them off to save energy."
+          summary: "Switches are ON after 5 PM - {{ $labels.classroom }} Floor {{ $labels.floor }}"
+          description: |
+            🚨 **Evening Security Alert**
+
+            **Location:** {{ $labels.classroom }} (Floor {{ $labels.floor }})
+            **Device:** {{ $labels.device_name }}
+            **Status:** LIGHTS STILL ON after 5:00 PM
+            **Time:** {{ $value }} minutes past schedule
+
+            **Action Required:** Please investigate and turn off lights to save energy and ensure security.
+
+            **Total Active Switches:** Check dashboard for complete list.

@@ -45,7 +45,7 @@ services:
     restart: unless-stopped
     environment:
       NODE_ENV: production
-      MONGODB_URI: mongodb://host.docker.internal:27017/iot_classroom
+      MONGODB_URI: mongodb://172.16.3.171:27017/iot_classroom
       PORT: 3001
       JWT_SECRET: your-super-secret-jwt-key-change-this-in-production
       AI_ML_SERVICE_URL: http://ai-ml-service:8002
@@ -171,7 +171,7 @@ services:
     image: bitnami/mongodb-exporter:latest
     container_name: iot-mongodb-exporter
     environment:
-      - MONGODB_URI=mongodb://172.16.171:27017/iot_classroom
+      - MONGODB_URI=mongodb://172.16.3.171:27017/iot_classroom
     ports:
       - "9216:9216"
     restart: unless-stopped
