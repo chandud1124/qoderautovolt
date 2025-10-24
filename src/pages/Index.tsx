@@ -16,6 +16,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { usePermissions } from '@/hooks/usePermissions';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { apiService } from '@/services/api';
+import { DeviceStats } from '@/types';
 
 const Index = () => {
   const { devices, toggleSwitch, updateDevice, deleteDevice, getStats, toggleAllSwitches } = useDevices();
@@ -44,7 +45,7 @@ const Index = () => {
   }>>([]);
 
   // Smooth stats with a small debounce and memoized fallback from local devices to reduce flicker
-  const [stats, setStats] = useState({
+  const [stats, setStats] = useState<DeviceStats>({
     totalDevices: 0,
     onlineDevices: 0,
     totalSwitches: 0,
@@ -503,20 +504,20 @@ const Index = () => {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatsCard
           title="Total Devices"
-          value={stats.totalDevices}
-          subtitle={`${stats.onlineDevices} online`}
+          value={stats?.totalDevices ?? 0}
+          subtitle={`${stats?.onlineDevices ?? 0} online`}
           icon={<Cpu className="h-4 w-4" />}
-          trend={stats.onlineDevices > 0 ? 'up' : undefined}
+          trend={stats?.onlineDevices > 0 ? 'up' : undefined}
         />
         {(() => {
-          const onlineActive = stats.activeSwitches;
+          const onlineActive = stats?.activeSwitches ?? 0;
           const offlineActive = devices.filter(d => d.status !== 'online')
             .reduce((sum, d) => sum + d.switches.filter(sw => sw.state).length, 0);
           return (
             <StatsCard
               title="Active Switches"
               value={onlineActive}
-              subtitle={`online: ${onlineActive} / total: ${stats.totalSwitches}${offlineActive ? ` (+${offlineActive} offline last-known on)` : ''}`}
+              subtitle={`online: ${onlineActive} / total: ${stats?.totalSwitches ?? 0}${offlineActive ? ` (+${offlineActive} offline last-known on)` : ''}`}
               icon={<Zap className="h-4 w-4" />}
               trend={onlineActive > 0 ? 'up' : undefined}
             />
@@ -524,8 +525,8 @@ const Index = () => {
         })()}
         <StatsCard
           title="PIR Sensors"
-          value={stats.totalPirSensors}
-          subtitle={`${stats.activePirSensors} active`}
+          value={stats?.totalPirSensors ?? 0}
+          subtitle={`${stats?.activePirSensors ?? 0} active`}
           icon={<Radar className="h-4 w-4" />}
         />
         <StatsCard
@@ -729,11 +730,10 @@ const Index = () => {
 
         </div>
 
-        {/* Master Switch */}
         <div className="pl-2">
           <MasterSwitchCard
-            totalSwitches={stats.totalSwitches}
-            activeSwitches={stats.activeSwitches}
+            totalSwitches={stats?.totalSwitches ?? 0}
+            activeSwitches={stats?.activeSwitches ?? 0}
             offlineDevices={devices.filter(d => d.status !== 'online').length}
             onMasterToggle={handleMasterToggle}
             isBusy={false}

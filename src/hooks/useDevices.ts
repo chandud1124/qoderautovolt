@@ -655,9 +655,14 @@ const useDevicesInternal = () => {
     lastStatsCallTimeRef.current = Date.now();
     try {
       const response = await deviceAPI.getStats();
-      return response.data.data;
+      const statsData = response.data?.data;
+      if (!statsData || typeof statsData !== 'object') {
+        throw new Error('Invalid stats response format');
+      }
+      return statsData;
     } catch (err: any) {
       console.error('Error getting stats:', err);
+      // Return fallback stats based on local device data
       return {
         totalDevices: devices.length,
         onlineDevices: devices.filter(d => d.status === 'online').length,

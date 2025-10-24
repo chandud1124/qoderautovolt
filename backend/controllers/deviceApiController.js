@@ -70,27 +70,13 @@ exports.toggleSwitch = async (req, res, next) => {
         // Toggle state (invert current)
         const newState = !sw.state;
         
-        // Send WebSocket command to ESP32 if online
-        const wsDevices = global.wsDevices || {};
-        // Try to find by MAC address (preferred)
-        let ws = null;
-        if (device.macAddress && wsDevices instanceof Map && wsDevices.has(device.macAddress)) {
-            ws = wsDevices.get(device.macAddress);
-        } else if (wsDevices[device.macAddress]) {
-            ws = wsDevices[device.macAddress];
-        }
-
-        if (ws && ws.readyState === 1) { // 1 = OPEN
-            // Send command to ESP32
-            const cmd = {
-                type: 'switch_command',
-                switchId: sw._id,
-                gpio: sw.gpio,
-                state: newState
-            };
-            try {
-                ws.send(JSON.stringify(cmd));
-                // Optionally update DB state immediately (optimistic)
+        // Send MQTT command to ESP32 (primary method)
+        try {
+            // Send MQTT command to ESP32 using the global sendMqttSwitchCommand
+            if (global.sendMqttSwitchCommand) {
+                await global.sendMqttSwitchCommand(device.macAddress, sw.gpio, newState);
+                
+                // Update DB state
                 sw.state = newState;
                 await device.save();
                 await ActivityLog.create({
@@ -98,62 +84,21 @@ exports.toggleSwitch = async (req, res, next) => {
                     switch: switchId,
                     action: 'toggle',
                     status: 'success',
-                    details: { sent: cmd }
+                    details: { sent: true, method: 'mqtt', gpio: sw.gpio, state: newState }
                 });
-                return res.json({ success: true, result: { sent: true, cmd } });
-            } catch (err) {
-                await ActivityLog.create({
-                    device: deviceId,
-                    switch: switchId,
-                    action: 'toggle',
-                    status: 'error',
-                    details: err.message
-                });
-                return res.status(500).json({ error: 'Failed to send command to ESP32', message: err.message });
-            }
-        } else {
-            // Fallback: try MQTT if device is online
-            if (device.lastSeen && (now - new Date(device.lastSeen)) <= 60000) { // Within 1 minute
-                try {
-                    // Send MQTT command to ESP32 using the global sendMqttSwitchCommand
-                    if (global.sendMqttSwitchCommand) {
-                        await global.sendMqttSwitchCommand(device.macAddress, sw.gpio, newState);
-                        
-                        // Update DB state
-                        sw.state = newState;
-                        await device.save();
-                        await ActivityLog.create({
-                            device: deviceId,
-                            switch: switchId,
-                            action: 'toggle',
-                            status: 'success',
-                            details: { sent: true, method: 'mqtt', gpio: sw.gpio, state: newState }
-                        });
-                        return res.json({ success: true, result: { sent: true, method: 'mqtt', gpio: sw.gpio, state: newState } });
-                    } else {
-                        throw new Error('MQTT sendMqttSwitchCommand not available');
-                    }
-                } catch (mqttErr) {
-                    await ActivityLog.create({
-                        device: deviceId,
-                        switch: switchId,
-                        action: 'toggle',
-                        status: 'error',
-                        details: `MQTT fallback failed: ${mqttErr.message}`
-                    });
-                    return res.status(503).json({ error: 'Device not reachable via WebSocket or MQTT' });
-                }
+                return res.json({ success: true, result: { sent: true, method: 'mqtt', gpio: sw.gpio, state: newState } });
             } else {
-                // Device is offline
-                await ActivityLog.create({
-                    device: deviceId,
-                    switch: switchId,
-                    action: 'toggle',
-                    status: 'error',
-                    details: 'Device offline'
-                });
-                return res.status(503).json({ error: 'Device is offline' });
+                throw new Error('MQTT sendMqttSwitchCommand not available');
             }
+        } catch (mqttErr) {
+            await ActivityLog.create({
+                device: deviceId,
+                switch: switchId,
+                action: 'toggle',
+                status: 'error',
+                details: `MQTT command failed: ${mqttErr.message}`
+            });
+            return res.status(503).json({ error: 'Device not reachable via MQTT' });
         }
     } catch (err) {
         await ActivityLog.create({
