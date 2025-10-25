@@ -826,12 +826,12 @@ type LogType = 'activities' | 'manual-switches' | 'web-switches' | 'schedule-swi
                                   <Badge 
                                     variant="outline" 
                                     className={`${
-                                      log.newState === 'on' 
+                                      log.action === 'manual_on' 
                                         ? 'bg-green-50 text-green-700 border-green-200' 
                                         : 'bg-red-50 text-red-700 border-red-200'
                                     }`}
                                   >
-                                    {log.newState === 'on' ? '🔴 ON' : '⚫ OFF'}
+                                    {log.action === 'manual_on' ? '🔄 Turned ON' : '🔄 Turned OFF'}
                                   </Badge>
                                 </td>
                                 <td className="px-4 py-2 text-muted-foreground">
@@ -914,7 +914,7 @@ type LogType = 'activities' | 'manual-switches' | 'web-switches' | 'schedule-swi
                                         : 'bg-red-50 text-red-700 border-red-200'
                                     }`}
                                   >
-                                    {log.newState === 'on' ? '🟢 ON' : '🔴 OFF'}
+                                    {log.newState === 'on' ? '🔄 Turned ON' : '🔄 Turned OFF'}
                                   </Badge>
                                 </td>
                                 <td className="px-4 py-2 text-muted-foreground">
@@ -997,7 +997,7 @@ type LogType = 'activities' | 'manual-switches' | 'web-switches' | 'schedule-swi
                                         : 'bg-red-50 text-red-700 border-red-200'
                                     }`}
                                   >
-                                    {log.newState === 'on' ? '🟢 ON' : '🔴 OFF'}
+                                    {log.newState === 'on' ? '🔄 Turned ON' : '🔄 Turned OFF'}
                                   </Badge>
                                 </td>
                                 <td className="px-4 py-2 text-muted-foreground">

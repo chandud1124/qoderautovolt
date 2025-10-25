@@ -23,6 +23,507 @@ let devicePowerSettings = {
 // Power settings file path
 const POWER_SETTINGS_FILE = path.join(__dirname, 'data', 'powerSettings.json');
 
+// ============================================
+// MATRIX UTILITIES FOR POWER CALCULATIONS
+// ============================================
+
+/**
+ * Matrix utility class for power consumption calculations
+ */
+class PowerMatrix {
+  constructor(rows = 0, cols = 0, initialValue = 0) {
+    this.rows = rows;
+    this.cols = cols;
+    this.data = Array(rows).fill().map(() => Array(cols).fill(initialValue));
+  }
+
+  /**
+   * Set value at specific position
+   */
+  set(row, col, value) {
+    if (row >= 0 && row < this.rows && col >= 0 && col < this.cols) {
+      this.data[row][col] = value;
+    }
+  }
+
+  /**
+   * Get value at specific position
+   */
+  get(row, col) {
+    if (row >= 0 && row < this.rows && col >= 0 && col < this.cols) {
+      return this.data[row][col];
+    }
+    return 0;
+  }
+
+  /**
+   * Matrix multiplication
+   */
+  static multiply(matrixA, matrixB) {
+    if (matrixA.cols !== matrixB.rows) {
+      throw new Error('Matrix dimensions incompatible for multiplication');
+    }
+
+    const result = new PowerMatrix(matrixA.rows, matrixB.cols);
+
+    for (let i = 0; i < matrixA.rows; i++) {
+      for (let j = 0; j < matrixB.cols; j++) {
+        let sum = 0;
+        for (let k = 0; k < matrixA.cols; k++) {
+          sum += matrixA.get(i, k) * matrixB.get(k, j);
+        }
+        result.set(i, j, sum);
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Matrix addition
+   */
+  static add(matrixA, matrixB) {
+    if (matrixA.rows !== matrixB.rows || matrixA.cols !== matrixB.cols) {
+      throw new Error('Matrix dimensions must match for addition');
+    }
+
+    const result = new PowerMatrix(matrixA.rows, matrixA.cols);
+
+    for (let i = 0; i < matrixA.rows; i++) {
+      for (let j = 0; j < matrixA.cols; j++) {
+        result.set(i, j, matrixA.get(i, j) + matrixB.get(i, j));
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Get row sum (useful for classroom totals)
+   */
+  getRowSum(row) {
+    let sum = 0;
+    for (let j = 0; j < this.cols; j++) {
+      sum += this.get(row, j);
+    }
+    return sum;
+  }
+
+  /**
+   * Get column sum (useful for time period totals)
+   */
+  getColSum(col) {
+    let sum = 0;
+    for (let i = 0; i < this.rows; i++) {
+      sum += this.get(i, col);
+    }
+    return sum;
+  }
+
+  /**
+   * Transpose matrix
+   */
+  transpose() {
+    const result = new PowerMatrix(this.cols, this.rows);
+
+    for (let i = 0; i < this.rows; i++) {
+      for (let j = 0; j < this.cols; j++) {
+        result.set(j, i, this.get(i, j));
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Convert to array of arrays
+   */
+  toArray() {
+    return this.data.map(row => [...row]);
+  }
+
+  /**
+   * Create matrix from array of arrays
+   */
+  static fromArray(array) {
+    if (!Array.isArray(array) || array.length === 0) {
+      return new PowerMatrix(0, 0);
+    }
+
+    const rows = array.length;
+    const cols = array[0].length;
+    const matrix = new PowerMatrix(rows, cols);
+
+    for (let i = 0; i < rows; i++) {
+      for (let j = 0; j < cols; j++) {
+        matrix.set(i, j, array[i][j] || 0);
+      }
+    }
+
+    return matrix;
+  }
+}
+
+/**
+ * Create classroom-device mapping matrix
+ * Rows: Classrooms, Columns: Devices, Values: 1 if device belongs to classroom
+ */
+function createClassroomDeviceMatrix(devices) {
+  // Get unique classrooms and devices
+  const classrooms = [...new Set(devices.map(d => d.classroom || 'unassigned'))].sort();
+  const deviceIds = devices.map(d => d._id.toString());
+
+  const matrix = new PowerMatrix(classrooms.length, devices.length);
+
+  devices.forEach((device, deviceIndex) => {
+    const classroomIndex = classrooms.indexOf(device.classroom || 'unassigned');
+    if (classroomIndex >= 0) {
+      matrix.set(classroomIndex, deviceIndex, 1); // Device belongs to this classroom
+    }
+  });
+
+  return { matrix, classrooms, deviceIds };
+}
+
+/**
+ * Create device power consumption vector
+ * Single column matrix with power consumption for each device
+ */
+function createDevicePowerVector(devices) {
+  const powerVector = new PowerMatrix(devices.length, 1);
+
+  devices.forEach((device, index) => {
+    const power = calculateDevicePowerConsumption(device);
+    powerVector.set(index, 0, power);
+  });
+
+  return powerVector;
+}
+
+/**
+ * Calculate classroom power consumption using matrix multiplication
+ * Result: Classroom × Device Matrix * Device Power Vector = Classroom Power Vector
+ */
+function calculateClassroomPowerMatrix(devices) {
+  const { matrix: classroomDeviceMatrix, classrooms, deviceIds } = createClassroomDeviceMatrix(devices);
+  const devicePowerVector = createDevicePowerVector(devices);
+
+  // Matrix multiplication: classroomDeviceMatrix * devicePowerVector
+  const classroomPowerVector = PowerMatrix.multiply(classroomDeviceMatrix, devicePowerVector);
+
+  // Convert to readable format
+  const result = {};
+  classrooms.forEach((classroom, index) => {
+    result[classroom] = {
+      totalPower: classroomPowerVector.get(index, 0),
+      deviceCount: classroomDeviceMatrix.getRowSum(index),
+      devices: devices.filter(d => (d.classroom || 'unassigned') === classroom)
+    };
+  });
+
+  return result;
+}
+
+/**
+ * Create time-series power consumption matrix
+ * Rows: Time periods, Columns: Classrooms, Values: Power consumption
+ */
+async function createTimeSeriesPowerMatrix(classrooms, startTime, endTime, intervals = 24) {
+  const timeInterval = (endTime - startTime) / intervals;
+  const matrix = new PowerMatrix(intervals, classrooms.length);
+
+  // Get all devices
+  const devices = await Device.find({}, {
+    name: 1,
+    classroom: 1,
+    switches: 1,
+    status: 1,
+    _id: 1
+  }).lean();
+
+  for (let interval = 0; interval < intervals; interval++) {
+    const intervalStart = new Date(startTime.getTime() + interval * timeInterval);
+    const intervalEnd = new Date(startTime.getTime() + (interval + 1) * timeInterval);
+
+    // Calculate power for each classroom in this time interval
+    for (let classroomIndex = 0; classroomIndex < classrooms.length; classroomIndex++) {
+      const classroom = classrooms[classroomIndex];
+      const classroomDevices = devices.filter(d => (d.classroom || 'unassigned') === classroom);
+
+      let totalPower = 0;
+      for (const device of classroomDevices) {
+        const consumption = await calculatePreciseEnergyConsumption(
+          device._id,
+          intervalStart,
+          intervalEnd
+        );
+        // Convert kWh back to average watts for this interval
+        const hours = (intervalEnd - intervalStart) / (1000 * 60 * 60);
+        const avgPower = hours > 0 ? (consumption * 1000) / hours : 0; // Convert kWh to Wh, then to W
+        totalPower += avgPower;
+      }
+
+      matrix.set(interval, classroomIndex, totalPower);
+    }
+  }
+
+  return matrix;
+}
+
+/**
+ * Create device-type power consumption matrix
+ * Rows: Classrooms, Columns: Device Types, Values: Power consumption by type
+ */
+function createDeviceTypePowerMatrix(devices) {
+  const classrooms = [...new Set(devices.map(d => d.classroom || 'unassigned'))].sort();
+  const deviceTypes = ['lighting', 'climate', 'display', 'computing', 'outlet', 'other'];
+
+  const matrix = new PowerMatrix(classrooms.length, deviceTypes.length);
+
+  devices.forEach(device => {
+    const classroomIndex = classrooms.indexOf(device.classroom || 'unassigned');
+    const devicePower = calculateDevicePowerConsumption(device);
+
+    if (devicePower > 0 && classroomIndex >= 0) {
+      // Determine device type
+      const primaryType = device.switches && device.switches.length > 0 ? device.switches[0].type : 'unknown';
+      let mappedType = 'other';
+
+      if (primaryType === 'light') {
+        mappedType = 'lighting';
+      } else if (primaryType === 'fan' || primaryType === 'ac') {
+        mappedType = 'climate';
+      } else if (primaryType === 'projector' || primaryType === 'screen') {
+        mappedType = 'display';
+      } else if (primaryType === 'computer' || primaryType === 'laptop') {
+        mappedType = 'computing';
+      } else if (primaryType === 'outlet' || primaryType === 'socket') {
+        mappedType = 'outlet';
+      }
+
+      const typeIndex = deviceTypes.indexOf(mappedType);
+      if (typeIndex >= 0) {
+        const currentValue = matrix.get(classroomIndex, typeIndex);
+        matrix.set(classroomIndex, typeIndex, currentValue + devicePower);
+      }
+    }
+  });
+
+  return { matrix, classrooms, deviceTypes };
+}
+
+/**
+ * Calculate classroom efficiency matrix using matrix operations
+ * Compares power consumption patterns across classrooms
+ */
+function calculateClassroomEfficiencyMatrix(classroomPowerData) {
+  const classrooms = Object.keys(classroomPowerData);
+  const metrics = ['powerConsumption', 'deviceCount', 'occupancy', 'efficiency'];
+
+  const matrix = new PowerMatrix(classrooms.length, metrics.length);
+
+  classrooms.forEach((classroom, classroomIndex) => {
+    const data = classroomPowerData[classroom];
+
+    // Power consumption (normalized)
+    matrix.set(classroomIndex, 0, data.totalPower || 0);
+
+    // Device count
+    matrix.set(classroomIndex, 1, data.deviceCount || 0);
+
+    // Mock occupancy (in real implementation, this would come from sensors)
+    matrix.set(classroomIndex, 2, data.occupancy || Math.floor(Math.random() * 100));
+
+    // Calculate efficiency (power per device, adjusted for occupancy)
+    const deviceCount = data.deviceCount || 1;
+    const occupancy = data.occupancy || 50;
+    const efficiency = (data.totalPower / deviceCount) * (occupancy / 100);
+    matrix.set(classroomIndex, 3, efficiency);
+  });
+
+  return { matrix, classrooms, metrics };
+}
+
+/**
+ * Advanced matrix-based classroom power analytics
+ */
+async function getClassroomPowerMatrixAnalytics(timeframe = '24h') {
+  try {
+    // Get all devices
+    const devices = await Device.find({}, {
+      name: 1,
+      classroom: 1,
+      switches: 1,
+      status: 1,
+      _id: 1
+    }).lean();
+
+    if (!devices || devices.length === 0) {
+      return {
+        matrixAnalysis: {},
+        timeSeriesData: [],
+        deviceTypeBreakdown: {},
+        efficiencyMetrics: {},
+        recommendations: []
+      };
+    }
+
+    // 1. Basic classroom-device matrix multiplication
+    const classroomPowerMatrix = calculateClassroomPowerMatrix(devices);
+
+    // 2. Device type breakdown matrix
+    const { matrix: deviceTypeMatrix, classrooms, deviceTypes } = createDeviceTypePowerMatrix(devices);
+
+    // 3. Time series analysis (last 24 hours)
+    const now = new Date();
+    const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const uniqueClassrooms = [...new Set(devices.map(d => d.classroom || 'unassigned'))].sort();
+
+    const timeSeriesMatrix = await createTimeSeriesPowerMatrix(uniqueClassrooms, dayAgo, now, 24);
+
+    // 4. Efficiency analysis
+    const efficiencyData = {};
+    uniqueClassrooms.forEach(classroom => {
+      const classroomDevices = devices.filter(d => (d.classroom || 'unassigned') === classroom);
+      const totalPower = classroomDevices.reduce((sum, d) => sum + calculateDevicePowerConsumption(d), 0);
+
+      efficiencyData[classroom] = {
+        totalPower,
+        deviceCount: classroomDevices.length,
+        occupancy: Math.floor(Math.random() * 40) + 30, // Mock occupancy
+        efficiency: totalPower > 0 ? (totalPower / classroomDevices.length) * 0.8 : 0
+      };
+    });
+
+    const { matrix: efficiencyMatrix } = calculateClassroomEfficiencyMatrix(efficiencyData);
+
+    // 5. Generate recommendations based on matrix analysis
+    const recommendations = generateMatrixBasedRecommendations(
+      classroomPowerMatrix,
+      deviceTypeMatrix,
+      timeSeriesMatrix,
+      uniqueClassrooms,
+      deviceTypes
+    );
+
+    return {
+      matrixAnalysis: {
+        classroomPowerTotals: classroomPowerMatrix,
+        calculationMethod: 'Matrix multiplication: Classroom×Device × DevicePower → ClassroomPower',
+        matrixDimensions: {
+          classroomDeviceMatrix: `${uniqueClassrooms.length}×${devices.length}`,
+          devicePowerVector: `${devices.length}×1`,
+          resultVector: `${uniqueClassrooms.length}×1`
+        }
+      },
+      timeSeriesData: {
+        matrix: timeSeriesMatrix.toArray(),
+        classrooms: uniqueClassrooms,
+        timePoints: 24,
+        totalConsumptionByHour: Array.from({ length: 24 }, (_, i) => timeSeriesMatrix.getRowSum(i))
+      },
+      deviceTypeBreakdown: {
+        matrix: deviceTypeMatrix.toArray(),
+        classrooms: uniqueClassrooms,
+        deviceTypes: deviceTypes,
+        totalsByType: deviceTypes.map((type, index) => ({
+          type,
+          totalPower: deviceTypeMatrix.getColSum(index)
+        }))
+      },
+      efficiencyMetrics: {
+        matrix: efficiencyMatrix.toArray(),
+        classrooms: uniqueClassrooms,
+        metrics: ['powerConsumption', 'deviceCount', 'occupancy', 'efficiency'],
+        rankings: uniqueClassrooms
+          .map(classroom => ({
+            classroom,
+            efficiency: efficiencyData[classroom].efficiency
+          }))
+          .sort((a, b) => b.efficiency - a.efficiency)
+      },
+      recommendations,
+      timestamp: new Date().toISOString()
+    };
+
+  } catch (error) {
+    console.error('Error in matrix-based classroom analytics:', error);
+    return {
+      matrixAnalysis: {},
+      timeSeriesData: [],
+      deviceTypeBreakdown: {},
+      efficiencyMetrics: {},
+      recommendations: [],
+      error: error.message
+    };
+  }
+}
+
+/**
+ * Generate recommendations based on matrix analysis
+ */
+function generateMatrixBasedRecommendations(classroomPowerMatrix, deviceTypeMatrix, timeSeriesMatrix, classrooms, deviceTypes) {
+  const recommendations = [];
+
+  // Analyze power distribution across classrooms
+  const totalPowers = classrooms.map(classroom => classroomPowerMatrix[classroom]?.totalPower || 0);
+  const avgPower = totalPowers.reduce((sum, val) => sum + val, 0) / totalPowers.length;
+
+  classrooms.forEach((classroom, index) => {
+    const classroomPower = classroomPowerMatrix[classroom]?.totalPower || 0;
+
+    // High consumption classroom
+    if (classroomPower > avgPower * 1.5) {
+      recommendations.push({
+        type: 'high_consumption',
+        classroom,
+        message: `${classroom} consumes ${((classroomPower / avgPower - 1) * 100).toFixed(1)}% more than average`,
+        action: 'Review device scheduling and usage patterns',
+        potentialSavings: Math.floor((classroomPower - avgPower) * 24 * ELECTRICITY_RATE_INR_PER_KWH)
+      });
+    }
+
+    // Low efficiency classroom (based on device type analysis)
+    const classroomDeviceTypes = deviceTypes.map((type, typeIndex) =>
+      deviceTypeMatrix.get(index, typeIndex)
+    );
+    const totalTypePower = classroomDeviceTypes.reduce((sum, val) => sum + val, 0);
+
+    if (totalTypePower > 0) {
+      const climateRatio = classroomDeviceTypes[deviceTypes.indexOf('climate')] / totalTypePower;
+      if (climateRatio > 0.6) {
+        recommendations.push({
+          type: 'climate_optimization',
+          classroom,
+          message: `${classroom} has high climate control usage (${(climateRatio * 100).toFixed(1)}% of consumption)`,
+          action: 'Consider occupancy-based climate control',
+          potentialSavings: Math.floor(totalTypePower * 0.3 * 24 * ELECTRICITY_RATE_INR_PER_KWH)
+        });
+      }
+    }
+  });
+
+  // Time-series based recommendations
+  const peakHours = [];
+  for (let hour = 0; hour < 24; hour++) {
+    const hourTotal = timeSeriesMatrix.getRowSum(hour);
+    if (hourTotal > timeSeriesMatrix.getRowSum((hour + 1) % 24) * 1.2) {
+      peakHours.push(hour);
+    }
+  }
+
+  if (peakHours.length > 0) {
+    recommendations.push({
+      type: 'peak_usage',
+      message: `Peak usage detected at hours: ${peakHours.join(', ')}`,
+      action: 'Implement load balancing during peak hours',
+      potentialSavings: Math.floor(avgPower * 0.2 * peakHours.length * ELECTRICITY_RATE_INR_PER_KWH)
+    });
+  }
+
+  return recommendations;
+}
+
 // Load power settings (electricity price and device power consumption)
 async function loadPowerSettings() {
   try {
@@ -912,7 +1413,13 @@ function calculateEnergyCostBreakdown(device, timeframe = 'daily') {
 }
 
 // Get classroom-wise power consumption
-function calculateClassroomPowerConsumption(devices) {
+function calculateClassroomPowerConsumption(devices, useMatrix = false) {
+  if (useMatrix) {
+    // Use matrix-based calculation
+    return calculateClassroomPowerMatrix(devices);
+  }
+
+  // Traditional calculation method
   const classroomStats = {};
 
   devices.forEach(device => {
@@ -2215,5 +2722,14 @@ module.exports = {
   initializeMetrics,
   initializeMetricsAfterDB,
   loadPowerSettings, // Export to allow manual reload after settings change
-  updateDeviceMetrics: () => {} // Legacy function, kept for compatibility
+  updateDeviceMetrics: () => {}, // Legacy function, kept for compatibility
+  // Matrix-based functions
+  PowerMatrix,
+  calculateClassroomPowerMatrix,
+  createClassroomDeviceMatrix,
+  createDevicePowerVector,
+  createTimeSeriesPowerMatrix,
+  createDeviceTypePowerMatrix,
+  calculateClassroomEfficiencyMatrix,
+  getClassroomPowerMatrixAnalytics
 };

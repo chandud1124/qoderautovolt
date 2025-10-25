@@ -193,6 +193,21 @@ router.get('/device-usage/:timeframe',
   }
 });
 
+// Get matrix-based classroom power analytics
+router.get('/classroom-power-matrix/:timeframe?', 
+  param('timeframe').optional().isIn(['1h', '24h', '7d', '30d']).withMessage('Invalid timeframe'),
+  handleValidationErrors,
+  async (req, res) => {
+  try {
+    const { timeframe = '24h' } = req.params;
+    const matrixAnalytics = await metricsService.getClassroomPowerMatrixAnalytics(timeframe);
+    res.json(matrixAnalytics);
+  } catch (error) {
+    console.error('Error getting matrix-based classroom analytics:', error);
+    res.status(500).json({ error: 'Failed to get matrix-based classroom analytics' });
+  }
+});
+
 // Get behavioral analysis data
 router.get('/behavioral-analysis/:deviceId?', 
   param('deviceId').optional().isMongoId().withMessage('Invalid device ID'),
