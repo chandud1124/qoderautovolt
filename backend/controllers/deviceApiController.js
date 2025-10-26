@@ -39,7 +39,7 @@ exports.toggleSwitch = async (req, res, next) => {
         }
 
         if (!securityService.validateRequest(req, deviceId)) {
-            securityService.trackActivity(deviceId, { type: 'auth_failure' });
+            await securityService.trackActivity(deviceId, { type: 'auth_failure' });
             throw new SecurityError('Invalid request signature');
         }
 

@@ -144,9 +144,7 @@ router.get('/manual-switches', async (req, res) => {
         switchId: log.switchId,
         switchName: log.switchName,
         gpioPin: gpioPin,
-        action: log.triggeredBy === 'manual_switch' ? `manual_${log.action}` : log.action,
-        previousState: 'unknown', // Will be determined from context if available
-        newState: log.action,
+        action: log.action,
         triggeredBy: log.triggeredBy,
         location: log.location || log.deviceId?.location,
         details: log.context || log.details

@@ -1,12 +1,48 @@
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { logger } = require('../middleware/logger');
+const Device = require('../models/Device');
 
 class SecurityService {
     constructor() {
         this.rateLimits = new Map();
-        this.blacklist = new Set();
         this.suspiciousActivities = new Map();
+        this.blockedDevices = new Set(); // Cache for blocked device IDs
+    }
+
+    // Load blocked devices from database
+    async loadBlockedDevices() {
+        try {
+            const blockedDevices = await Device.find({ blocked: true }, '_id');
+            this.blockedDevices = new Set(blockedDevices.map(d => d._id.toString()));
+            logger.info(`Loaded ${this.blockedDevices.size} blocked devices`);
+        } catch (error) {
+            logger.error('Failed to load blocked devices:', error);
+        }
+    }
+
+    // Block a device by ID
+    async blockDevice(deviceId) {
+        try {
+            await Device.findByIdAndUpdate(deviceId, { blocked: true });
+            this.blockedDevices.add(deviceId.toString());
+            logger.warn(`Device ${deviceId} has been blocked`);
+        } catch (error) {
+            logger.error(`Failed to block device ${deviceId}:`, error);
+            throw error;
+        }
+    }
+
+    // Unblock a device by ID
+    async unblockDevice(deviceId) {
+        try {
+            await Device.findByIdAndUpdate(deviceId, { blocked: false });
+            this.blockedDevices.delete(deviceId.toString());
+            logger.info(`Device ${deviceId} has been unblocked`);
+        } catch (error) {
+            logger.error(`Failed to unblock device ${deviceId}:`, error);
+            throw error;
+        }
     }
 
     // Rate Limiting
@@ -64,7 +100,7 @@ class SecurityService {
     }
 
     // Suspicious Activity Detection
-    trackActivity(deviceId, activity) {
+    async trackActivity(deviceId, activity) {
         if (!this.suspiciousActivities.has(deviceId)) {
             this.suspiciousActivities.set(deviceId, []);
         }
@@ -73,10 +109,10 @@ class SecurityService {
         activities.push({ ...activity, timestamp: new Date() });
 
         // Check for suspicious patterns
-        this.detectSuspiciousPatterns(deviceId, activities);
+        await this.detectSuspiciousPatterns(deviceId, activities);
     }
 
-    detectSuspiciousPatterns(deviceId, activities) {
+    async detectSuspiciousPatterns(deviceId, activities) {
         const recent = activities.filter(a => 
             a.timestamp > new Date(Date.now() - 300000) // Last 5 minutes
         );
@@ -84,7 +120,7 @@ class SecurityService {
         // Check for rapid toggle sequences
         if (recent.filter(a => a.type === 'toggle').length > 20) {
             logger.warn(`Suspicious rapid toggles detected for device ${deviceId}`);
-            this.blacklist.add(deviceId);
+            await this.blockDevice(deviceId);
         }
 
         // Check for failed auth attempts
@@ -93,12 +129,12 @@ class SecurityService {
         ).length;
         if (failedAuth > 5) {
             logger.warn(`Multiple auth failures detected for device ${deviceId}`);
-            this.blacklist.add(deviceId);
+            await this.blockDevice(deviceId);
         }
     }
 
     isBlacklisted(deviceId) {
-        return this.blacklist.has(deviceId);
+        return this.blockedDevices.has(deviceId.toString());
     }
 
     // Cleanup

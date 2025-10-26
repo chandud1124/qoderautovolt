@@ -47,7 +47,7 @@ class WebSocketHandler {
 
                 const verified = securityService.verifyDeviceToken(data.token, process.env.DEVICE_SECRET);
                 if (!verified) {
-                    securityService.trackActivity(deviceId, { type: 'auth_failure' });
+                    await securityService.trackActivity(deviceId, { type: 'auth_failure' });
                     
                     // Log authentication failure
                     await EnhancedLoggingService.logError({

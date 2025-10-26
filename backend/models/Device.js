@@ -151,6 +151,11 @@ const deviceSchema = new mongoose.Schema({
     enum: ['online', 'offline', 'error'],
     default: 'offline'
   },
+  blocked: {
+    type: Boolean,
+    default: false,
+    index: true // Index for blocked device queries
+  },
   lastSeen: {
     type: Date,
     default: Date.now

@@ -21,7 +21,7 @@ const securityMiddleware = async (req, res, next) => {
         // Request signature validation for device-specific endpoints
         if (deviceId && req.path.includes('/api/devices')) {
             if (!securityService.validateRequest(req, deviceId)) {
-                securityService.trackActivity(deviceId, { type: 'auth_failure' });
+                await securityService.trackActivity(deviceId, { type: 'auth_failure' });
                 return res.status(401).json({ error: 'Invalid request signature' });
             }
         }

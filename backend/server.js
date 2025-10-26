@@ -1660,6 +1660,10 @@ logger.info('[DEBUG] Connecting to database before starting server...');
     const eveningLightsMonitor = require('./services/eveningLightsMonitor');
     eveningLightsMonitor.start();
 
+    // Load blocked devices into security service
+    const securityService = require('./services/securityService');
+    await securityService.loadBlockedDevices();
+
     try {
       server.listen(PORT, HOST, () => {
         console.log(`[SERVER] Listen callback STARTED - PID: ${process.pid}`);
