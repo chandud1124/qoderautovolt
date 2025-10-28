@@ -97,7 +97,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ className, onNavigateClose }) 
   const navigate = useNavigate();
   const location = useLocation();
   const { isAuthenticated } = useAuth();
-  const { isAdmin, isSuperAdmin, hasManagementAccess } = usePermissions();
+  // Retrieve permissions once (avoid calling hooks inside loops/filters)
+  const perms = usePermissions();
+  const { isAdmin, isSuperAdmin, hasManagementAccess } = perms;
   const { refreshDevices } = useDevices();
   const { start, stop } = useGlobalLoading();
   const [navLock, setNavLock] = useState(false);
@@ -172,8 +174,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ className, onNavigateClose }) 
                 return false;
               }
               if (item.requiresPermission) {
-                const perms = usePermissions();
-                return perms[item.requiresPermission as keyof typeof perms];
+                return Boolean(perms[item.requiresPermission as keyof typeof perms]);
               }
               return true;
             });

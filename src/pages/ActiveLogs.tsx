@@ -7,28 +7,34 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription } from '@/components/ui/dialog';
-import { 
-  Activity, 
-  AlertTriangle, 
-  Settings, 
+import {
+  Activity,
   Monitor,
   Download,
   Calendar as CalendarIcon,
-  Filter,
   RefreshCw,
   Trash2,
-  CheckCircle,
   Clock,
-  AlertCircle,
-  Zap
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
-import { format, subDays, startOfDay, endOfDay } from 'date-fns';
+import { format } from 'date-fns';
 import { api } from '@/services/api';
 import { ActivityLog } from '@/types';
 
+// Minimal "any" type for other log kinds so this file compiles without needing full project types
+type AnyLog = any;
 
-// Safe property access helper
+type LogType = 'activities' | 'manual-switches' | 'web-switches' | 'schedule-switches' | 'device-status';
+
+interface LogStats {
+  activities: { total: number; today: number };
+  manualSwitches?: { total: number; today: number };
+  webSwitches: { total: number; today: number };
+  scheduleSwitches: { total: number; today: number };
+  deviceStatus: { total: number; today: number };
+}
+
 function safe<T = unknown, D = null>(obj: T, path: string, defaultValue: D = null as D): any {
   try {
     return path.split('.').reduce((current: any, key) => current?.[key], obj) ?? defaultValue;
@@ -37,308 +43,109 @@ function safe<T = unknown, D = null>(obj: T, path: string, defaultValue: D = nul
   }
 }
 
-// Safe date formatting helper
 function safeFormatDate(timestamp: string | number | Date | undefined | null, formatString: string): string {
   if (!timestamp) return '-';
-  
   try {
-    const date = new Date(timestamp);
-    // Check if the date is valid
-    if (isNaN(date.getTime())) return '-';
-    return format(date, formatString);
-  } catch (error) {
-    console.warn('Invalid timestamp:', timestamp, error);
+    const d = typeof timestamp === 'string' || typeof timestamp === 'number' ? new Date(timestamp) : (timestamp as Date);
+    if (isNaN(d.getTime())) return '-';
+    return format(d, formatString);
+  } catch {
     return '-';
   }
 }
 
-interface LocalActivityLog {
-  id: string;
-  timestamp: string | number | Date;
-  action: string;
-  deviceId?: string;
-  deviceName?: string;
-  switchId?: string;
-  switchName?: string;
-  userId?: string;
-  userName?: string;
-  triggeredBy: string;
-  location?: string;
-  isManualOverride?: boolean;
-  previousState?: boolean;
-  newState?: boolean;
-  conflictResolution?: {
-    hasConflict: boolean;
-    conflictType?: string;
-    resolution?: string;
-    responseTime?: number;
-  } | string;
-  details?: Record<string, unknown>;
-  context?: Record<string, unknown>;
-}
-
-interface ManualSwitchLog {
-  id: string;
-  timestamp: string | number | Date;
-  deviceId: string;
-  deviceName?: string;
-  switchId: string;
-  switchName?: string;
-  gpioPin?: number;
-  action: 'manual_on' | 'manual_off' | 'manual_toggle';
-  previousState: 'on' | 'off' | 'unknown';
-  newState: 'on' | 'off';
-  conflictWith?: {
-    webCommand?: boolean;
-    scheduleCommand?: boolean;
-    pirCommand?: boolean;
-  };
-  responseTime?: number;
-  location?: string;
-  details?: any;
-}
-
-interface WebSwitchLog {
-  id: string;
-  timestamp: string | number | Date;
-  deviceId: string;
-  deviceName?: string;
-  switchId: string;
-  switchName?: string;
-  action: 'web_on' | 'web_off' | 'web_toggle';
-  previousState: 'on' | 'off' | 'unknown';
-  newState: 'on' | 'off';
-  userId?: string;
-  userName?: string;
-  ipAddress?: string;
-  userAgent?: string;
-  responseTime?: number;
-  location?: string;
-  details?: any;
-}
-
-interface DeviceStatusLog {
-  id: string;
-  timestamp: string | number | Date;
-  deviceId: string;
-  deviceName?: string;
-  deviceMac?: string;
-  checkType: string;
-  deviceStatus: {
-    isOnline: boolean;
-    wifiSignalStrength?: number;
-    uptime?: number;
-    freeHeap?: number;
-    temperature?: number;
-    lastSeen?: Date;
-    responseTime?: number;
-    powerStatus?: string;
-  };
-  switchStates?: Record<string, unknown>[];
-  alerts?: Record<string, unknown>[];
-  summary?: {
-    totalSwitchesOn?: number;
-    totalSwitchesOff?: number;
-    totalPowerConsumption?: number;
-    averageResponseTime?: number;
-    inconsistenciesFound?: number;
-  };
-  location?: string;
-}
-
-interface ScheduleSwitchLog {
-  id: string;
-  timestamp: string | number | Date;
-  deviceId: string;
-  deviceName?: string;
-  switchId: string;
-  switchName?: string;
-  action: 'schedule_on' | 'schedule_off';
-  previousState: 'on' | 'off' | 'unknown';
-  newState: 'on' | 'off';
-  scheduleId?: string;
-  scheduleName?: string;
-  triggerTime: string | number | Date;
-  responseTime?: number;
-  location?: string;
-  details?: any;
-}
-
-interface LogStats {
-  activities: { total: number; today: number };
-  manualSwitches: { total: number; today: number; conflicts: number };
-  webSwitches: { total: number; today: number };
-  scheduleSwitches: { total: number; today: number };
-  deviceStatus: { total: number; today: number };
-}
-
-type LogType = 'activities' | 'manual-switches' | 'web-switches' | 'schedule-switches' | 'device-status';
-
-  // Safe rendering of statistics cards
-  const renderStatsCard = (title: string, icon: React.ReactNode, value: number, subtitle: string) => (
-    <Card>
-      <CardContent className="p-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-muted-foreground">{title}</p>
-            <p className="text-2xl font-bold">{value || 0}</p>
-            <p className="text-xs text-muted-foreground">{subtitle}</p>
-          </div>
-          {icon}
-        </div>
-      </CardContent>
-    </Card>
-  );
-
-  const ActiveLogsPage = () => {
+const ActiveLogsPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<LogType>('activities');
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [stats, setStats] = useState<LogStats | null>(null);
-  
-  // Data states
-  // State for different log types
-  const [activityLogs, setActivityLogs] = useState<LocalActivityLog[]>([]);
-  const [manualSwitchLogs, setManualSwitchLogs] = useState<ManualSwitchLog[]>([]);
-  const [webSwitchLogs, setWebSwitchLogs] = useState<WebSwitchLog[]>([]);
-  const [scheduleSwitchLogs, setScheduleSwitchLogs] = useState<ScheduleSwitchLog[]>([]);
-  const [deviceStatusLogs, setDeviceStatusLogs] = useState<DeviceStatusLog[]>([]);
 
-  // Pagination metadata from backend
-  const [paginationMeta, setPaginationMeta] = useState<{
-    total: number;
-    totalPages: number;
-    currentPage: number;
-    limit: number;
-  }>({
-    total: 0,
-    totalPages: 1,
-    currentPage: 1,
-    limit: 50
-  });
+  const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
+  const [manualSwitchLogs, setManualSwitchLogs] = useState<AnyLog[]>([]);
+  const [webSwitchLogs, setWebSwitchLogs] = useState<AnyLog[]>([]);
+  const [scheduleSwitchLogs, setScheduleSwitchLogs] = useState<AnyLog[]>([]);
+  const [deviceStatusLogs, setDeviceStatusLogs] = useState<AnyLog[]>([]);
 
-  // Filter states
-  const [searchTerm, setSearchTerm] = useState('');
-  const [dateRange, setDateRange] = useState<{ from?: Date; to?: Date }>({});
-  const [deviceFilter, setDeviceFilter] = useState<string>('all');
-  const [severityFilter, setSeverityFilter] = useState<string>('all');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [showCalendar, setShowCalendar] = useState(false);
-
-  // Device list state
-  const [devices, setDevices] = useState<Array<{ id: string; name: string; status: string }>>([]);
-  const [isLoadingDevices, setIsLoadingDevices] = useState(false);
-
-  // Pagination
+  const [paginationMeta, setPaginationMeta] = useState({ total: 0, totalPages: 1, currentPage: 1, limit: 50 });
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(50);
 
-  // Error resolution dialog - removed
-  // const [selectedError, setSelectedError] = useState<ErrorLog | null>(null);
-  // const [resolutionText, setResolutionText] = useState('');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [dateRange, setDateRange] = useState<{ from?: Date; to?: Date }>({});
+  const [deviceFilter, setDeviceFilter] = useState<string>('all');
+  const [showCalendar, setShowCalendar] = useState(false);
 
-  useEffect(() => {
-    loadData();
-    loadStats();
-    setCurrentPage(1); // Reset to first page when changing tabs
-    setPaginationMeta({ total: 0, totalPages: 1, currentPage: 1, limit: itemsPerPage }); // Reset pagination metadata
-  }, [activeTab]);
+  const [devices, setDevices] = useState<Array<{ id: string; name: string; status: string }>>([]);
 
-  useEffect(() => {
-    const delayedLoad = setTimeout(() => {
-      loadData();
-    }, 500);
-    return () => clearTimeout(delayedLoad);
-  }, [searchTerm, deviceFilter, severityFilter, statusFilter, dateRange, currentPage]);
-
-  // Fetch devices on component mount
   useEffect(() => {
     loadDevices();
   }, []);
 
+  useEffect(() => {
+    // when tab changes reset page and refresh
+    setCurrentPage(1);
+    loadStats();
+    loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
+
+  useEffect(() => {
+    const t = setTimeout(loadData, 350);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchTerm, deviceFilter, dateRange, currentPage, itemsPerPage]);
+
   const loadDevices = async () => {
-    setIsLoadingDevices(true);
     try {
-      const response = await api.get('/device-categories/categories?showAllDevices=true');
-      if (response.data.success && response.data.allDevices) {
-        setDevices(response.data.allDevices);
-      }
-    } catch (error) {
-      console.error('Error loading devices:', error);
+      const res = await api.get('/device-categories/categories?showAllDevices=true');
+      if (res.data && res.data.allDevices) setDevices(res.data.allDevices);
+    } catch (err) {
+      console.error('loadDevices', err);
       setDevices([]);
-    } finally {
-      setIsLoadingDevices(false);
     }
   };
 
   const loadData = async () => {
     setIsLoading(true);
     try {
-      let endpoint = '';
+      let endpoint = '/logs/activities';
       switch (activeTab) {
-        case 'activities':
-          endpoint = '/logs/activities';
-          break;
-        case 'manual-switches':
-          endpoint = '/logs/manual-switches';
-          break;
-        case 'web-switches':
-          endpoint = '/logs/web-switches';
-          break;
-        case 'schedule-switches':
-          endpoint = '/logs/schedule-switches';
-          break;
-        case 'device-status':
-          endpoint = '/logs/device-status';
-          break;
+        case 'activities': endpoint = '/logs/activities'; break;
+        case 'manual-switches': endpoint = '/logs/manual-switches'; break;
+        case 'web-switches': endpoint = '/logs/web-switches'; break;
+        case 'schedule-switches': endpoint = '/logs/schedule-switches'; break;
+        case 'device-status': endpoint = '/logs/device-status'; break;
       }
 
       const params = new URLSearchParams();
       if (searchTerm) params.set('search', searchTerm);
       if (deviceFilter !== 'all') params.set('deviceId', deviceFilter);
-      if (severityFilter !== 'all') params.set('severity', severityFilter);
-      if (statusFilter !== 'all') params.set('resolved', statusFilter === 'resolved' ? 'true' : 'false');
       if (dateRange.from) params.set('startDate', dateRange.from.toISOString());
       if (dateRange.to) params.set('endDate', dateRange.to.toISOString());
-      params.set('page', currentPage.toString());
-      params.set('limit', itemsPerPage.toString());
+      params.set('page', String(currentPage));
+      params.set('limit', String(itemsPerPage));
 
-      const response = await api.get(`${endpoint}?${params.toString()}`);
-      const data = response.data.logs || response.data.data || response.data;
+      const res = await api.get(`${endpoint}?${params.toString()}`);
+      const data = res.data.logs || res.data.data || res.data;
 
-      // Store pagination metadata
-      if (response.data.total !== undefined) {
+      if (res.data && typeof res.data.total !== 'undefined') {
         setPaginationMeta({
-          total: response.data.total,
-          totalPages: response.data.totalPages || Math.ceil(response.data.total / itemsPerPage),
-          currentPage: response.data.page || currentPage,
-          limit: response.data.limit || itemsPerPage
+          total: res.data.total,
+          totalPages: res.data.totalPages || Math.max(1, Math.ceil(res.data.total / itemsPerPage)),
+          currentPage: res.data.page || currentPage,
+          limit: res.data.limit || itemsPerPage
         });
-        // Update current page if backend returns different page
-        if (response.data.page && response.data.page !== currentPage) {
-          setCurrentPage(response.data.page);
-        }
       }
 
       switch (activeTab) {
-        case 'activities':
-          setActivityLogs(Array.isArray(data) ? data : []);
-          break;
-        case 'manual-switches':
-          setManualSwitchLogs(Array.isArray(data) ? data : []);
-          break;
-        case 'web-switches':
-          setWebSwitchLogs(Array.isArray(data) ? data : []);
-          break;
-        case 'schedule-switches':
-          setScheduleSwitchLogs(Array.isArray(data) ? data : []);
-          break;
-        case 'device-status':
-          setDeviceStatusLogs(Array.isArray(data) ? data : []);
-          break;
+        case 'activities': setActivityLogs(Array.isArray(data) ? data : []); break;
+        case 'manual-switches': setManualSwitchLogs(Array.isArray(data) ? data : []); break;
+        case 'web-switches': setWebSwitchLogs(Array.isArray(data) ? data : []); break;
+        case 'schedule-switches': setScheduleSwitchLogs(Array.isArray(data) ? data : []); break;
+        case 'device-status': setDeviceStatusLogs(Array.isArray(data) ? data : []); break;
       }
-    } catch (error) {
-      console.error('Error loading logs:', error);
+    } catch (err) {
+      console.error('loadData', err);
     } finally {
       setIsLoading(false);
     }
@@ -346,14 +153,17 @@ type LogType = 'activities' | 'manual-switches' | 'web-switches' | 'schedule-swi
 
   const loadStats = async () => {
     try {
-      const response = await api.get('/logs/stats');
-      setStats(response.data);
-    } catch (error) {
-      console.error('Error loading stats:', error);
-      // Set default stats structure to prevent undefined errors
+      const res = await api.get('/logs/stats');
+      setStats(res.data || {
+        activities: { total: 0, today: 0 },
+        webSwitches: { total: 0, today: 0 },
+        scheduleSwitches: { total: 0, today: 0 },
+        deviceStatus: { total: 0, today: 0 }
+      });
+    } catch (err) {
+      console.error('loadStats', err);
       setStats({
         activities: { total: 0, today: 0 },
-        manualSwitches: { total: 0, today: 0, conflicts: 0 },
         webSwitches: { total: 0, today: 0 },
         scheduleSwitches: { total: 0, today: 0 },
         deviceStatus: { total: 0, today: 0 }
@@ -364,201 +174,143 @@ type LogType = 'activities' | 'manual-switches' | 'web-switches' | 'schedule-swi
   const exportToExcel = async () => {
     if (isExporting) return;
     setIsExporting(true);
-    
     try {
       const params = new URLSearchParams();
       params.set('type', activeTab);
-      // Export ALL reports - remove filters to get complete dataset
-      // if (searchTerm) params.set('search', searchTerm);
-      // if (deviceFilter !== 'all') params.set('deviceId', deviceFilter);
-      // if (severityFilter !== 'all') params.set('severity', severityFilter);
-      // if (statusFilter !== 'all') params.set('status', statusFilter);
-      // if (dateRange.from) params.set('startDate', dateRange.from.toISOString());
-      // if (dateRange.to) params.set('endDate', dateRange.to.toISOString());
-
-      const response = await api.post(`/logs/export/excel?${params.toString()}`, {}, {
-        responseType: 'blob'
-      });
-
-      const blob = new Blob([response.data], {
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      });
-      
+      const res = await api.post(`/logs/export/excel?${params.toString()}`, {}, { responseType: 'blob' });
+      const blob = new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `${activeTab}-logs-${format(new Date(), 'yyyy-MM-dd')}.xlsx`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${activeTab}-logs-${format(new Date(), 'yyyy-MM-dd')}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
       window.URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error('Error exporting logs:', error);
+    } catch (err) {
+      console.error('exportToExcel', err);
     } finally {
       setIsExporting(false);
     }
   };
 
-  // Error resolution function removed
-  // const resolveError = async (errorId: string, resolution: string) => {
-  //   try {
-  //     await api.patch(`/logs/errors/${errorId}/resolve`, { notes: resolution });
-  //     setSelectedError(null);
-  //     setResolutionText('');
-  //     loadData();
-  //   } catch (error) {
-  //     console.error('Error resolving error:', error);
-  //   }
-  // };
+  const showAllLogs = () => {
+    // If backend returned a total, use it; otherwise fall back to a large limit
+    const newLimit = paginationMeta.total && paginationMeta.total > 0 ? paginationMeta.total : 10000;
+    setItemsPerPage(newLimit);
+    setCurrentPage(1);
+  };
+
+  const loadMoreLogs = () => {
+    // increase items per page in chunks (helps user progressively load more)
+    setItemsPerPage((prev) => Math.min(prev + 50, paginationMeta.total || prev + 50));
+    // keep current page at 1 so we fetch a larger page from start
+    setCurrentPage(1);
+  };
+
+  const goToPrevPage = () => {
+    setCurrentPage((p) => Math.max(1, p - 1));
+  };
+
+  const goToNextPage = () => {
+    setCurrentPage((p) => Math.min(p + 1, paginationMeta.totalPages || p + 1));
+  };
+
+  const handleItemsPerPageChange = (value: number) => {
+    setItemsPerPage(value);
+    setCurrentPage(1);
+  };
 
   const clearFilters = () => {
     setSearchTerm('');
     setDateRange({});
     setDeviceFilter('all');
-    setSeverityFilter('all');
-    setStatusFilter('all');
     setCurrentPage(1);
-  };
-
-  const getTabIcon = (tab: LogType) => {
-    switch (tab) {
-      case 'activities': return <Activity className="w-4 h-4" />;
-      case 'manual-switches': return <Zap className="w-4 h-4" />;
-      case 'web-switches': return <Monitor className="w-4 h-4" />;
-      case 'schedule-switches': return <Clock className="w-4 h-4" />;
-      case 'device-status': return <Monitor className="w-4 h-4" />;
-    }
-  };
-
-  const getSeverityBadge = (severity: string) => {
-    const colors = {
-      low: 'bg-blue-100 text-blue-800',
-      medium: 'bg-yellow-100 text-yellow-800',
-      high: 'bg-red-100 text-red-800',
-      critical: 'bg-red-600 text-white'
-    };
-    return colors[severity as keyof typeof colors] || 'bg-gray-100 text-gray-800';
-  };
-
-  const getStatusBadge = (resolved: boolean) => {
-    return resolved 
-      ? 'bg-green-100 text-green-800' 
-      : 'bg-red-100 text-red-800';
   };
 
   const filteredData = useMemo(() => {
-  let data: LocalActivityLog[] | ManualSwitchLog[] | WebSwitchLog[] | ScheduleSwitchLog[] | DeviceStatusLog[] = [];
     switch (activeTab) {
-      case 'activities': data = activityLogs; break;
-      case 'manual-switches': data = manualSwitchLogs; break;
-      case 'web-switches': data = webSwitchLogs; break;
-      case 'schedule-switches': data = scheduleSwitchLogs; break;
-      case 'device-status': data = deviceStatusLogs; break;
+      case 'activities': return activityLogs as AnyLog[];
+      case 'manual-switches': return manualSwitchLogs;
+      case 'web-switches': return webSwitchLogs;
+      case 'schedule-switches': return scheduleSwitchLogs;
+      case 'device-status': return deviceStatusLogs;
+      default: return [];
     }
-    return data;
   }, [activeTab, activityLogs, manualSwitchLogs, webSwitchLogs, scheduleSwitchLogs, deviceStatusLogs]);
 
-  // Remove client-side pagination - backend handles pagination
-  const paginatedData = filteredData;
-
-  // Use pagination metadata from backend
   const totalPages = paginationMeta.totalPages;
   const totalEntries = paginationMeta.total;
 
-  // Reset to page 1 if current page is out of bounds
-  useEffect(() => {
-    if (currentPage > totalPages && totalPages > 0) {
-      setCurrentPage(1);
-    }
-  }, [currentPage, totalPages]);
-
-  // Reset to page 1 when items per page changes
-  useEffect(() => {
-    setCurrentPage(1);
-    setPaginationMeta(prev => ({ ...prev, currentPage: 1, limit: itemsPerPage }));
-  }, [itemsPerPage]);
-
   return (
     <div className="w-full max-w-7xl mx-auto mt-4 space-y-6">
-      {/* Statistics Dashboard */}
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">Activity Logs</p>
-                  <p className="text-2xl font-bold">{safe(stats, 'activities.total', 0)}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {safe(stats, 'activities.today', 0)} today
-                  </p>
-                </div>
-                <Activity className="h-8 w-8 text-blue-600" />
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-muted-foreground">Activity Logs</p>
+                <p className="text-2xl font-bold">{safe(stats, 'activities.total', 0)}</p>
+                <p className="text-xs text-muted-foreground">{safe(stats, 'activities.today', 0)} today</p>
               </div>
-            </CardContent>
-          </Card>
+              <Activity className="h-8 w-8 text-blue-600" />
+            </div>
+          </CardContent>
+        </Card>
 
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">Manual Switches</p>
-                  <p className="text-2xl font-bold">{safe(stats, 'manualSwitches.total', 0)}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {safe(stats, 'manualSwitches.conflicts', 0)} conflicts
-                  </p>
-                </div>
-                <Zap className="h-8 w-8 text-yellow-600" />
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-muted-foreground">Manual Switches</p>
+                <p className="text-2xl font-bold">{safe(stats, 'manualSwitches.total', 0)}</p>
+                <p className="text-xs text-muted-foreground">{safe(stats, 'manualSwitches.today', 0)} today</p>
               </div>
-            </CardContent>
-          </Card>
+              <Activity className="h-8 w-8 text-yellow-600" />
+            </div>
+          </CardContent>
+        </Card>
 
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">Web Switches</p>
-                  <p className="text-2xl font-bold">{safe(stats, 'webSwitches.total', 0)}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {safe(stats, 'webSwitches.today', 0)} today
-                  </p>
-                </div>
-                <Monitor className="h-8 w-8 text-green-600" />
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-muted-foreground">Web Switches</p>
+                <p className="text-2xl font-bold">{safe(stats, 'webSwitches.total', 0)}</p>
+                <p className="text-xs text-muted-foreground">{safe(stats, 'webSwitches.today', 0)} today</p>
               </div>
-            </CardContent>
-          </Card>
+              <Monitor className="h-8 w-8 text-green-600" />
+            </div>
+          </CardContent>
+        </Card>
 
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">Schedule Switches</p>
-                  <p className="text-2xl font-bold">{safe(stats, 'scheduleSwitches.total', 0)}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {safe(stats, 'scheduleSwitches.today', 0)} today
-                  </p>
-                </div>
-                <Clock className="h-8 w-8 text-purple-600" />
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-muted-foreground">Schedule Switches</p>
+                <p className="text-2xl font-bold">{safe(stats, 'scheduleSwitches.total', 0)}</p>
+                <p className="text-xs text-muted-foreground">{safe(stats, 'scheduleSwitches.today', 0)} today</p>
               </div>
-            </CardContent>
-          </Card>
+              <Clock className="h-8 w-8 text-purple-600" />
+            </div>
+          </CardContent>
+        </Card>
 
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">Device Status</p>
-                  <p className="text-2xl font-bold">{safe(stats, 'deviceStatus.total', 0)}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {safe(stats, 'deviceStatus.today', 0)} today
-                  </p>
-                </div>
-                <Monitor className="h-8 w-8 text-indigo-600" />
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-muted-foreground">Device Status</p>
+                <p className="text-2xl font-bold">{safe(stats, 'deviceStatus.total', 0)}</p>
+                <p className="text-xs text-muted-foreground">{safe(stats, 'deviceStatus.today', 0)} today</p>
               </div>
-            </CardContent>
-          </Card>
-        </div>
+              <Monitor className="h-8 w-8 text-indigo-600" />
+            </div>
+          </CardContent>
+        </Card>
+      </div>
 
-      {/* Main Content */}
       <Card>
         <CardHeader>
           <div className="flex flex-col md:flex-row md:items-center justify-between space-y-4 md:space-y-0">
@@ -566,34 +318,24 @@ type LogType = 'activities' | 'manual-switches' | 'web-switches' | 'schedule-swi
               <Activity className="h-5 w-5" />
               Enhanced Logs
             </CardTitle>
-            
-            {/* Action Buttons */}
             <div className="flex flex-wrap gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => loadData()}
-                disabled={isLoading}
-              >
+              <Button variant="outline" size="sm" onClick={loadData} disabled={isLoading}>
                 <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
                 Refresh
               </Button>
-              
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={exportToExcel}
-                disabled={isExporting}
-              >
+              <Button variant="outline" size="sm" onClick={exportToExcel} disabled={isExporting}>
                 <Download className={`h-4 w-4 mr-2 ${isExporting ? 'animate-spin' : ''}`} />
                 Export All Excel
               </Button>
-              
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={clearFilters}
-              >
+              <Button variant="outline" size="sm" onClick={showAllLogs} disabled={isLoading || (paginationMeta.total === 0)}>
+                <Activity className="h-4 w-4 mr-2" />
+                Show All
+              </Button>
+              <Button variant="outline" size="sm" onClick={loadMoreLogs} disabled={isLoading || (paginationMeta.currentPage >= paginationMeta.totalPages && paginationMeta.totalPages <= 1)}>
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Load more
+              </Button>
+              <Button variant="outline" size="sm" onClick={clearFilters}>
                 <Trash2 className="h-4 w-4 mr-2" />
                 Clear Filters
               </Button>
@@ -602,15 +344,9 @@ type LogType = 'activities' | 'manual-switches' | 'web-switches' | 'schedule-swi
         </CardHeader>
 
         <CardContent>
-          {/* Filters */}
           <div className="mb-6 space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
-              <Input
-                placeholder="Search logs..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="lg:col-span-2"
-              />
+              <Input placeholder="Search logs..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="lg:col-span-2" />
 
               <Popover open={showCalendar} onOpenChange={setShowCalendar}>
                 <PopoverTrigger asChild>
@@ -618,14 +354,12 @@ type LogType = 'activities' | 'manual-switches' | 'web-switches' | 'schedule-swi
                     <CalendarIcon className="mr-2 h-4 w-4" />
                     {dateRange.from ? (
                       dateRange.to ? (
-                        <>
-                          {format(dateRange.from, "LLL dd")} - {format(dateRange.to, "LLL dd")}
-                        </>
+                        <>{format(dateRange.from, 'LLL dd')} - {format(dateRange.to, 'LLL dd')}</>
                       ) : (
-                        format(dateRange.from, "LLL dd, y")
+                        format(dateRange.from, 'LLL dd, y')
                       )
                     ) : (
-                      "Date range"
+                      'Date range'
                     )}
                   </Button>
                 </PopoverTrigger>
@@ -634,7 +368,7 @@ type LogType = 'activities' | 'manual-switches' | 'web-switches' | 'schedule-swi
                     initialFocus
                     mode="range"
                     defaultMonth={dateRange.from}
-                    selected={dateRange.from ? dateRange as { from: Date; to?: Date } : undefined}
+                    selected={dateRange.from ? (dateRange as { from: Date; to?: Date }) : undefined}
                     onSelect={setDateRange}
                     numberOfMonths={2}
                   />
@@ -651,10 +385,7 @@ type LogType = 'activities' | 'manual-switches' | 'web-switches' | 'schedule-swi
                     <SelectItem key={device.id} value={device.id} className="py-3">
                       <div className="flex items-center gap-3 min-w-0">
                         <span className="font-medium text-sm truncate">{device.name}</span>
-                        <Badge
-                          variant={device.status === 'online' ? 'default' : 'secondary'}
-                          className="text-xs px-2 py-0.5 flex-shrink-0"
-                        >
+                        <Badge variant={device.status === 'online' ? 'default' : 'secondary'} className="text-xs px-2 py-0.5 flex-shrink-0">
                           {device.status}
                         </Badge>
                       </div>
@@ -665,591 +396,247 @@ type LogType = 'activities' | 'manual-switches' | 'web-switches' | 'schedule-swi
             </div>
           </div>
 
-          {/* Tabbed Interface */}
-          <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as LogType)}>
+          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as LogType)}>
             <TabsList className="grid w-full grid-cols-5">
-              <TabsTrigger value="activities" className="flex items-center gap-2">
-                {getTabIcon('activities')}
-                <span className="hidden md:inline">Activity Logs</span>
-                <span className="md:hidden">Activity</span>
-              </TabsTrigger>
-              <TabsTrigger value="manual-switches" className="flex items-center gap-2">
-                {getTabIcon('manual-switches')}
-                <span className="hidden md:inline">Manual Switches</span>
-                <span className="md:hidden">Manual</span>
-              </TabsTrigger>
-              <TabsTrigger value="web-switches" className="flex items-center gap-2">
-                {getTabIcon('web-switches')}
-                <span className="hidden md:inline">Web Switches</span>
-                <span className="md:hidden">Web</span>
-              </TabsTrigger>
-              <TabsTrigger value="schedule-switches" className="flex items-center gap-2">
-                {getTabIcon('schedule-switches')}
-                <span className="hidden md:inline">Schedule Switches</span>
-                <span className="md:hidden">Schedule</span>
-              </TabsTrigger>
-              <TabsTrigger value="device-status" className="flex items-center gap-2">
-                {getTabIcon('device-status')}
-                <span className="hidden md:inline">Device Status</span>
-                <span className="md:hidden">Status</span>
-              </TabsTrigger>
+              <TabsTrigger value="activities" className="flex items-center gap-2">Activity Logs</TabsTrigger>
+              <TabsTrigger value="manual-switches" className="flex items-center gap-2">Manual Switches</TabsTrigger>
+              <TabsTrigger value="web-switches" className="flex items-center gap-2">Web Switches</TabsTrigger>
+              <TabsTrigger value="schedule-switches" className="flex items-center gap-2">Schedule Switches</TabsTrigger>
+              <TabsTrigger value="device-status" className="flex items-center gap-2">Device Status</TabsTrigger>
             </TabsList>
 
-            {/* Activity Logs */}
             <TabsContent value="activities">
-              <div className="space-y-4">
-                {isLoading ? (
-                  <div className="flex items-center justify-center py-8">
-                    <RefreshCw className="animate-spin w-6 h-6 mr-2" />
-                    Loading activity logs...
-                  </div>
-                ) : paginatedData.length === 0 ? (
-                  <div className="text-center py-8 text-muted-foreground">
-                    No activity logs found.
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full text-sm">
-                      <thead>
-                        <tr className="border-b">
-                          <th className="px-4 py-2 text-left">Time</th>
-                          <th className="px-4 py-2 text-left">Action</th>
-                          <th className="px-4 py-2 text-left">Device/Switch</th>
-                          <th className="px-4 py-2 text-left">User/Source</th>
-                          <th className="px-4 py-2 text-left">Location</th>
+              {isLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <RefreshCw className="animate-spin w-6 h-6 mr-2" /> Loading activity logs...
+                </div>
+              ) : activityLogs.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">No activity logs found.</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="border-b">
+                        <th className="px-4 py-2 text-left">Time</th>
+                        <th className="px-4 py-2 text-left">Action</th>
+                        <th className="px-4 py-2 text-left">Device/Switch</th>
+                        <th className="px-4 py-2 text-left">User/Source</th>
+                        <th className="px-4 py-2 text-left">Location</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {activityLogs.map((log) => (
+                        <tr key={log.id || Math.random()} className="border-b hover:bg-muted/50">
+                          <td className="px-4 py-2 whitespace-nowrap">{safeFormatDate(log.timestamp, 'MMM dd, HH:mm:ss')}</td>
+                          <td className="px-4 py-2">
+                            {(() => {
+                              const state = (log as any).newState ? String((log as any).newState).toLowerCase() : (log.action === 'on' ? 'on' : log.action === 'off' ? 'off' : undefined);
+                              return <Badge variant={state === 'on' ? 'default' : 'secondary'}>{state === 'on' ? '🟢 ON' : state === 'off' ? '🔴 OFF' : (log.action || 'unknown').toUpperCase()}</Badge>;
+                          })()}
+                          </td>
+                          <td className="px-4 py-2">
+                            <div>
+                              <div className="font-medium">{log.deviceName || '-'}</div>
+                              {log.switchName && <div className="text-xs text-muted-foreground">{log.switchName}</div>}
+                            </div>
+                          </td>
+                          <td className="px-4 py-2">
+                            <div>
+                              {log.userName && <div className="font-medium">{log.userName}</div>}
+                              <div className="text-xs"><Badge variant="outline" className="text-xs">{log.triggeredBy || 'unknown'}</Badge></div>
+                            </div>
+                          </td>
+                          <td className="px-4 py-2 text-xs text-muted-foreground">{log.location || '-'}</td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {(() => {
-                          try {
-                            return (paginatedData as ActivityLog[]).map((log) => (
-                              <tr key={log.id || Math.random()} className="border-b hover:bg-muted/50">
-                                <td className="px-4 py-2 whitespace-nowrap">
-                                  {safeFormatDate(log.timestamp, 'MMM dd, HH:mm:ss')}
-                                </td>
-                                <td className="px-4 py-2">
-                                  <Badge variant={(log.action || 'unknown') === 'on' ? 'default' : 'secondary'}>
-                                    {log.action === 'on' ? '🟢 ON' : log.action === 'off' ? '🔴 OFF' : (log.action || 'unknown').toUpperCase()}
-                                  </Badge>
-                                </td>
-                                <td className="px-4 py-2">
-                                  <div>
-                                    <div className="font-medium">{log.deviceName || '-'}</div>
-                                    {log.switchName && (
-                                      <div className="text-xs text-muted-foreground">{log.switchName}</div>
-                                    )}
-                                  </div>
-                                </td>
-                                <td className="px-4 py-2">
-                                  <div>
-                                    {log.userName && (
-                                      <div className="font-medium">{log.userName}</div>
-                                    )}
-                                    <div className="text-xs">
-                                      <Badge variant="outline" className="text-xs">
-                                        {log.triggeredBy || 'unknown'}
-                                      </Badge>
-                                    </div>
-                                  </div>
-                                </td>
-                                <td className="px-4 py-2 text-xs text-muted-foreground">
-                                  {log.location || '-'}
-                                </td>
-                              </tr>
-                            ));
-                          } catch (error) {
-                            console.error('Error rendering activity logs:', error);
-                            return (
-                              <tr>
-                                <td colSpan={5} className="px-4 py-2 text-center text-red-500">
-                                  Error loading activity logs
-                                </td>
-                              </tr>
-                            );
-                          }
-                        })()}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </TabsContent>
 
-            {/* Manual Switch Logs */}
             <TabsContent value="manual-switches">
-              <div className="space-y-4">
-                {isLoading ? (
-                  <div className="flex items-center justify-center py-8">
-                    <RefreshCw className="animate-spin w-6 h-6 mr-2" />
-                    Loading manual switch logs...
-                  </div>
-                ) : paginatedData.length === 0 ? (
-                  <div className="text-center py-8 text-muted-foreground">
-                    No manual switch logs found.
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full text-sm">
-                      <thead>
-                        <tr className="border-b">
-                          <th className="px-4 py-2 text-left">Time</th>
-                          <th className="px-4 py-2 text-left">Device</th>
-                          <th className="px-4 py-2 text-left">Switch</th>
-                          <th className="px-4 py-2 text-left">GPIO Pin</th>
-                          <th className="px-4 py-2 text-left">Action</th>
-                          <th className="px-4 py-2 text-left">Location</th>
+              {isLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <RefreshCw className="animate-spin w-6 h-6 mr-2" /> Loading manual switch logs...
+                </div>
+              ) : manualSwitchLogs.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">No manual switch logs found.</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="border-b">
+                        <th className="px-4 py-2 text-left">Time</th>
+                        <th className="px-4 py-2 text-left">Device</th>
+                        <th className="px-4 py-2 text-left">Switch</th>
+                        <th className="px-4 py-2 text-left">GPIO Pin</th>
+                        <th className="px-4 py-2 text-left">Action</th>
+                        <th className="px-4 py-2 text-left">Location</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {manualSwitchLogs.map((log) => (
+                        <tr key={log.id || Math.random()} className="border-b hover:bg-muted/50">
+                          <td className="px-4 py-2 whitespace-nowrap">{safeFormatDate(log.timestamp, 'MMM dd, HH:mm:ss')}</td>
+                          <td className="px-4 py-2"><div className="font-medium">{log.deviceName || 'Unknown Device'}</div></td>
+                          <td className="px-4 py-2"><div className="flex items-center gap-2"><Monitor className="w-4 h-4 text-yellow-600" /><span className="font-medium">{log.switchName || 'Unknown Switch'}</span></div></td>
+                          <td className="px-4 py-2"><Badge variant="outline" className="font-mono">GPIO {log.gpioPin ?? 'N/A'}</Badge></td>
+                          <td className="px-4 py-2">
+                            {(() => {
+                              const state = log?.newState ? String(log.newState).toLowerCase() : (log.action === 'manual_on' || log.action === 'manual_toggle' ? 'on' : log.action === 'manual_off' ? 'off' : undefined);
+                              return <Badge variant={state === 'on' ? 'default' : 'secondary'}>{state === 'on' ? '🟢 ON' : state === 'off' ? '🔴 OFF' : (log.action || 'unknown')}</Badge>;
+                            })()}
+                          </td>
+                          <td className="px-4 py-2 text-muted-foreground">{log.location || '-'}</td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {(() => {
-                          try {
-                            return (paginatedData as ManualSwitchLog[]).map((log) => (
-                              <tr key={log.id || Math.random()} className="border-b hover:bg-muted/50">
-                                <td className="px-4 py-2 whitespace-nowrap">
-                                  {safeFormatDate(log.timestamp, 'MMM dd, HH:mm:ss')}
-                                </td>
-                                <td className="px-4 py-2">
-                                  <div className="font-medium">{log.deviceName || 'Unknown Device'}</div>
-                                </td>
-                                <td className="px-4 py-2">
-                                  <div className="flex items-center gap-2">
-                                    <Zap className="w-4 h-4 text-yellow-600" />
-                                    <span className="font-medium">{log.switchName || 'Unknown Switch'}</span>
-                                  </div>
-                                </td>
-                                <td className="px-4 py-2">
-                                  <Badge variant="outline" className="font-mono">
-                                    GPIO {log.gpioPin || 'N/A'}
-                                  </Badge>
-                                </td>
-                                <td className="px-4 py-2">
-                                  <Badge 
-                                    variant="outline" 
-                                    className={`${
-                                      log.newState === 'on' 
-                                        ? 'bg-green-50 text-green-700 border-green-200' 
-                                        : 'bg-red-50 text-red-700 border-red-200'
-                                    }`}
-                                  >
-                                    {log.newState === 'on' ? '🔴 ON' : '⚫ OFF'}
-                                  </Badge>
-                                </td>
-                                <td className="px-4 py-2 text-muted-foreground">
-                                  {log.location || '-'}
-                                </td>
-                              </tr>
-                            ));
-                          } catch (error) {
-                            console.error('Error rendering manual switch logs:', error);
-                            return (
-                              <tr>
-                                <td colSpan={6} className="px-4 py-2 text-center text-red-500">
-                                  Error loading manual switch logs
-                                </td>
-                              </tr>
-                            );
-                          }
-                        })()}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </TabsContent>
 
-            {/* Web Switch Logs */}
             <TabsContent value="web-switches">
-              <div className="space-y-4">
-                {isLoading ? (
-                  <div className="flex items-center justify-center py-8">
-                    <RefreshCw className="animate-spin w-6 h-6 mr-2" />
-                    Loading web switch logs...
-                  </div>
-                ) : paginatedData.length === 0 ? (
-                  <div className="text-center py-8 text-muted-foreground">
-                    No web switch logs found.
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full text-sm">
-                      <thead>
-                        <tr className="border-b">
-                          <th className="px-4 py-2 text-left">Time</th>
-                          <th className="px-4 py-2 text-left">Device</th>
-                          <th className="px-4 py-2 text-left">Switch</th>
-                          <th className="px-4 py-2 text-left">User</th>
-                          <th className="px-4 py-2 text-left">Action</th>
-                          <th className="px-4 py-2 text-left">Location</th>
+              {webSwitchLogs.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">No web switch logs found.</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="border-b">
+                        <th className="px-4 py-2 text-left">Time</th>
+                        <th className="px-4 py-2 text-left">Device</th>
+                        <th className="px-4 py-2 text-left">Switch</th>
+                        <th className="px-4 py-2 text-left">User</th>
+                        <th className="px-4 py-2 text-left">Action</th>
+                        <th className="px-4 py-2 text-left">Location</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {webSwitchLogs.map((log) => (
+                        <tr key={log.id || Math.random()} className="border-b hover:bg-muted/50">
+                          <td className="px-4 py-2 whitespace-nowrap">{safeFormatDate(log.timestamp, 'MMM dd, HH:mm:ss')}</td>
+                          <td className="px-4 py-2"><div className="font-medium">{log.deviceName || 'Unknown Device'}</div></td>
+                          <td className="px-4 py-2"><div className="flex items-center gap-2"><Monitor className="w-4 h-4 text-green-600" /><span className="font-medium">{log.switchName || 'Unknown Switch'}</span></div></td>
+                          <td className="px-4 py-2"><div className="font-medium">{log.userName || 'Unknown User'}</div>{log.ipAddress && <div className="text-xs text-muted-foreground">{log.ipAddress}</div>}</td>
+                          <td className="px-4 py-2"><Badge variant="outline" className={`${log.newState === 'on' ? 'bg-green-50 text-green-700 border-green-200' : 'bg-red-50 text-red-700 border-red-200'}`}>{log.newState === 'on' ? '🟢 ON' : '🔴 OFF'}</Badge></td>
+                          <td className="px-4 py-2 text-muted-foreground">{log.location || '-'}</td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {(() => {
-                          try {
-                            return (paginatedData as WebSwitchLog[]).map((log) => (
-                              <tr key={log.id} className="border-b hover:bg-muted/50">
-                                <td className="px-4 py-2 whitespace-nowrap">
-                                  {safeFormatDate(log.timestamp, 'MMM dd, HH:mm:ss')}
-                                </td>
-                                <td className="px-4 py-2">
-                                  <div className="font-medium">{log.deviceName || 'Unknown Device'}</div>
-                                </td>
-                                <td className="px-4 py-2">
-                                  <div className="flex items-center gap-2">
-                                    <Monitor className="w-4 h-4 text-green-600" />
-                                    <span className="font-medium">{log.switchName || 'Unknown Switch'}</span>
-                                  </div>
-                                </td>
-                                <td className="px-4 py-2">
-                                  <div className="font-medium">{log.userName || 'Unknown User'}</div>
-                                  {log.ipAddress && (
-                                    <div className="text-xs text-muted-foreground">{log.ipAddress}</div>
-                                  )}
-                                </td>
-                                <td className="px-4 py-2">
-                                  <Badge 
-                                    variant="outline" 
-                                    className={`${
-                                      log.newState === 'on' 
-                                        ? 'bg-green-50 text-green-700 border-green-200' 
-                                        : 'bg-red-50 text-red-700 border-red-200'
-                                    }`}
-                                  >
-                                    {log.newState === 'on' ? '🟢 ON' : '🔴 OFF'}
-                                  </Badge>
-                                </td>
-                                <td className="px-4 py-2 text-muted-foreground">
-                                  {log.location || '-'}
-                                </td>
-                              </tr>
-                            ));
-                          } catch (error) {
-                            console.error('Error rendering web switch logs:', error);
-                            return (
-                              <tr>
-                                <td colSpan={6} className="px-4 py-2 text-center text-red-500">
-                                  Error loading web switch logs
-                                </td>
-                              </tr>
-                            );
-                          }
-                        })()}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </TabsContent>
 
-            {/* Schedule Switch Logs */}
             <TabsContent value="schedule-switches">
-              <div className="space-y-4">
-                {isLoading ? (
-                  <div className="flex items-center justify-center py-8">
-                    <RefreshCw className="animate-spin w-6 h-6 mr-2" />
-                    Loading schedule switch logs...
-                  </div>
-                ) : paginatedData.length === 0 ? (
-                  <div className="text-center py-8 text-muted-foreground">
-                    No schedule switch logs found.
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full text-sm">
-                      <thead>
-                        <tr className="border-b">
-                          <th className="px-4 py-2 text-left">Time</th>
-                          <th className="px-4 py-2 text-left">Device</th>
-                          <th className="px-4 py-2 text-left">Switch</th>
-                          <th className="px-4 py-2 text-left">Schedule</th>
-                          <th className="px-4 py-2 text-left">Action</th>
-                          <th className="px-4 py-2 text-left">Location</th>
+              {scheduleSwitchLogs.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">No schedule switch logs found.</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="border-b">
+                        <th className="px-4 py-2 text-left">Time</th>
+                        <th className="px-4 py-2 text-left">Device</th>
+                        <th className="px-4 py-2 text-left">Switch</th>
+                        <th className="px-4 py-2 text-left">Schedule</th>
+                        <th className="px-4 py-2 text-left">Action</th>
+                        <th className="px-4 py-2 text-left">Location</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {scheduleSwitchLogs.map((log) => (
+                        <tr key={log.id || Math.random()} className="border-b hover:bg-muted/50">
+                          <td className="px-4 py-2 whitespace-nowrap">{safeFormatDate(log.timestamp, 'MMM dd, HH:mm:ss')}</td>
+                          <td className="px-4 py-2"><div className="font-medium">{log.deviceName || 'Unknown Device'}</div></td>
+                          <td className="px-4 py-2"><div className="flex items-center gap-2"><Clock className="w-4 h-4 text-purple-600" /><span className="font-medium">{log.switchName || 'Unknown Switch'}</span></div></td>
+                          <td className="px-4 py-2"><div className="font-medium">{log.scheduleName || 'Unknown Schedule'}</div><div className="text-xs text-muted-foreground">Trigger: {safeFormatDate(log.triggerTime, 'MMM dd, HH:mm')}</div></td>
+                          <td className="px-4 py-2"><Badge variant="outline" className={`${log.newState === 'on' ? 'bg-green-50 text-green-700 border-green-200' : 'bg-red-50 text-red-700 border-red-200'}`}>{log.newState === 'on' ? '🟢 ON' : '🔴 OFF'}</Badge></td>
+                          <td className="px-4 py-2 text-muted-foreground">{log.location || '-'}</td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {(() => {
-                          try {
-                            return (paginatedData as ScheduleSwitchLog[]).map((log) => (
-                              <tr key={log.id} className="border-b hover:bg-muted/50">
-                                <td className="px-4 py-2 whitespace-nowrap">
-                                  {safeFormatDate(log.timestamp, 'MMM dd, HH:mm:ss')}
-                                </td>
-                                <td className="px-4 py-2">
-                                  <div className="font-medium">{log.deviceName || 'Unknown Device'}</div>
-                                </td>
-                                <td className="px-4 py-2">
-                                  <div className="flex items-center gap-2">
-                                    <Clock className="w-4 h-4 text-purple-600" />
-                                    <span className="font-medium">{log.switchName || 'Unknown Switch'}</span>
-                                  </div>
-                                </td>
-                                <td className="px-4 py-2">
-                                  <div className="font-medium">{log.scheduleName || 'Unknown Schedule'}</div>
-                                  <div className="text-xs text-muted-foreground">
-                                    Trigger: {safeFormatDate(log.triggerTime, 'MMM dd, HH:mm')}
-                                  </div>
-                                </td>
-                                <td className="px-4 py-2">
-                                  <Badge 
-                                    variant="outline" 
-                                    className={`${
-                                      log.newState === 'on' 
-                                        ? 'bg-green-50 text-green-700 border-green-200' 
-                                        : 'bg-red-50 text-red-700 border-red-200'
-                                    }`}
-                                  >
-                                    {log.newState === 'on' ? '🟢 ON' : '🔴 OFF'}
-                                  </Badge>
-                                </td>
-                                <td className="px-4 py-2 text-muted-foreground">
-                                  {log.location || '-'}
-                                </td>
-                              </tr>
-                            ));
-                          } catch (error) {
-                            console.error('Error rendering schedule switch logs:', error);
-                            return (
-                              <tr>
-                                <td colSpan={6} className="px-4 py-2 text-center text-red-500">
-                                  Error loading schedule switch logs
-                                </td>
-                              </tr>
-                            );
-                          }
-                        })()}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </TabsContent>
 
-            {/* Device Status Logs */}
             <TabsContent value="device-status">
-              <div className="space-y-4">
-                {isLoading ? (
-                  <div className="flex items-center justify-center py-8">
-                    <RefreshCw className="animate-spin w-6 h-6 mr-2" />
-                    Loading device status logs...
-                  </div>
-                ) : paginatedData.length === 0 ? (
-                  <div className="text-center py-8 text-muted-foreground">
-                    No device status logs found.
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full text-sm">
-                      <thead>
-                        <tr className="border-b">
-                          <th className="px-4 py-2 text-left">Time</th>
-                          <th className="px-4 py-2 text-left">Device</th>
-                          <th className="px-4 py-2 text-left">Online Status</th>
-                          <th className="px-4 py-2 text-left">Signal/Temp</th>
-                          <th className="px-4 py-2 text-left">Switches</th>
-                          <th className="px-4 py-2 text-left">Alerts</th>
-                          <th className="px-4 py-2 text-left">Response Time</th>
+              {deviceStatusLogs.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">No device status logs found.</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="border-b">
+                        <th className="px-4 py-2 text-left">Time</th>
+                        <th className="px-4 py-2 text-left">Device</th>
+                        <th className="px-4 py-2 text-left">Online Status</th>
+                        <th className="px-4 py-2 text-left">Signal/Temp</th>
+                        <th className="px-4 py-2 text-left">Switches</th>
+                        <th className="px-4 py-2 text-left">Alerts</th>
+                        <th className="px-4 py-2 text-left">Response Time</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {deviceStatusLogs.map((log) => (
+                        <tr key={log.id || Math.random()} className="border-b hover:bg-muted/50">
+                          <td className="px-4 py-2 whitespace-nowrap">{safeFormatDate(log.timestamp, 'MMM dd, HH:mm:ss')}</td>
+                          <td className="px-4 py-2"><div><div className="font-medium">{log.deviceName || '-'}</div>{log.deviceMac && <div className="text-xs text-muted-foreground">{log.deviceMac}</div>}</div></td>
+                          <td className="px-4 py-2"><Badge variant={safe(log, 'deviceStatus.isOnline', false) ? 'default' : 'destructive'}>{safe(log, 'deviceStatus.isOnline', false) ? <>🟢 Online</> : <>🔴 Offline</>}</Badge></td>
+                          <td className="px-4 py-2 text-xs"><div>{safe(log, 'deviceStatus.wifiSignalStrength') && <div>Signal: {safe(log, 'deviceStatus.wifiSignalStrength')}dBm</div>}{safe(log, 'deviceStatus.temperature') && <div>Temp: {safe(log, 'deviceStatus.temperature')}°C</div>}</div></td>
+                          <td className="px-4 py-2 text-xs">{log.summary && <div><div>On: {safe(log, 'summary.totalSwitchesOn', 0)}</div><div>Off: {safe(log, 'summary.totalSwitchesOff', 0)}</div></div>}</td>
+                          <td className="px-4 py-2">{log.alerts && log.alerts.length > 0 ? <Badge variant="destructive">{log.alerts.length} Alert{log.alerts.length > 1 ? 's' : ''}</Badge> : <Badge variant="default">No Alerts</Badge>}</td>
+                          <td className="px-4 py-2 text-xs">{safe(log, 'deviceStatus.responseTime') ? `${safe(log, 'deviceStatus.responseTime')}ms` : '-'}</td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {(() => {
-                          try {
-                            return (paginatedData as DeviceStatusLog[]).map((log) => (
-                              <tr key={log.id} className="border-b hover:bg-muted/50">
-                                <td className="px-4 py-2 whitespace-nowrap">
-                                  {safeFormatDate(log.timestamp, 'MMM dd, HH:mm:ss')}
-                                </td>
-                                <td className="px-4 py-2">
-                                  <div>
-                                    <div className="font-medium">{log.deviceName || '-'}</div>
-                                    {log.deviceMac && (
-                                      <div className="text-xs text-muted-foreground">{log.deviceMac}</div>
-                                    )}
-                                  </div>
-                                </td>
-                                <td className="px-4 py-2">
-                                  <Badge variant={safe(log, 'deviceStatus.isOnline', false) ? 'default' : 'destructive'}>
-                                    {safe(log, 'deviceStatus.isOnline', false) ? (
-                                      <>🟢 Online</>
-                                    ) : (
-                                      <>🔴 Offline</>
-                                    )}
-                                  </Badge>
-                                </td>
-                                <td className="px-4 py-2 text-xs">
-                                  <div>
-                                    {safe(log, 'deviceStatus.wifiSignalStrength') && (
-                                      <div>Signal: {safe(log, 'deviceStatus.wifiSignalStrength')}dBm</div>
-                                    )}
-                                    {safe(log, 'deviceStatus.temperature') && (
-                                      <div>Temp: {safe(log, 'deviceStatus.temperature')}°C</div>
-                                    )}
-                                  </div>
-                                </td>
-                                <td className="px-4 py-2 text-xs">
-                                  {log.summary && (
-                                    <div>
-                                      <div>On: {safe(log, 'summary.totalSwitchesOn', 0)}</div>
-                                      <div>Off: {safe(log, 'summary.totalSwitchesOff', 0)}</div>
-                                    </div>
-                                  )}
-                                </td>
-                                <td className="px-4 py-2">
-                                  {log.alerts && log.alerts.length > 0 ? (
-                                    <Badge variant="destructive">
-                                      {log.alerts.length} Alert{log.alerts.length > 1 ? 's' : ''}
-                                    </Badge>
-                                  ) : (
-                                    <Badge variant="default">No Alerts</Badge>
-                                  )}
-                                </td>
-                                <td className="px-4 py-2 text-xs">
-                                  {safe(log, 'deviceStatus.responseTime') ? `${safe(log, 'deviceStatus.responseTime')}ms` : '-'}
-                                </td>
-                              </tr>
-                            ));
-                          } catch (error) {
-                            console.error('Error rendering device status logs:', error);
-                            return (
-                              <tr>
-                                <td colSpan={7} className="px-4 py-2 text-center text-red-500">
-                                  Error loading device status logs
-                                </td>
-                              </tr>
-                            );
-                          }
-                        })()}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </TabsContent>
           </Tabs>
 
-          {/* Pagination */}
-          {filteredData.length > 0 && (
-            <div className="flex flex-col sm:flex-row items-center justify-between mt-6 gap-4">
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-muted-foreground">Show:</span>
-                  <Select value={itemsPerPage.toString()} onValueChange={(value) => setItemsPerPage(parseInt(value))}>
-                    <SelectTrigger className="w-20 h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="10">10</SelectItem>
-                      <SelectItem value="25">25</SelectItem>
-                      <SelectItem value="50">50</SelectItem>
-                      <SelectItem value="100">100</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <span className="text-sm text-muted-foreground">entries</span>
-                </div>
-                <div className="text-sm text-muted-foreground">
-                  Showing {((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, totalEntries)} of {totalEntries} entries
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-muted-foreground">Go to page:</span>
-                  <Input
-                    type="number"
-                    min={1}
-                    max={totalPages}
-                    value={currentPage}
-                    onChange={(e) => {
-                      const page = parseInt(e.target.value);
-                      if (page >= 1 && page <= totalPages) {
-                        setCurrentPage(page);
-                      }
-                    }}
-                    className="w-16 h-8 text-center"
-                    onKeyPress={(e) => {
-                      if (e.key === 'Enter') {
-                        const input = e.target as HTMLInputElement;
-                        const page = parseInt(input.value);
-                        if (page >= 1 && page <= totalPages) {
-                          setCurrentPage(page);
-                        }
-                      }
-                    }}
-                  />
-                  <span className="text-sm text-muted-foreground">of {totalPages}</span>
+          {/* Pagination controls */}
+          <div className="mt-4">
+            <div className="flex items-center justify-between w-full">
+              <div className="flex items-center gap-2">
+                <Button variant="ghost" size="sm" onClick={goToPrevPage} disabled={currentPage <= 1}>
+                  <ChevronLeft className="w-4 h-4" />
+                </Button>
+
+                <div className="text-sm text-muted-foreground">Page {currentPage} of {paginationMeta.totalPages || 1}</div>
+
+                <Button variant="ghost" size="sm" onClick={goToNextPage} disabled={currentPage >= (paginationMeta.totalPages || 1)}>
+                  <ChevronRight className="w-4 h-4" />
+                </Button>
+
+                <div className="ml-4 flex items-center gap-2">
+                  <label className="text-sm text-muted-foreground">Per page</label>
+                  <select className="bg-transparent border border-border rounded px-2 py-1 text-sm" value={itemsPerPage} onChange={(e) => handleItemsPerPageChange(Number(e.target.value))}>
+                    <option value={25}>25</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                    <option value={200}>200</option>
+                  </select>
                 </div>
               </div>
-              <div className="flex items-center space-x-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
-                  disabled={currentPage <= 1}
-                >
-                  Previous
-                </Button>
 
-                {/* First page */}
-                {totalPages > 1 && currentPage > 3 && (
-                  <>
-                    <Button
-                      variant={1 === currentPage ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => setCurrentPage(1)}
-                    >
-                      1
-                    </Button>
-                    {currentPage > 4 && <span className="px-2">...</span>}
-                  </>
+              <div className="text-sm text-muted-foreground">
+                {paginationMeta.total > 0 ? (
+                  (() => {
+                    const start = (currentPage - 1) * itemsPerPage + 1;
+                    const end = Math.min(start + itemsPerPage - 1, paginationMeta.total);
+                    return (<>{start} - {end} of {paginationMeta.total}</>);
+                  })()
+                ) : (
+                  <>{0} of {0}</>
                 )}
-
-                {/* Page numbers around current page */}
-                <div className="flex items-center space-x-1">
-                  {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
-                    let pageNum;
-                    if (totalPages <= 5) {
-                      pageNum = i + 1;
-                    } else if (currentPage <= 3) {
-                      pageNum = i + 1;
-                    } else if (currentPage >= totalPages - 2) {
-                      pageNum = totalPages - 4 + i;
-                    } else {
-                      pageNum = currentPage - 2 + i;
-                    }
-                    
-                    if (pageNum < 1 || pageNum > totalPages) return null;
-                    
-                    return (
-                      <Button
-                        key={pageNum}
-                        variant={pageNum === currentPage ? "default" : "outline"}
-                        size="sm"
-                        onClick={() => setCurrentPage(pageNum)}
-                      >
-                        {pageNum}
-                      </Button>
-                    );
-                  })}
-                </div>                {/* Last page */}
-                {totalPages > 1 && currentPage < totalPages - 2 && (
-                  <>
-                    {currentPage < totalPages - 3 && <span className="px-2">...</span>}
-                    <Button
-                      variant={totalPages === currentPage ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => setCurrentPage(totalPages)}
-                    >
-                      {totalPages}
-                    </Button>
-                  </>
-                )}
-
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
-                  disabled={currentPage >= totalPages}
-                >
-                  Next
-                </Button>
               </div>
             </div>
-          )}
+          </div>
         </CardContent>
       </Card>
     </div>
