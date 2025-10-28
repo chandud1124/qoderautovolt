@@ -42,10 +42,16 @@
 
 // Aligned relay and manual switch pin mapping
 // relayPins[i] corresponds to manualSwitchPins[i]
-// Use `static const` so including this header across multiple translation
-// units does not create multiple-definition linker errors.
-static const int relayPins[NUM_SWITCHES] = {16, 17, 18, 19, 21, 22};
-static const int manualSwitchPins[NUM_SWITCHES] = {25, 26, 27, 32, 33, 23};
+// Use `static` so including this header across multiple translation
+// units does not create multiple-definition linker errors. These arrays
+// are intentionally mutable because CONFIG messages can update GPIO mapping
+// at runtime.
+static int relayPins[NUM_SWITCHES] = {16, 17, 18, 19, 21, 22};
+static int manualSwitchPins[NUM_SWITCHES] = {25, 26, 27, 32, 33, 23};
+
+// Status LED GPIO (used by blink_status.h). Set to a sensible default
+// for most ESP32 dev boards; change if your board uses a different pin.
+#define STATUS_LED_PIN 2
 
 // Relay configuration
 #define RELAY_ACTIVE_HIGH false  // Set to true if relays are active HIGH, false if active LOW
