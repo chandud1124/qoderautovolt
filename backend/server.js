@@ -217,7 +217,7 @@ mqttClient.on('message', (topic, message) => {
                     switchId: change.switchId,
                     switchName: change.switchName,
                     action: action,
-                    triggeredBy: change.manualOverride ? 'manual_switch' : 'esp32',
+                    triggeredBy: change.manualOverride ? 'manual_switch' : 'system',
                     classroom: device.classroom,
                     location: device.location,
                     timestamp: new Date(),
@@ -416,78 +416,83 @@ mqttClient.on('message', (topic, message) => {
               }
             })
             .catch(err => console.error('[MQTT] Error processing manual switch:', err.message));
-        } else if (data.status === 'heartbeat') {
-          // Handle heartbeat telemetry to keep device online
-          console.log('[MQTT] Heartbeat received from device:', data.mac);
+        } else if (data.type === 'switch_event') {
+          // Handle sensor-triggered switch event for logging
+          console.log('[MQTT] Sensor switch event:', data);
+          // Find the device and log the sensor operation
           const Device = require('./models/Device');
+          const ActivityLog = require('./models/ActivityLog');
 
           // Normalize MAC address
           function normalizeMac(mac) {
             return mac.replace(/[^a-fA-F0-9]/g, '').toLowerCase();
           }
+
+          if (!data.mac) {
+            console.warn('[MQTT] switch_event telemetry missing mac:', telemetry);
+            return;
+          }
+          if (typeof data.gpio === 'undefined' || data.gpio === null) {
+            console.warn('[MQTT] switch_event telemetry missing gpio:', telemetry);
+            return;
+          }
+
           const normalizedMac = normalizeMac(data.mac);
 
-          Device.findOneAndUpdate(
-            { $or: [
-              { macAddress: data.mac },
-              { macAddress: data.mac.toUpperCase() },
-              { macAddress: data.mac.toLowerCase() },
-              { macAddress: normalizedMac },
-              { macAddress: normalizedMac.toUpperCase() },
-              { macAddress: normalizedMac.toLowerCase() }
-            ] },
-            {
-              $set: {
-                status: 'online',
-                lastSeen: new Date(),
-                heap: data.heap // Store heap info if available
+          Device.findOne({ $or: [
+            { macAddress: data.mac },
+            { macAddress: data.mac.toUpperCase() },
+            { macAddress: data.mac.toLowerCase() },
+            { macAddress: normalizedMac },
+            { macAddress: normalizedMac.toUpperCase() },
+            { macAddress: normalizedMac.toLowerCase() }
+          ] })
+            .then(async (device) => {
+              if (device) {
+                // Find the switch by GPIO
+                const switchInfo = device.switches.find(sw => (sw.relayGpio || sw.gpio) === data.gpio);
+                if (switchInfo) {
+                  // Log the sensor operation
+                  await ActivityLog.create({
+                    deviceId: device._id,
+                    deviceName: device.name,
+                    switchId: switchInfo._id,
+                    switchName: switchInfo.name,
+                    action: data.state ? 'on' : 'off',
+                    triggeredBy: 'pir',
+                    classroom: device.classroom,
+                    location: device.location,
+                    ip: 'ESP32',
+                    userAgent: 'ESP32 Motion Sensor',
+                    context: {
+                      source: data.source || 'motion',
+                      gpio: data.gpio,
+                      physicalPin: data.physicalPin || null,
+                      heap: data.heap || null,
+                      telemetry: data,
+                      sensorTriggered: true
+                    }
+                  });
+
+                  console.log(`[ACTIVITY] Logged sensor switch: ${device.name} - ${switchInfo.name} -> ${data.state ? 'ON' : 'OFF'} (source: ${data.source})`);
+
+                  // Emit real-time update to frontend
+                  if (global.io) {
+                    try {
+                      emitDeviceStateChanged(device, {
+                        source: 'mqtt_sensor_switch',
+                        note: `Sensor switch ${switchInfo.name} changed to ${data.state ? 'ON' : 'OFF'}`
+                      });
+                    } catch (e) {
+                      logger.error('[emitDeviceStateChanged] sensor switch emit error', e && e.message ? e.message : e);
+                    }
+                  }
+                } else {
+                  console.warn('[MQTT] switch_event telemetry: switch not found for device. Payload:', telemetry, 'Device switches:', device.switches.map(s=>({name:s.name,gpio:s.gpio,relayGpio:s.relayGpio})));
+                }
               }
-            },
-            { new: true }
-          ).then(async (device) => {
-            if (device) {
-              console.log(`[MQTT] Updated heartbeat for device: ${device.name} (${device.macAddress})`);
-
-              // Log ESP32 heartbeat to database
-              try {
-                const DeviceStatusLog = require('./models/DeviceStatusLog');
-
-                // Create heartbeat log entry
-                const logEntry = await DeviceStatusLog.create({
-                  deviceId: device._id,
-                  deviceName: device.name,
-                  deviceMac: device.macAddress,
-                  checkType: 'heartbeat',
-                  deviceStatus: {
-                    isOnline: true,
-                    lastSeen: device.lastSeen,
-                    freeHeap: data.heap || 0,
-                    uptime: data.uptime || 0
-                  },
-                  summary: {
-                    totalSwitchesOn: device.switches ? device.switches.filter(s => s.state).length : 0,
-                    totalSwitchesOff: device.switches ? device.switches.filter(s => !s.state).length : 0,
-                    inconsistenciesFound: 0
-                  },
-                  classroom: device.classroom,
-                  location: device.location,
-                  timestamp: new Date()
-                });
-
-                console.log(`[MQTT] ✅ Successfully logged ESP32 heartbeat for device ${device.macAddress} (Log ID: ${logEntry._id})`);
-              } catch (logError) {
-                console.error('[MQTT] ❌ Error logging ESP32 heartbeat:', logError.message);
-                console.error('[MQTT] Heartbeat log error details:', logError);
-              }
-
-              // Emit real-time update if status was previously offline
-              if (global.io && device.status !== 'online') {
-                emitDeviceStateChanged(device, { source: 'mqtt_heartbeat' });
-              }
-            } else {
-              console.warn(`[MQTT] Heartbeat from unknown device: ${data.mac}`);
-            }
-          }).catch(err => console.error('[MQTT] Error processing heartbeat:', err.message));
+            })
+            .catch(err => console.error('[MQTT] Error processing switch_event:', err.message));
         }
       } catch (err) {
         console.warn('[MQTT] Failed to parse telemetry JSON:', err.message);
@@ -596,20 +601,28 @@ function sendMqttSwitchCommand(macAddress, gpio, state) {
       return;
     }
     
+    const normalizedMac = (macAddress || '').toString();
     const command = {
-      mac: macAddress, // Include MAC address to target specific device
+      mac: normalizedMac, // Include MAC address to target specific device
       secret: device.deviceSecret, // Include device secret for authentication
-      gpio: gpio,
+      gpio: gpio,           // Physical relay GPIO expected by firmware
+      relayGpio: gpio,      // Duplicate field for backward compatibility
       state: state,
       // Include a userId so firmware will accept the command. Use default_user to
       // match the lightweight firmware auth check (it accepts 'default_user' or 'admin').
       userId: process.env.MQTT_COMMAND_USER || 'default_user'
     };
     const message = JSON.stringify(command);
-    
-    console.log(`[MQTT] Publishing to esp32/switches:`, message);
-    const result = mqttClient.publish('esp32/switches', message);
-    console.log(`[MQTT] Sent switch command:`, command, 'publish result:', result);
+
+    console.log(`[MQTT] Publishing to esp32/switches (qos=1):`, message);
+    // Publish with QoS=1 to increase delivery reliability to the device
+    mqttClient.publish('esp32/switches', message, { qos: 1, retain: false }, (err) => {
+      if (err) {
+        console.error('[MQTT] Error publishing switch command to esp32/switches:', err.message || err);
+      } else {
+        console.log('[MQTT] switch command published successfully');
+      }
+    });
   }).catch(err => {
     console.error('[MQTT] Error getting device secret:', err.message, err.stack);
   });
@@ -632,9 +645,14 @@ function sendDeviceConfigToESP32(macAddress) {
           // Include userId 'admin' for configuration pushes so the firmware
           // accepts and applies configuration updates.
           userId: process.env.MQTT_CONFIG_USER || 'admin',
+          // Include both gpio and relayGpio as well as both manualGpio and
+          // manualSwitchGpio to ensure both firmware and frontend consumers
+          // can read the pin mapping regardless of the field name they expect.
           switches: device.switches.map(sw => ({
             gpio: sw.relayGpio || sw.gpio,
-            manualGpio: sw.manualSwitchGpio,
+            relayGpio: sw.relayGpio || sw.gpio,
+            manualGpio: sw.manualSwitchGpio !== undefined ? sw.manualSwitchGpio : sw.manualGpio,
+            manualSwitchGpio: sw.manualSwitchGpio !== undefined ? sw.manualSwitchGpio : sw.manualGpio,
             manualMode: sw.manualMode || 'maintained',
             usePir: sw.usePir || false,           // ✅ Per-switch PIR control
             dontAutoOff: sw.dontAutoOff || false  // ✅ Prevent auto-off for this switch
@@ -655,8 +673,14 @@ function sendDeviceConfigToESP32(macAddress) {
         };
 
         const message = JSON.stringify(config);
-        const result = mqttClient.publish('esp32/config', message);
-        console.log(`[MQTT] Sent device config to ESP32:`, config, 'result:', result);
+        // Publish config with QoS=1 so device receives reliable config updates
+        mqttClient.publish('esp32/config', message, { qos: 1, retain: false }, (err) => {
+          if (err) {
+            console.error('[MQTT] Error publishing device config to esp32/config:', err.message || err);
+          } else {
+            console.log('[MQTT] Device config published to esp32/config successfully');
+          }
+        });
       } catch (jsonError) {
         console.error('[MQTT] Error creating/configuring device config:', jsonError);
       }
@@ -936,6 +960,33 @@ app.get('/test-connection', (req, res) => {
     ip: req.ip
   });
   res.json({ message: 'Server is responding', timestamp: new Date().toISOString() });
+});
+
+// DEBUG ROUTE: Trigger an MQTT switch command from the server for quick testing
+// Usage (development only): /debug/push-switch?mac=AA:BB:CC:DD:EE:FF&gpio=16&state=1
+app.get('/debug/push-switch', (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(403).json({ error: 'Disabled in production' });
+  }
+  try {
+    const { mac, gpio, state } = req.query;
+    if (!mac || typeof gpio === 'undefined') {
+      return res.status(400).json({ error: 'mac and gpio query params required' });
+    }
+    const parsedGpio = parseInt(gpio, 10);
+    const parsedState = (state === '1' || state === 'true' || state === 'on');
+    console.log('[DEBUG] push-switch called', { mac, gpio: parsedGpio, state: parsedState });
+    if (global.sendMqttSwitchCommand) {
+      global.sendMqttSwitchCommand(mac, parsedGpio, parsedState);
+      return res.json({ success: true, mac, gpio: parsedGpio, state: parsedState });
+    } else {
+      console.warn('[DEBUG] sendMqttSwitchCommand not available');
+      return res.status(500).json({ error: 'sendMqttSwitchCommand not available on server' });
+    }
+  } catch (err) {
+    console.error('[DEBUG] push-switch error', err && err.message ? err.message : err);
+    return res.status(500).json({ error: err.message || String(err) });
+  }
 });
 
 // Catch-all middleware to debug requests
