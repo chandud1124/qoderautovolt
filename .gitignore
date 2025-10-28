@@ -27,6 +27,7 @@ backend/config/
 esp32/secure_config.h
 config.key
 encrypted.env
+esp32/secrets.h
 
 # Logs
 logs/

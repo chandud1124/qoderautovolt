@@ -4,10 +4,11 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#define WIFI_SSID "AIMS-WIFI"
-#define WIFI_PASSWORD "Aimswifi#2025"
-
-#define DEVICE_SECRET "351e01d4ccc5023263388c643badeb0a9672563d5bed0db7" // Optional: Device secret/API key for authentication
+// WiFi/MQTT secrets are kept out of version control. Create `esp32/secrets.h`
+// (ignored by git) and define WIFI_SSID, WIFI_PASSWORD, MQTT_USER,
+// MQTT_PASSWORD and DEVICE_SECRET there. Example `esp32/secrets.h` is
+// provided as a template in the repo.
+#include "secrets.h"
 
 // General firmware configuration
 #define NUM_SWITCHES 6
@@ -18,8 +19,6 @@
 // MQTT Broker Configuration - Update this to match your network
 #define MQTT_BROKER "172.16.3.171"      // Backend server IP
 #define MQTT_PORT 1883                  // MQTT port
-#define MQTT_USER "f3d2a8a068437f9a18f3c47a365c22bfab61f6a90cb03e0b"
-#define MQTT_PASSWORD ""
 
 // MQTT topics
 #define STATE_TOPIC "esp32/state"
@@ -43,8 +42,10 @@
 
 // Aligned relay and manual switch pin mapping
 // relayPins[i] corresponds to manualSwitchPins[i]
-int relayPins[NUM_SWITCHES] = {16, 17, 18, 19, 21, 22};
-int manualSwitchPins[NUM_SWITCHES] = {25, 26, 27, 32, 33, 23};
+// Use `static const` so including this header across multiple translation
+// units does not create multiple-definition linker errors.
+static const int relayPins[NUM_SWITCHES] = {16, 17, 18, 19, 21, 22};
+static const int manualSwitchPins[NUM_SWITCHES] = {25, 26, 27, 32, 33, 23};
 
 // Relay configuration
 #define RELAY_ACTIVE_HIGH false  // Set to true if relays are active HIGH, false if active LOW
