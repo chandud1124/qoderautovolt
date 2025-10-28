@@ -170,14 +170,22 @@ router.put('/:id',
     const schedule = await Schedule.findByIdAndUpdate(
       req.params.id,
       req.body,
-      { new: true }
-    );
+      { new: true, runValidators: true } // Enable validators on update
+    ).populate('createdBy', 'name email')
+     .populate('switches.deviceId', 'name location classroom');
 
     if (!schedule) {
       return res.status(404).json({ message: 'Schedule not found' });
     }
 
-    scheduleService.updateSchedule(schedule);
+    // Only update schedule service if it's initialized
+    if (scheduleService && typeof scheduleService.updateSchedule === 'function') {
+      try {
+        scheduleService.updateSchedule(schedule);
+      } catch (schedError) {
+        console.warn('[schedules] Schedule service update failed:', schedError.message);
+      }
+    }
 
     // Notify clients about updated schedule
     if (req.app.get('io')) {
@@ -189,6 +197,14 @@ router.put('/:id',
 
     res.json({ success: true, data: schedule });
   } catch (error) {
+    console.error('[schedules] Update error:', error);
+    // Handle validation errors specifically
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ 
+        message: 'Validation error', 
+        errors: Object.values(error.errors).map(e => e.message)
+      });
+    }
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });

@@ -82,5 +82,6 @@ receivers:
   webhook_configs:
   - url: 'http://backend:3001/api/telegram/alerts/webhook'
     send_resolved: true
-    http_config:
-      timeout: '10s'
+  # Leave http_config empty (Alertmanager will use defaults). Removed custom
+  # 'timeout' to avoid schema errors on older/newer Alertmanager versions.
+  http_config: {}

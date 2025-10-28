@@ -51,25 +51,51 @@ router.get('/activities', async (req, res) => {
 
     const total = await ActivityLog.countDocuments(query);
 
-    const formattedLogs = logs.map(log => ({
-      id: log._id,
-      timestamp: log.timestamp,
-      action: log.action,
-      deviceId: log.deviceId?._id,
-      deviceName: log.deviceName || log.deviceId?.name,
-      switchId: log.switchId,
-      switchName: log.switchName,
-      userId: log.userId?._id,
-      userName: log.userName || log.userId?.name,
-      triggeredBy: log.triggeredBy,
-      location: log.location || log.deviceId?.location,
-      isManualOverride: log.isManualOverride,
-      previousState: log.previousState,
-      newState: log.newState,
-      conflictResolution: log.conflictResolution,
-      details: log.details,
-      context: log.context
-    }));
+    const formattedLogs = logs.map(log => {
+      // Normalize newState for activity logs so UI can render ON/OFF badges consistently.
+      const deriveState = () => {
+        // Prefer explicit context.newState (from ESP telemetry)
+        if (log.context && typeof log.context.newState !== 'undefined' && log.context.newState !== null) {
+          const ns = String(log.context.newState).toLowerCase();
+          return (ns === 'on' || ns === 'true' || ns === '1') ? 'on' : 'off';
+        }
+        // Prefer top-level newState if present
+        if (typeof log.newState !== 'undefined' && log.newState !== null) {
+          const ns = String(log.newState).toLowerCase();
+          return (ns === 'on' || ns === 'true' || ns === '1') ? 'on' : 'off';
+        }
+        // Fall back to interpreting action values (manual_on/manual_off/on/off/toggle)
+        if (log.action) {
+          const act = String(log.action).toLowerCase();
+          if (act === 'on' || act === 'manual_on' || act.endsWith('_on')) return 'on';
+          if (act === 'off' || act === 'manual_off' || act.endsWith('_off')) return 'off';
+          if (act.includes('toggle')) return 'on'; // default display for toggle
+        }
+        return undefined;
+      };
+
+      const normalizedNewState = deriveState();
+
+      return {
+        id: log._id,
+        timestamp: log.timestamp,
+        action: log.action,
+        deviceId: log.deviceId?._id,
+        deviceName: log.deviceName || log.deviceId?.name,
+        switchId: log.switchId,
+        switchName: log.switchName,
+        userId: log.userId?._id,
+        userName: log.userName || log.userId?.name,
+        triggeredBy: log.triggeredBy,
+        location: log.location || log.deviceId?.location,
+        isManualOverride: log.isManualOverride,
+        previousState: log.previousState,
+        newState: normalizedNewState,
+        conflictResolution: log.conflictResolution,
+        details: log.details,
+        context: log.context
+      };
+    });
 
     res.json({
       logs: formattedLogs,
@@ -118,8 +144,10 @@ router.get('/manual-switches', async (req, res) => {
       ];
     }
 
+    // Query ActivityLog for manual switch entries (primary source)
     const logs = await ActivityLog.find(query)
       .populate('deviceId', 'name location switches')
+      .populate('userId', 'name')
       .sort({ timestamp: -1 })
       .skip(skip)
       .limit(parseInt(limit));
@@ -127,14 +155,33 @@ router.get('/manual-switches', async (req, res) => {
     const total = await ActivityLog.countDocuments(query);
 
     const formattedLogs = logs.map(log => {
-      // Find the switch GPIO information
-      let gpioPin = null;
-      if (log.deviceId && log.deviceId.switches) {
-        const switchInfo = log.deviceId.switches.find(sw => sw.name === log.switchName);
+      // Try to get GPIO from context telemetry or from device switches
+      let gpioPin = log.context?.telemetry?.gpio || log.context?.telemetry?.physicalPin || null;
+      if (!gpioPin && log.deviceId && log.deviceId.switches) {
+        const switchInfo = log.deviceId.switches.find(sw => String(sw._id) === String(log.switchId) || sw.name === log.switchName);
         if (switchInfo) {
-          gpioPin = switchInfo.manualSwitchEnabled ? switchInfo.manualSwitchGpio : switchInfo.gpio;
+          gpioPin = switchInfo.manualSwitchEnabled ? switchInfo.manualSwitchGpio : (switchInfo.relayGpio || switchInfo.gpio);
         }
       }
+
+      // Derive state from action or context
+      const deriveState = () => {
+        if (log.context && typeof log.context.newState !== 'undefined' && log.context.newState !== null) {
+          const ns = String(log.context.newState).toLowerCase();
+          return (ns === 'on' || ns === 'true' || ns === '1') ? 'on' : 'off';
+        }
+        if (typeof log.newState !== 'undefined' && log.newState !== null) {
+          const ns = String(log.newState).toLowerCase();
+          return (ns === 'on' || ns === 'true' || ns === '1') ? 'on' : 'off';
+        }
+        // Fallback to action parsing
+        if (log.action) {
+          const act = String(log.action).toLowerCase();
+          if (act.includes('on') || act.includes('_on')) return 'on';
+          if (act.includes('off') || act.includes('_off')) return 'off';
+        }
+        return 'off';
+      };
 
       return {
         id: log._id,
@@ -145,7 +192,10 @@ router.get('/manual-switches', async (req, res) => {
         switchName: log.switchName,
         gpioPin: gpioPin,
         action: log.action,
-        triggeredBy: log.triggeredBy,
+        previousState: log.previousState || log.context?.previousState || 'unknown',
+        newState: deriveState(),
+        conflictWith: log.conflictWith || undefined,
+        responseTime: log.responseTime,
         location: log.location || log.deviceId?.location,
         details: log.context || log.details
       };
@@ -602,12 +652,42 @@ async function getManualSwitchLogs(filters) {
       }
     }
 
+    // Determine manual action and newState robustly (same logic as the API endpoint).
+    let manualAction = 'manual_toggle';
+    let newState = 'off';
+
+    if (typeof log.newState !== 'undefined' && log.newState !== null) {
+      const ns = String(log.newState).toLowerCase();
+      newState = (ns === 'on' || ns === 'true') ? 'on' : 'off';
+    } else if (log.context && typeof log.context.newState !== 'undefined' && log.context.newState !== null) {
+      const ns = String(log.context.newState).toLowerCase();
+      newState = (ns === 'on' || ns === 'true') ? 'on' : 'off';
+    }
+
+    if (log.action) {
+      const act = String(log.action).toLowerCase();
+      if (act === 'on' || act === 'manual_on' || act.endsWith('_on')) {
+        manualAction = act.startsWith('manual') ? act : 'manual_on';
+        newState = 'on';
+      } else if (act === 'off' || act === 'manual_off' || act.endsWith('_off')) {
+        manualAction = act.startsWith('manual') ? act : 'manual_off';
+        newState = 'off';
+      } else if (act.includes('toggle')) {
+        manualAction = act.startsWith('manual') ? act : 'manual_toggle';
+        if (typeof log.newState === 'undefined' && !(log.context && typeof log.context.newState !== 'undefined')) {
+          newState = 'on';
+        }
+      } else if (act.includes('manual')) {
+        manualAction = act;
+      }
+    }
+
     return [
       formatTimestamp(log.timestamp),
       log.deviceName || log.deviceId?.name || 'Unknown Device',
       log.switchName || 'Unknown Switch',
       gpioPin || 'N/A',
-      log.action === 'on' ? 'ON' : 'OFF',
+      newState === 'on' ? 'ON' : 'OFF',
       log.location || log.deviceId?.location || '-'
     ];
   });

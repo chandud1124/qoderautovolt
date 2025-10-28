@@ -365,7 +365,9 @@ mqttClient.on('message', (topic, message) => {
                   });
 
                   try {
-                    await ManualSwitchLog.create({
+                    // Use centralized EnhancedLoggingService to persist manual switch logs
+                    const EnhancedLoggingService = require('./services/enhancedLoggingService');
+                    await EnhancedLoggingService.logManualSwitch({
                       deviceId: device._id,
                       deviceName: device.name,
                       deviceMac: data.mac,
@@ -384,7 +386,7 @@ mqttClient.on('message', (topic, message) => {
                       }
                     });
                   } catch (msErr) {
-                    console.warn('[MQTT] Warning: failed to create ManualSwitchLog:', msErr && msErr.message ? msErr.message : msErr);
+                    console.error('[MQTT] EnhancedLoggingService.logManualSwitch failed:', msErr && msErr.stack ? msErr.stack : msErr);
                   }
 
                   console.log(`[ACTIVITY] Logged manual switch: ${device.name} - ${switchInfo.name} -> ${data.state ? 'ON' : 'OFF'}`);
@@ -1284,6 +1286,9 @@ apiRouter.use('/device-categories', apiLimiter, deviceCategoryRoutes);
 apiRouter.use('/class-extensions', apiLimiter, classExtensionRoutes);
 apiRouter.use('/voice-assistant', voiceAssistantRoutes);
 apiRouter.use('/role-permissions', apiLimiter, require('./routes/rolePermissions'));
+apiRouter.use('/power-analytics', apiLimiter, require('./routes/powerAnalytics'));
+apiRouter.use('/power-settings', apiLimiter, require('./routes/powerSettings'));
+apiRouter.use('/device-analytics', apiLimiter, require('./routes/deviceAnalytics'));
 // apiRouter.use('/notices', apiLimiter, require('./routes/notices')); // DISABLED - notice board functionality removed
 // apiRouter.use('/content', apiLimiter, require('./routes/contentScheduler')); // DISABLED - board functionality removed
 // apiRouter.use('/integrations', apiLimiter, require('./routes/integrations')); // DISABLED - integrations route not yet implemented
@@ -1656,9 +1661,13 @@ logger.info('[DEBUG] Connecting to database before starting server...');
     smartNotificationService.setTelegramService(telegramService);
     smartNotificationService.start();
 
-    // Initialize Evening Lights Monitor service
+    // Initialize Evening Lights Monitor service (checks at 10 AM daily)
     const eveningLightsMonitor = require('./services/eveningLightsMonitor');
     eveningLightsMonitor.start();
+
+    // Initialize After-Hours Lights Monitor service (real-time monitoring)
+    const afterHoursLightsMonitor = require('./services/afterHoursLightsMonitor');
+    afterHoursLightsMonitor.start();
 
     // Load blocked devices into security service
     const securityService = require('./services/securityService');

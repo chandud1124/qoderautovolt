@@ -272,6 +272,50 @@ router.get('/behavioral-analysis/:deviceId?',
   }
 });
 
+// Get energy history for AI/ML forecasting
+router.get('/energy-history', async (req, res) => {
+  try {
+    const { deviceId, days = 7 } = req.query;
+    
+    if (!deviceId) {
+      return res.status(400).json({ message: 'Device ID is required' });
+    }
+    
+    const Device = require('../models/Device');
+    const PowerConsumptionLog = require('../models/PowerConsumptionLog');
+    
+    // Verify device exists
+    const device = await Device.findById(deviceId);
+    if (!device) {
+      return res.status(404).json({ message: 'Device not found' });
+    }
+    
+    // Get power consumption logs from last N days
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - parseInt(days));
+    
+    const logs = await PowerConsumptionLog.find({
+      deviceId: deviceId,
+      timestamp: { $gte: startDate }
+    }).sort({ timestamp: 1 }).lean();
+    
+    // Format for AI service
+    const history = logs.map(log => ({
+      timestamp: log.timestamp,
+      consumption: log.totalPowerUsage || 0,
+      voltage: log.voltage || 0,
+      current: log.current || 0,
+      switches: log.switchData || []
+    }));
+    
+    res.json(history);
+    
+  } catch (error) {
+    console.error('Error fetching energy history:', error);
+    res.status(500).json({ message: 'Error fetching energy history', error: error.message });
+  }
+});
+
 // Get device uptime/downtime statistics
 router.get('/device-uptime', async (req, res) => {
   try {

@@ -670,47 +670,99 @@ const getTicketStats = async (req, res) => {
         }
         // Admin and super-admin see all stats (no filter needed)
 
+        // Use more efficient aggregation with indexes
         const stats = await Ticket.aggregate([
             { $match: matchQuery }, // Filter by department if needed
             {
-                $group: {
-                    _id: null,
-                    total: { $sum: 1 },
-                    open: { $sum: { $cond: [{ $eq: ['$status', 'open'] }, 1, 0] } },
-                    inProgress: { $sum: { $cond: [{ $eq: ['$status', 'in_progress'] }, 1, 0] } },
-                    onHold: { $sum: { $cond: [{ $eq: ['$status', 'on_hold'] }, 1, 0] } },
-                    resolved: { $sum: { $cond: [{ $eq: ['$status', 'resolved'] }, 1, 0] } },
-                    closed: { $sum: { $cond: [{ $eq: ['$status', 'closed'] }, 1, 0] } },
-                    cancelled: { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } },
-                    urgent: { $sum: { $cond: [{ $eq: ['$priority', 'urgent'] }, 1, 0] } },
-                    high: { $sum: { $cond: [{ $eq: ['$priority', 'high'] }, 1, 0] } },
-                    avgResolutionTime: {
-                        $avg: {
-                            $cond: [
-                                { $and: [{ $ne: ['$resolvedAt', null] }, { $ne: ['$createdAt', null] }] },
-                                { $divide: [{ $subtract: ['$resolvedAt', '$createdAt'] }, 1000 * 60 * 60 * 24] },
-                                null
-                            ]
+                $facet: {
+                    // Count by status
+                    statusCounts: [
+                        {
+                            $group: {
+                                _id: '$status',
+                                count: { $sum: 1 }
+                            }
                         }
-                    }
+                    ],
+                    // Count by priority
+                    priorityCounts: [
+                        {
+                            $group: {
+                                _id: '$priority',
+                                count: { $sum: 1 }
+                            }
+                        }
+                    ],
+                    // Calculate avg resolution time for resolved tickets only
+                    resolutionTime: [
+                        {
+                            $match: {
+                                resolvedAt: { $exists: true, $ne: null },
+                                createdAt: { $exists: true, $ne: null }
+                            }
+                        },
+                        {
+                            $project: {
+                                resolutionDays: {
+                                    $divide: [
+                                        { $subtract: ['$resolvedAt', '$createdAt'] },
+                                        1000 * 60 * 60 * 24
+                                    ]
+                                }
+                            }
+                        },
+                        {
+                            $group: {
+                                _id: null,
+                                avgResolutionTime: { $avg: '$resolutionDays' }
+                            }
+                        }
+                    ],
+                    // Total count
+                    totalCount: [
+                        { $count: 'total' }
+                    ]
                 }
             }
         ]);
 
+        // Process facet results
+        const result = stats[0] || {};
+        const statusMap = {};
+        const priorityMap = {};
+
+        // Convert status array to object
+        (result.statusCounts || []).forEach(item => {
+            statusMap[item._id] = item.count;
+        });
+
+        // Convert priority array to object
+        (result.priorityCounts || []).forEach(item => {
+            priorityMap[item._id] = item.count;
+        });
+
+        const processedStats = {
+            total: result.totalCount?.[0]?.total || 0,
+            byStatus: {
+                open: statusMap.open || 0,
+                in_progress: statusMap.in_progress || 0,
+                on_hold: statusMap.on_hold || 0,
+                resolved: statusMap.resolved || 0,
+                closed: statusMap.closed || 0,
+                cancelled: statusMap.cancelled || 0
+            },
+            byPriority: {
+                urgent: priorityMap.urgent || 0,
+                high: priorityMap.high || 0,
+                medium: priorityMap.medium || 0,
+                low: priorityMap.low || 0
+            },
+            avgResolutionTime: result.resolutionTime?.[0]?.avgResolutionTime || 0
+        };
+
         res.json({
             success: true,
-            data: stats[0] || {
-                total: 0,
-                open: 0,
-                inProgress: 0,
-                onHold: 0,
-                resolved: 0,
-                closed: 0,
-                cancelled: 0,
-                urgent: 0,
-                high: 0,
-                avgResolutionTime: 0
-            }
+            data: processedStats
         });
 
     } catch (error) {

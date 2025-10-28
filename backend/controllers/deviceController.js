@@ -728,6 +728,13 @@ const toggleSwitch = async (req, res) => {
     const logIp = req.ip;
     const logUserAgent = req.get('User-Agent');
     
+    // Get power consumption at the time of the event for historical accuracy
+    const { getBasePowerConsumption } = require('../metricsService');
+    const switchPowerConsumption = getBasePowerConsumption(
+      updatedSwitch?.name || 'unknown',
+      updatedSwitch?.type || 'relay'
+    );
+    
     await ActivityLog.create({
       deviceId: updated._id,
       deviceName: updated.name,
@@ -740,7 +747,8 @@ const toggleSwitch = async (req, res) => {
       classroom: updated.classroom,
       location: updated.location,
       ip: logIp,
-      userAgent: logUserAgent
+      userAgent: logUserAgent,
+      powerConsumption: switchPowerConsumption // Store power at event time
     });
     const activityLogTime = Date.now() - activityLogStart;
 

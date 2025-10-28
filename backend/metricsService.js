@@ -1333,20 +1333,31 @@ async function calculatePreciseEnergyConsumption(deviceId, startTime, endTime) {
 
       // Update current power based on switch state change (only if device is online)
       if (deviceOnline && ['on', 'off', 'manual_on', 'manual_off', 'switch_on', 'switch_off'].includes(activity.action)) {
-        // switchName is directly in the activity log (not in context or details)
-        const switchName = activity.switchName || activity.context?.switchName || activity.details?.switchName;
-        const switchId = activity.switchId || activity.context?.switchId || activity.details?.switchId;
+        // PRIORITY 1: Use stored powerConsumption from activity log (most accurate - reflects settings at event time)
+        let powerChange = activity.powerConsumption;
         
-        // Get switch type from the map we created earlier
-        let switchType = 'unknown';
-        if (switchName && switchTypeMap[switchName]) {
-          switchType = switchTypeMap[switchName];
-        } else if (switchId && switchTypeMap[switchId]) {
-          switchType = switchTypeMap[switchId];
+        // FALLBACK: If powerConsumption not stored (legacy logs), calculate from switch info
+        if (powerChange === undefined || powerChange === null) {
+          const switchName = activity.switchName || activity.context?.switchName || activity.details?.switchName;
+          const switchId = activity.switchId || activity.context?.switchId || activity.details?.switchId;
+          
+          // Get switch type from the map we created earlier
+          let switchType = 'unknown';
+          if (switchName && switchTypeMap[switchName]) {
+            switchType = switchTypeMap[switchName];
+          } else if (switchId && switchTypeMap[switchId]) {
+            switchType = switchTypeMap[switchId];
+          }
+          
+          if (switchName || switchId) {
+            powerChange = getBasePowerConsumption(switchName || switchId, switchType);
+          } else {
+            powerChange = 0;
+          }
         }
         
-        if (switchName || switchId) {
-          const powerChange = getBasePowerConsumption(switchName || switchId, switchType);
+        // Update current power based on action
+        if (powerChange > 0) {
           if (activity.action.includes('on')) {
             currentPower += powerChange;
           } else if (activity.action.includes('off')) {
@@ -1593,10 +1604,33 @@ async function getDashboardData() {
       ? validHealthScores.reduce((sum, d) => sum + d.health, 0) / validHealthScores.length
       : 0;
 
-    // Calculate energy costs in INR based on actual usage
-    // For dashboard, we calculate based on current power consumption over time periods
-    const dailyEnergyCost = calculateEnergyCostINR(totalPowerConsumption, 24); // 24 hours
-    const monthlyEnergyCost = calculateEnergyCostINR(totalPowerConsumption, 720); // 30 days ≈ 720 hours
+    // Calculate actual energy costs from precise consumption data (matches energy summary)
+    // This ensures dashboard shows the SAME values as analytics energy tab
+    console.log('[Dashboard] Calculating precise energy costs from getEnergySummary()...');
+    
+    let dailyEnergyCost = 0;
+    let monthlyEnergyCost = 0;
+    let dailyEnergyKwh = 0;
+    let monthlyEnergyKwh = 0;
+    
+    try {
+      // Use the SAME calculation as getEnergySummary() to ensure consistency
+      const energySummary = await getEnergySummary();
+      dailyEnergyCost = energySummary.daily.cost;
+      monthlyEnergyCost = energySummary.monthly.cost;
+      dailyEnergyKwh = energySummary.daily.consumption;
+      monthlyEnergyKwh = energySummary.monthly.consumption;
+      
+      console.log('[Dashboard] Energy costs from summary:', {
+        daily: `${dailyEnergyKwh} kWh = ₹${dailyEnergyCost}`,
+        monthly: `${monthlyEnergyKwh} kWh = ₹${monthlyEnergyCost}`
+      });
+    } catch (summaryError) {
+      console.error('[Dashboard] Error getting energy summary, using fallback:', summaryError);
+      // Fallback to basic calculation if summary fails
+      dailyEnergyCost = calculateEnergyCostINR(totalPowerConsumption, 24);
+      monthlyEnergyCost = calculateEnergyCostINR(totalPowerConsumption, 720);
+    }
 
     const totalDevices = devices.length;
     const onlineDevices = devices.filter(d => d.status === 'online').length;
@@ -1862,28 +1896,107 @@ async function getEnergyData(timeframe = '24h') {
 }
 
 async function getDeviceHealth(deviceId = null) {
-  if (deviceId) {
-    const device = MOCK_DEVICES.find(d => d.id === deviceId);
-    if (!device) return null;
+  try {
+    if (deviceId) {
+      // Get specific device from database
+      const device = await Device.findById(deviceId).lean();
+      if (!device) return null;
 
-    return {
-      deviceId,
-      name: device.name,
-      classroom: device.classroom,
-      healthScore: deviceHealthScore.get({ device_id: device.id, device_name: device.name, classroom: device.classroom }) || 0,
-      uptime: Math.floor(Math.random() * 720), // hours
-      lastMaintenance: new Date(Date.now() - Math.random() * 30 * 24 * 60 * 60 * 1000).toISOString(),
-      alerts: Math.random() > 0.8 ? ['High temperature', 'Power fluctuation'] : [],
-    };
+      // Calculate uptime based on lastSeen
+      const now = Date.now();
+      const lastSeenTime = device.lastSeen ? new Date(device.lastSeen).getTime() : null;
+      const uptimeHours = lastSeenTime ? Math.floor((now - lastSeenTime) / (1000 * 60 * 60)) : 0;
+
+      // Calculate health score based on:
+      // - Online status (40 points)
+      // - Recent activity (30 points)
+      // - Switch functionality (30 points)
+      let healthScore = 0;
+      
+      // Online status
+      if (device.status === 'online') {
+        healthScore += 40;
+        
+        // Recent activity (within last 5 minutes)
+        if (lastSeenTime && (now - lastSeenTime) < 5 * 60 * 1000) {
+          healthScore += 30;
+        } else if (lastSeenTime && (now - lastSeenTime) < 30 * 60 * 1000) {
+          healthScore += 20; // within last 30 minutes
+        } else if (lastSeenTime && (now - lastSeenTime) < 60 * 60 * 1000) {
+          healthScore += 10; // within last hour
+        }
+      }
+      
+      // Switch functionality
+      const activeSwitches = device.switches ? device.switches.filter(s => s.state).length : 0;
+      const totalSwitches = device.switches ? device.switches.length : 0;
+      if (totalSwitches > 0) {
+        healthScore += 30 * (activeSwitches / totalSwitches);
+      }
+
+      // Get recent activity logs
+      const ActivityLog = require('./models/ActivityLog');
+      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const recentLogs = await ActivityLog.countDocuments({
+        deviceId: device._id,
+        timestamp: { $gte: oneDayAgo }
+      });
+
+      return {
+        deviceId: device._id.toString(),
+        name: device.name,
+        classroom: device.classroom || 'unassigned',
+        healthScore: Math.round(healthScore),
+        uptime: uptimeHours,
+        status: device.status,
+        lastSeen: device.lastSeen,
+        activeSwitches,
+        totalSwitches,
+        recentActivity: recentLogs,
+        alerts: device.status === 'offline' ? ['Device offline'] : []
+      };
+    }
+
+    // Get all devices from database
+    const devices = await Device.find({}).lean();
+    const now = Date.now();
+
+    return devices.map(device => {
+      const lastSeenTime = device.lastSeen ? new Date(device.lastSeen).getTime() : null;
+      
+      // Calculate health score
+      let healthScore = 0;
+      
+      if (device.status === 'online') {
+        healthScore += 40;
+        if (lastSeenTime && (now - lastSeenTime) < 5 * 60 * 1000) {
+          healthScore += 30;
+        } else if (lastSeenTime && (now - lastSeenTime) < 30 * 60 * 1000) {
+          healthScore += 20;
+        } else if (lastSeenTime && (now - lastSeenTime) < 60 * 60 * 1000) {
+          healthScore += 10;
+        }
+      }
+      
+      const activeSwitches = device.switches ? device.switches.filter(s => s.state).length : 0;
+      const totalSwitches = device.switches ? device.switches.length : 0;
+      if (totalSwitches > 0) {
+        healthScore += 30 * (activeSwitches / totalSwitches);
+      }
+
+      return {
+        deviceId: device._id.toString(),
+        name: device.name,
+        classroom: device.classroom || 'unassigned',
+        healthScore: Math.round(healthScore),
+        status: device.status,
+        lastSeen: device.lastSeen
+      };
+    });
+  } catch (error) {
+    console.error('Error getting device health:', error);
+    return deviceId ? null : [];
   }
-
-  return MOCK_DEVICES.map(device => ({
-    deviceId: device.id,
-    name: device.name,
-    classroom: device.classroom,
-    healthScore: deviceHealthScore.get({ device_id: device.id, device_name: device.name, classroom: device.classroom }) || 0,
-    status: device.status,
-  }));
 }
 
 async function getOccupancyData(classroomId = null) {
@@ -2480,6 +2593,9 @@ async function getEnergySummary() {
     let monthlyConsumption = 0;
     let monthlyCost = 0;
     let monthlyRuntime = 0;
+    
+    // Track individual device consumption for detailed breakdown
+    const deviceBreakdown = [];
 
     // Calculate consumption for ALL devices
     // Even if switches are currently OFF, they may have been ON earlier in the period
@@ -2498,7 +2614,7 @@ async function getEnergySummary() {
 
       dailyConsumption += todayPrecise;
 
-      // Calculate today's runtime
+      // Calculate today's runtime PER DEVICE (not cumulative)
       const ActivityLog = require('./models/ActivityLog');
       const todayActivities = await ActivityLog.find({
         deviceId: device._id,
@@ -2506,19 +2622,23 @@ async function getEnergySummary() {
         action: { $in: ['on', 'off', 'switch_on', 'switch_off', 'manual_on', 'manual_off'] }
       }).sort({ timestamp: 1 }).lean();
 
+      let deviceDailyRuntime = 0; // Per-device daily runtime
       let onTime = null;
       for (const activity of todayActivities) {
         if (['on', 'switch_on', 'manual_on'].includes(activity.action)) {
           onTime = activity.timestamp;
         } else if (['off', 'switch_off', 'manual_off'].includes(activity.action) && onTime) {
-          dailyRuntime += (activity.timestamp - onTime) / (1000 * 60 * 60); // Convert to hours
+          deviceDailyRuntime += (activity.timestamp - onTime) / (1000 * 60 * 60); // Convert to hours
           onTime = null;
         }
       }
       // If still on at current time
       if (onTime) {
-        dailyRuntime += (now - onTime) / (1000 * 60 * 60);
+        deviceDailyRuntime += (now - onTime) / (1000 * 60 * 60);
       }
+      
+      // Add to total runtime
+      dailyRuntime += deviceDailyRuntime;
 
       // Get precise consumption from ActivityLog for this month
       // This now only counts when device was online
@@ -2534,44 +2654,70 @@ async function getEnergySummary() {
 
       monthlyConsumption += monthPrecise;
 
-      // Calculate monthly runtime
+      // Calculate monthly runtime PER DEVICE (not cumulative)
       const monthActivities = await ActivityLog.find({
         deviceId: device._id,
         timestamp: { $gte: monthStart, $lte: now },
         action: { $in: ['on', 'off', 'switch_on', 'switch_off', 'manual_on', 'manual_off'] }
       }).sort({ timestamp: 1 }).lean();
 
+      let deviceMonthlyRuntime = 0; // Per-device monthly runtime
       onTime = null;
       for (const activity of monthActivities) {
         if (['on', 'switch_on', 'manual_on'].includes(activity.action)) {
           onTime = activity.timestamp;
         } else if (['off', 'switch_off', 'manual_off'].includes(activity.action) && onTime) {
-          monthlyRuntime += (activity.timestamp - onTime) / (1000 * 60 * 60); // Convert to hours
+          deviceMonthlyRuntime += (activity.timestamp - onTime) / (1000 * 60 * 60); // Convert to hours
           onTime = null;
         }
       }
       // If still on at current time
       if (onTime) {
-        monthlyRuntime += (now - onTime) / (1000 * 60 * 60);
+        deviceMonthlyRuntime += (now - onTime) / (1000 * 60 * 60);
       }
+      
+      // Add to total runtime
+      monthlyRuntime += deviceMonthlyRuntime;
+      
+      // Store individual device breakdown with CORRECT per-device runtime
+      deviceBreakdown.push({
+        deviceId: device._id.toString(),
+        deviceName: device.name,
+        classroom: device.classroom || 'unassigned',
+        status: device.status,
+        daily: {
+          consumption: parseFloat(todayPrecise.toFixed(3)),
+          cost: parseFloat((todayPrecise * ELECTRICITY_RATE_INR_PER_KWH).toFixed(2)),
+          runtime: parseFloat(deviceDailyRuntime.toFixed(2)) // Per-device daily runtime
+        },
+        monthly: {
+          consumption: parseFloat(monthPrecise.toFixed(3)),
+          cost: parseFloat((monthPrecise * ELECTRICITY_RATE_INR_PER_KWH).toFixed(2)),
+          runtime: parseFloat(deviceMonthlyRuntime.toFixed(2)) // Per-device monthly runtime
+        }
+      });
     }
 
     dailyCost = dailyConsumption * ELECTRICITY_RATE_INR_PER_KWH;
     monthlyCost = monthlyConsumption * ELECTRICITY_RATE_INR_PER_KWH;
+    
+    // Count ONLY online devices
+    const onlineDeviceCount = devices.filter(d => d.status === 'online').length;
 
     const summary = {
       daily: {
         consumption: parseFloat(dailyConsumption.toFixed(3)),
         cost: parseFloat(dailyCost.toFixed(2)),
         runtime: parseFloat(dailyRuntime.toFixed(2)),
-        onlineDevices: devices.length
+        onlineDevices: onlineDeviceCount // FIXED: Only count online devices
       },
       monthly: {
         consumption: parseFloat(monthlyConsumption.toFixed(3)),
         cost: parseFloat(monthlyCost.toFixed(2)),
         runtime: parseFloat(monthlyRuntime.toFixed(2)),
-        onlineDevices: devices.length
+        onlineDevices: onlineDeviceCount // FIXED: Only count online devices
       },
+      devices: deviceBreakdown, // Individual device breakdown
       timestamp: now.toISOString()
     };
 

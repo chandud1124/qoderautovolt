@@ -133,6 +133,62 @@ router.post('/test-smart-notifications', auth, authorize('admin', 'super-admin')
   }
 });
 
+// Test after-hours lights monitor
+router.post('/test-after-hours-monitor', auth, authorize('admin', 'super-admin', 'security'), async (req, res) => {
+  try {
+    const afterHoursLightsMonitor = require('../services/afterHoursLightsMonitor');
+    const result = await afterHoursLightsMonitor.triggerManualCheck();
+    res.json({
+      success: true,
+      message: 'After-hours lights check triggered',
+      result: result
+    });
+  } catch (error) {
+    console.error('Test after-hours monitor error:', error);
+    res.status(500).json({ error: 'Failed to trigger after-hours check' });
+  }
+});
+
+// Get after-hours monitor status
+router.get('/after-hours-status', auth, authorize('admin', 'super-admin', 'security'), async (req, res) => {
+  try {
+    const afterHoursLightsMonitor = require('../services/afterHoursLightsMonitor');
+    const status = afterHoursLightsMonitor.getStatus();
+    res.json({
+      success: true,
+      status: status
+    });
+  } catch (error) {
+    console.error('Error getting after-hours status:', error);
+    res.status(500).json({ error: 'Failed to get status' });
+  }
+});
+
+// Update after-hours monitor configuration
+router.patch('/after-hours-config', auth, authorize('admin', 'super-admin'), async (req, res) => {
+  try {
+    const afterHoursLightsMonitor = require('../services/afterHoursLightsMonitor');
+    const { afterHoursThreshold, alertCooldown } = req.body;
+    
+    if (afterHoursThreshold !== undefined) {
+      afterHoursLightsMonitor.setAfterHoursThreshold(afterHoursThreshold);
+    }
+    
+    if (alertCooldown !== undefined) {
+      afterHoursLightsMonitor.setAlertCooldown(alertCooldown);
+    }
+    
+    res.json({
+      success: true,
+      message: 'Configuration updated',
+      status: afterHoursLightsMonitor.getStatus()
+    });
+  } catch (error) {
+    console.error('Error updating after-hours config:', error);
+    res.status(500).json({ error: error.message || 'Failed to update configuration' });
+  }
+});
+
 // Get all Telegram users (admin only)
 router.get('/users', auth, authorize('admin', 'super-admin'), async (req, res) => {
   try {

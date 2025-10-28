@@ -131,6 +131,9 @@ ticketSchema.index({ assignedTo: 1, status: 1 });
 ticketSchema.index({ status: 1, priority: 1, createdAt: -1 });
 ticketSchema.index({ category: 1, status: 1 });
 ticketSchema.index({ ticketId: 1 });
+ticketSchema.index({ department: 1, status: 1 }); // For dept-filtered stats
+ticketSchema.index({ priority: 1 }); // For priority aggregation
+ticketSchema.index({ resolvedAt: 1, createdAt: 1 }); // For resolution time calculation
 
 // Virtual for days open
 ticketSchema.virtual('daysOpen').get(function () {

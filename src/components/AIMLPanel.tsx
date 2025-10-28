@@ -153,7 +153,7 @@ const AIMLPanel: React.FC = () => {
     }
   };
 
-  // Enhanced AI predictions with multiple timeframes and better error handling
+  // Enhanced AI predictions with REAL data only (no random fallback)
   const fetchPredictions = async (type: string) => {
     if (!device || !classroom) return;
 
@@ -162,53 +162,107 @@ const AIMLPanel: React.FC = () => {
 
     try {
       let response;
+      let historyData: number[] = [];
 
       switch (type) {
         case 'forecast':
-          // For forecast, we need historical data - try to get it from backend first
+          // Get REAL historical energy data from new endpoint
           try {
-            const historyResponse = await apiService.get(`/activity-logs?deviceId=${device}&limit=24`);
-            const historyData = historyResponse.data.map((log: any) => {
-              // Extract power consumption from activity logs if available
-              return log.details?.powerConsumption || Math.random() * 100;
-            });
-
-            if (historyData.length >= 3) {
-              response = await aiMlAPI.forecast(device, historyData, 16);
-            } else {
-              throw new Error('Insufficient historical data');
+            const historyResponse = await apiService.get(
+              `/analytics/energy-history?deviceId=${device}&days=7`
+            );
+            
+            // Extract consumption values from energy history
+            historyData = historyResponse.data.map((point: any) => point.consumption);
+            
+            // Allow forecasting with minimal data for development/testing
+            // In production, you may want to increase this to 7*24 (7 days of hourly data)
+            const MIN_DATA_POINTS = 3; // Reduced for testing
+            
+            if (historyData.length < MIN_DATA_POINTS) {
+              setError(
+                `Insufficient data: ${historyData.length} points available. ` +
+                `Need at least ${MIN_DATA_POINTS} data points for forecasting. ` +
+                `Please ensure device has been logging usage or generate sample data.`
+              );
+              setLoading(false);
+              return;
             }
-          } catch (historyError) {
-            // If no historical data, try with minimal mock data for demo
-            console.warn('No historical data available, using minimal demo data');
-            const demoData = Array.from({ length: 10 }, () => Math.random() * 100 + 20);
-            response = await aiMlAPI.forecast(device, demoData, 16);
+            
+            // Show warning if data is limited but still allow forecasting
+            if (historyData.length < 24) {
+              console.warn(
+                `Limited data (${historyData.length} points). ` +
+                `For best results, accumulate at least 7 days (168 hours) of usage data.`
+              );
+            }
+            
+            // Call AI service with REAL data only
+            response = await aiMlAPI.forecast(device, historyData, 16);
+            
+          } catch (historyError: any) {
+            console.error('Failed to fetch historical data:', historyError);
+            setError(
+              'Unable to fetch historical energy data. ' +
+              (historyError.response?.status === 404 
+                ? 'Device not found.' 
+                : 'Please ensure device has been logging usage data.')
+            );
+            setLoading(false);
+            return;
           }
           break;
+
         case 'anomaly':
-          // For anomaly detection, try to get recent sensor data
+          // Get REAL sensor data for anomaly detection
           try {
-            const sensorResponse = await apiService.get(`/activity-logs?deviceId=${device}&limit=50`);
-            const sensorData = sensorResponse.data.map((log: any) => {
-              return log.details?.powerConsumption || Math.random() * 100;
-            });
-
-            if (sensorData.length >= 10) {
-              response = await aiMlAPI.anomaly(device, sensorData);
-            } else {
-              throw new Error('Insufficient sensor data');
+            const sensorResponse = await apiService.get(
+              `/analytics/energy-history?deviceId=${device}&days=3`
+            );
+            
+            const sensorData = sensorResponse.data.map((point: any) => point.consumption);
+            
+            if (sensorData.length < 10) {
+              setError(
+                `Insufficient data: ${sensorData.length} points available. ` +
+                `Need at least 10 data points for anomaly detection.`
+              );
+              setLoading(false);
+              return;
             }
-          } catch (sensorError) {
-            // If no sensor data, use minimal demo data
-            console.warn('No sensor data available, using minimal demo data');
-            const demoData = Array.from({ length: 20 }, () => Math.random() * 100 + 20);
-            response = await aiMlAPI.anomaly(device, demoData);
+            
+            response = await aiMlAPI.anomaly(device, sensorData);
+            
+          } catch (sensorError: any) {
+            console.error('Failed to fetch sensor data:', sensorError);
+            setError('Unable to fetch sensor data for anomaly detection.');
+            setLoading(false);
+            return;
           }
           break;
+
         case 'maintenance':
-          // For maintenance, use schedule API
-          response = await aiMlAPI.schedule(device, { maintenance_check: true });
+          // Get historical usage for real energy savings calculation
+          try {
+            const maintenanceHistory = await apiService.get(
+              `/analytics/energy-history?deviceId=${device}&days=7`
+            );
+            
+            const usageData = maintenanceHistory.data.map((point: any) => point.consumption);
+            
+            // Pass historical usage to schedule optimizer
+            response = await aiMlAPI.schedule(device, {
+              maintenance_check: true,
+              historical_usage: usageData
+            });
+            
+          } catch (maintenanceError: any) {
+            console.error('Failed to fetch maintenance data:', maintenanceError);
+            // Fallback to schedule without historical data
+            response = await aiMlAPI.schedule(device, { maintenance_check: true });
+          }
           break;
+
         default:
           throw new Error(`Unknown prediction type: ${type}`);
       }
@@ -219,9 +273,12 @@ const AIMLPanel: React.FC = () => {
       }));
 
       setError(null);
-    } catch (err) {
+    } catch (err: any) {
       console.error(`Error fetching ${type} predictions:`, err);
-      setError(`AI analysis temporarily unavailable. The system needs more usage data to provide accurate predictions. Please try again later.`);
+      setError(
+        err.response?.data?.detail || 
+        'AI analysis failed. Please ensure device has sufficient usage history and try again.'
+      );
       // Set empty data when API fails
       setPredictions(prev => ({
         ...prev,

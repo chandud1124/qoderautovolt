@@ -1,5 +1,6 @@
 const Device = require('../models/Device');
 const ActivityLog = require('../models/ActivityLog');
+const PowerReading = require('../models/PowerReading');
 const EnhancedLoggingService = require('../services/enhancedLoggingService');
 const { logger } = require('../middleware/logger');
 const securityService = require('../services/securityService');
@@ -395,12 +396,25 @@ exports.updateDeviceStatus = async (req, res) => {
     device.lastSeen = new Date();
     await device.save();
 
-    // Log activity
+    // Get power consumption at event time
+    const { getBasePowerConsumption } = require('../metricsService');
+    const switchPowerConsumption = getBasePowerConsumption(
+      switchToUpdate.name || 'unknown',
+      switchToUpdate.type || 'relay'
+    );
+    
+    // Log activity with power consumption
     await ActivityLog.create({
       deviceId: device._id,
+      deviceName: device.name,
       switchId,
-      action: 'state_change',
-      details: { state, source: 'esp32' }
+      switchName: switchToUpdate.name,
+      action: state ? 'on' : 'off',
+      triggeredBy: 'system',
+      classroom: device.classroom,
+      location: device.location,
+      powerConsumption: switchPowerConsumption,
+      context: { source: 'esp32' }
     });
 
     // Emit state change via WebSocket
@@ -447,17 +461,262 @@ exports.sendCommand = async (req, res) => {
 
     await device.save();
 
-    // Log activity
+    // Get power consumption at event time
+    const { getBasePowerConsumption } = require('../metricsService');
+    const switchPowerConsumption = getBasePowerConsumption(
+      switchToUpdate.name || 'unknown',
+      switchToUpdate.type || 'relay'
+    );
+    
+    // Log activity with power consumption
     await ActivityLog.create({
       deviceId: device._id,
+      deviceName: device.name,
       switchId,
+      switchName: switchToUpdate.name,
       action: 'command_sent',
-      details: { state, source: 'web' }
+      triggeredBy: 'user',
+      classroom: device.classroom,
+      location: device.location,
+      powerConsumption: switchPowerConsumption,
+      context: { state, source: 'web' }
     });
 
     res.json({ success: true });
   } catch (error) {
     console.error('Error sending command:', error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+/**
+ * Submit power reading from ESP32 (live data)
+ * POST /api/esp32/power-reading/:macAddress
+ */
+exports.submitPowerReading = async (req, res) => {
+  try {
+    const { macAddress } = req.params;
+    const { voltage, current, power, activeSwitches, totalSwitches, metadata } = req.body;
+
+    // Find device
+    const device = await Device.findOne({ macAddress });
+    if (!device) {
+      return res.status(404).json({ error: 'Device not found' });
+    }
+
+    // Update device last seen
+    device.lastSeen = new Date();
+    device.connectionStatus = 'online';
+    await device.save();
+
+    // Get device settings for price and calibration
+    const pricePerUnit = device.powerSettings?.pricePerUnit || 7.5;
+    const consumptionFactor = device.powerSettings?.consumptionFactor || 1.0;
+
+    // Get last reading to calculate incremental energy
+    const lastReading = await PowerReading.findOne({ deviceId: device._id })
+      .sort({ timestamp: -1 })
+      .limit(1);
+
+    // Calculate actual interval between readings (dynamic calculation)
+    const now = new Date();
+    let intervalHours = 1/60; // Default 1 minute
+    
+    if (lastReading) {
+      // Calculate actual interval
+      const intervalMs = now - lastReading.timestamp;
+      intervalHours = intervalMs / (1000 * 60 * 60);
+      
+      // Sanity checks
+      if (intervalHours > 1) {
+        logger.warn(`Large interval detected for device ${device.name}: ${intervalHours.toFixed(2)} hours`);
+      }
+      
+      // Cap at 24 hours to prevent huge energy values from long disconnections
+      if (intervalHours > 24) {
+        logger.warn(`Interval capped at 24 hours for device ${device.name}. Actual: ${intervalHours.toFixed(2)} hours`);
+        intervalHours = 24;
+      }
+      
+      // Minimum interval of 10 seconds to prevent calculation errors
+      if (intervalHours < (10/3600)) {
+        intervalHours = 10/3600; // 10 seconds
+      }
+    }
+    
+    const actualPower = power || (voltage * current);
+    const energy = actualPower * intervalHours; // Wh
+    
+    logger.info(`Energy calculation for ${device.name}: Power=${actualPower.toFixed(2)}W, Interval=${(intervalHours*60).toFixed(2)}min, Energy=${energy.toFixed(4)}Wh`);
+
+    // Get cumulative energy
+    const totalEnergy = lastReading ? lastReading.totalEnergy + (energy / 1000) : (energy / 1000);
+
+    // Create power reading
+    const reading = new PowerReading({
+      deviceId: device._id,
+      deviceName: device.name,
+      classroom: device.classroom || 'unassigned',
+      timestamp: new Date(),
+      voltage: voltage || 0,
+      current: current || 0,
+      power: power || voltage * current,
+      energy,
+      totalEnergy,
+      status: 'online',
+      activeSwitches: activeSwitches || 0,
+      totalSwitches: totalSwitches || 0,
+      pricePerUnit,
+      cost: 0, // Will be calculated in pre-save hook
+      consumptionFactor,
+      metadata
+    });
+
+    await reading.save();
+
+    logger.info(`Power reading saved for device ${device.name}: ${power}W, ${energy}Wh`);
+
+    // Emit to dashboard
+    req.app.get('io').emit('powerReading', {
+      deviceId: device._id,
+      deviceName: device.name,
+      power: reading.power,
+      energy: reading.energy,
+      cost: reading.cost,
+      timestamp: reading.timestamp
+    });
+
+    res.json({ 
+      success: true, 
+      readingId: reading.readingId,
+      totalEnergy: reading.totalEnergy 
+    });
+
+  } catch (error) {
+    console.error('Error submitting power reading:', error);
+    res.status(500).json({ error: 'Internal server error', message: error.message });
+  }
+};
+
+/**
+ * Sync offline power readings from ESP32
+ * POST /api/esp32/sync-readings/:macAddress
+ * 
+ * Body: {
+ *   readings: [
+ *     { timestamp, voltage, current, power, activeSwitches, totalSwitches },
+ *     ...
+ *   ]
+ * }
+ */
+exports.syncOfflineReadings = async (req, res) => {
+  try {
+    const { macAddress } = req.params;
+    const { readings } = req.body;
+
+    if (!Array.isArray(readings) || readings.length === 0) {
+      return res.status(400).json({ error: 'Invalid readings array' });
+    }
+
+    // Find device
+    const device = await Device.findOne({ macAddress });
+    if (!device) {
+      return res.status(404).json({ error: 'Device not found' });
+    }
+
+    // Update device status
+    device.lastSeen = new Date();
+    device.connectionStatus = 'online';
+    await device.save();
+
+    // Get device settings
+    const pricePerUnit = device.powerSettings?.pricePerUnit || 7.5;
+    const consumptionFactor = device.powerSettings?.consumptionFactor || 1.0;
+
+    // Get last known cumulative energy before offline period
+    const lastReading = await PowerReading.findOne({ deviceId: device._id })
+      .sort({ timestamp: -1 })
+      .limit(1);
+
+    let cumulativeEnergy = lastReading ? lastReading.totalEnergy : 0;
+
+    // Process readings in chronological order
+    const sortedReadings = readings.sort((a, b) => 
+      new Date(a.timestamp) - new Date(b.timestamp)
+    );
+
+    // Prepare bulk insert data
+    const powerReadings = [];
+    let previousTimestamp = lastReading ? lastReading.timestamp : new Date(sortedReadings[0].timestamp);
+
+    for (const reading of sortedReadings) {
+      const timestamp = new Date(reading.timestamp);
+      
+      // Calculate time interval
+      const intervalMs = timestamp - previousTimestamp;
+      let intervalHours = intervalMs / (1000 * 60 * 60);
+      
+      // Apply same sanity checks as live readings
+      if (intervalHours > 24) {
+        logger.warn(`Offline reading interval capped at 24 hours. Actual: ${intervalHours.toFixed(2)} hours`);
+        intervalHours = 24;
+      }
+      
+      if (intervalHours < (10/3600)) {
+        intervalHours = 10/3600; // Minimum 10 seconds
+      }
+
+      // Calculate energy for this interval
+      const power = reading.power || (reading.voltage * reading.current);
+      const energy = power * intervalHours; // Wh
+      cumulativeEnergy += energy / 1000; // Add to cumulative in kWh
+
+      powerReadings.push({
+        deviceId: device._id,
+        deviceName: device.name,
+        classroom: device.classroom || 'unassigned',
+        timestamp,
+        voltage: reading.voltage || 0,
+        current: reading.current || 0,
+        power,
+        energy,
+        totalEnergy: cumulativeEnergy,
+        status: 'offline',
+        activeSwitches: reading.activeSwitches || 0,
+        totalSwitches: reading.totalSwitches || 0,
+        pricePerUnit,
+        cost: (energy / 1000) * pricePerUnit,
+        consumptionFactor,
+        readingId: `${device._id}_${timestamp.getTime()}`,
+        syncedAt: new Date(),
+        metadata: reading.metadata || { synced: true }
+      });
+
+      previousTimestamp = timestamp;
+    }
+
+    // Bulk insert with duplicate handling
+    const result = await PowerReading.bulkInsertReadings(powerReadings);
+
+    logger.info(`Synced ${result.inserted} readings for device ${device.name} (${result.duplicates} duplicates skipped)`);
+
+    // Emit sync complete to dashboard
+    req.app.get('io').emit('readingsSynced', {
+      deviceId: device._id,
+      deviceName: device.name,
+      count: result.inserted,
+      duplicates: result.duplicates
+    });
+
+    res.json({ 
+      success: true, 
+      inserted: result.inserted,
+      duplicates: result.duplicates,
+      totalEnergy: cumulativeEnergy
+    });
+
+  } catch (error) {
+    console.error('Error syncing offline readings:', error);
+    res.status(500).json({ error: 'Internal server error', message: error.message });
   }
 };

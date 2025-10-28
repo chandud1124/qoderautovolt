@@ -102,6 +102,13 @@ const switchSchema = new mongoose.Schema({
   manualOverride: {
     type: Boolean,
     default: false
+  },
+  powerRating: {
+    type: Number,
+    default: 0,
+    min: 0
+    // Power consumption in Watts when this switch is ON
+    // Examples: 40W for LED bulb, 75W for fan, 1500W for AC, 300W for projector
   }
 }, { timestamps: true });
 

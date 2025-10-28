@@ -1128,6 +1128,7 @@ class TelegramService {
       }
 
       // Allow numeric replies to select menu options if a menu was recently shown
+      // Supports both single digits (1-9) and multi-digit numbers
       if (/^\d+$/.test(text)) {
         const menuKeyTel = telegramId;
         const menuKeyChat = `chat:${chatId}`;
@@ -1146,6 +1147,14 @@ class TelegramService {
               return await this.handleSubscribe(chatId, [text], telegramUser);
             case 'unsubscribe':
               return await this.handleUnsubscribe(chatId, [text], telegramUser);
+            case 'devices':
+              return await DeviceQueryService.handleDeviceQuery(chatId, this.parseDeviceQueryInput(text), this, telegramUser);
+            case 'alert':
+              // User is replying with alert type number after seeing menu
+              return await this.sendMessage(
+                chatId,
+                `Please provide a message with your alert.\n\nUsage: \`/alert ${text} <message>\`\nExample: \`/alert ${text} Urgent notification\``
+              );
             default:
               // Unknown recent menu, fall through to normal processing
               break;
@@ -1442,12 +1451,20 @@ class TelegramService {
         .map(([num, option]) => `${num}. ${option.name} - ${option.description}`)
         .join('\n');
 
+      // record transient menu so plain-number replies work
+      try {
+        const key = telegramUser && telegramUser.telegramId ? telegramUser.telegramId : `chat:${chatId}`;
+        this.recentMenu.set(key, { menu: 'alert', ts: Date.now() });
+      } catch (e) {
+        // ignore
+      }
+
       return await this.sendMessage(
         chatId,
         `🚨 *Send Manual Alert*\n\n${alertList}\n\n` +
         `💡 *How to send an alert:*\n` +
-        `• Type a number: \`/alert 1\` (for Security Alert)\n` +
-        `• Or type the name: \`/alert security_alerts\`\n\n` +
+        `• Type a number with message: \`/alert 1 Your message\`\n` +
+        `• Or type the name: \`/alert security_alerts Your message\`\n\n` +
         `⚠️ *Important:* You must provide a message with the alert!\n` +
         `Example: \`/alert 1 Suspicious activity detected in LH_19g\``
       );

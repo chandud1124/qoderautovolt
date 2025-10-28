@@ -7,8 +7,8 @@ const GrafanaPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
 
-  // ESP32 Public Dashboard URL
-  const esp32DashboardUrl = 'http://172.16.3.171:3000/public-dashboards/9b62b9fa2f834bd7acb0e4b8abbe9e12';
+  // ESP32 Public Dashboard URL (updated to provisioned dashboard UID)
+  const esp32DashboardUrl = 'http://localhost:3000/public-dashboards/d62e6d4e83d8400085cb7b24db51c879';
 
   const goBack = () => {
     navigate(-1); // Go back to previous page
@@ -82,6 +82,9 @@ const GrafanaPage: React.FC = () => {
           title='ESP32 Grafana Dashboard'
           className='w-full h-full'
           allow='fullscreen'
+          onError={(e) => {
+            console.warn('Grafana dashboard failed to load. This is expected if dashboard is not configured yet.');
+          }}
         />
       </div>
     </div>

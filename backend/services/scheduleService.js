@@ -404,6 +404,15 @@ class ScheduleService {
     this.createCronJob(schedule);
   }
 
+  updateSchedule(schedule) {
+    // Remove existing job and create new one with updated schedule
+    const scheduleId = schedule._id.toString();
+    this.removeJob(scheduleId);
+    if (schedule.enabled !== false) {
+      this.createCronJob(schedule);
+    }
+  }
+
   removeJob(scheduleId) {
     if (this.jobs.has(scheduleId)) {
       const existing = this.jobs.get(scheduleId);
