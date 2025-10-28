@@ -4,7 +4,8 @@
 
 // --- INCLUDES AND GLOBALS (must be before all function usage) ---
 #include <WiFi.h>
-#include <PubSubClient.h>
+#include <AsyncMqttClient.h>
+#include <AsyncTCP.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <esp_task_wdt.h>
@@ -31,8 +32,32 @@ Preferences prefs;
 #define TELEMETRY_TOPIC "esp32/telemetry"
 #define CONFIG_TOPIC "esp32/config"
 
-WiFiClient espClient;
-PubSubClient mqttClient(espClient);
+AsyncMqttClient mqttClient;
+
+// Async MQTT callbacks
+void onMqttConnect(bool sessionPresent);
+void onMqttDisconnect(AsyncMqttClientDisconnectReason reason);
+void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total);
+void onMqttPublish(uint16_t packetId);
+
+void onMqttConnect(bool sessionPresent) {
+  Serial.println("[MQTT] Async connected");
+  // Publish retained ONLINE status and subscribe to topics
+  mqttClient.publish(STATUS_TOPIC, STATUS_QOS, true, STATUS_ONLINE);
+  mqttClient.subscribe(SWITCH_TOPIC, STATUS_QOS);
+  mqttClient.subscribe(CONFIG_TOPIC, STATUS_QOS);
+  sendStateUpdate(true);
+  connState = BACKEND_CONNECTED;
+}
+
+void onMqttDisconnect(AsyncMqttClientDisconnectReason reason) {
+  Serial.printf("[MQTT] Async disconnected (%d)\n", (int)reason);
+  connState = WIFI_ONLY;
+}
+
+void onMqttPublish(uint16_t packetId) {
+  Serial.printf("[MQTT] Publish ack: %u\n", packetId);
+}
 
 char mqttClientId[24];
 
@@ -369,7 +394,9 @@ void sendHeartbeat() {
   doc["heap"] = ESP.getFreeHeap();
   char buf[128];
   size_t n = serializeJson(doc, buf);
-  mqttClient.publish(TELEMETRY_TOPIC, buf, n);
+  if (mqttClient.connected()) {
+    mqttClient.publish(TELEMETRY_TOPIC, STATUS_QOS, false, buf, n);
+  }
 }
 
 
@@ -423,9 +450,15 @@ void setup_wifi() {
   Serial.println();
   Serial.print("Connecting to WiFi: ");
   Serial.println(WIFI_SSID);
+  
+  // Configure WiFi for better stability
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(false);  // Don't wear out flash memory
+  
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   int retries = 0;
-  while (WiFi.status() != WL_CONNECTED && retries < 30) {
+  while (WiFi.status() != WL_CONNECTED && retries < 50) {  // Increased from 30 to 50
     delay(100);  // Reduced delay to allow more frequent manual switch checks
     handleManualSwitches();  // Handle manual switches during WiFi connection
     esp_task_wdt_reset(); // Reset watchdog during WiFi connection
@@ -436,6 +469,7 @@ void setup_wifi() {
     Serial.println("\nWiFi connected");
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
+    Serial.printf("Signal strength: %d dBm\n", WiFi.RSSI());
     connState = WIFI_ONLY;
     // Set unique MQTT client ID based on MAC address
     String mac = WiFi.macAddress();
@@ -476,87 +510,53 @@ void updateConnectionStatus() {
 }
 
 void reconnect_mqtt() {
-  static unsigned long lastReconnectAttempt = 0;
+  static unsigned long lastAttempt = 0;
+  static unsigned long connectStartTime = 0;
+  static bool connecting = false;
+
   unsigned long now = millis();
-  if (now - lastReconnectAttempt < 5000) return;
-  lastReconnectAttempt = now;
-  Serial.print("Attempting MQTT connection...");
-  if (mqttClient.connect(mqttClientId, MQTT_USER, MQTT_PASSWORD)) {
-    Serial.println("connected");
-    mqttClient.subscribe(SWITCH_TOPIC);
-    mqttClient.subscribe(CONFIG_TOPIC);
-    sendStateUpdate(true);
-  connState = BACKEND_CONNECTED;
-  Serial.println("[MQTT] Successfully reconnected - sent current state");
-  } else {
-    Serial.print("failed, rc=");
-    Serial.print(mqttClient.state());
-    Serial.println(" will retry later");
+
+  // Don't attempt reconnection too frequently
+  if (!connecting && (now - lastAttempt < 5000)) return;
+
+  // Start new connection attempt
+  if (!connecting) {
+    lastAttempt = now;
+    connecting = true;
+    connectStartTime = now;
+    Serial.println("[MQTT] Attempting async connect...");
+
+    // Configure credentials and Last Will before connecting
+    mqttClient.setClientId(mqttClientId);
+    mqttClient.setCredentials(MQTT_USER, MQTT_PASSWORD);
+    mqttClient.setWill(STATUS_TOPIC, STATUS_QOS, true, STATUS_OFFLINE);
+    mqttClient.connect();
+  }
+
+  // Timeout after 3 seconds to prevent stuck connecting state
+  if (connecting && (now - connectStartTime > 3000)) {
+    connecting = false;
+    Serial.println("[MQTT] Connection attempt timed out");
     connState = WIFI_ONLY;
+    return;
   }
 }
 
 
 
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  if (length == 0 || payload == nullptr || topic == nullptr) {
-    Serial.println("[MQTT] Empty or null payload/topic received, ignoring");
-    return;
-  }
-
-  // Check heap before processing
-  if (ESP.getFreeHeap() < 2000) {
-    Serial.println("[MQTT] Low heap memory, skipping MQTT message processing");
-    return;
-  }
+// AsyncMqttClient message handler: replaces PubSubClient mqttCallback
+void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total) {
+  if (len == 0 || payload == nullptr || topic == nullptr) return;
+  if (ESP.getFreeHeap() < 2000) return;
 
   String message;
-  if (length > 512) {
-    Serial.println("[MQTT] Payload too large, ignoring");
-    return;
-  }
-  for (unsigned int i = 0; i < length; i++) message += (char)payload[i];
-  Serial.printf("[MQTT] Message arrived [%s]: %s\n", topic, message.c_str());
+  message.reserve(len + 1);
+  for (size_t i = 0; i < len; i++) message += payload[i];
+  Serial.printf("[MQTT] %s: %s\n", topic, message.c_str());
+
+  // Handle SWITCH_TOPIC
   if (String(topic) == SWITCH_TOPIC) {
-    Serial.printf("[MQTT] Received switch command: %s\n", message.c_str());
-    if (message.startsWith("{")) {
-      DynamicJsonDocument doc(256);
-      DeserializationError err = deserializeJson(doc, message);
-      if (!err && doc["mac"].is<const char*>() && doc["secret"].is<const char*>() && doc["gpio"].is<int>() && doc["state"].is<bool>()) {
-        String targetMac = doc["mac"];
-        String targetSecret = doc["secret"];
-        String myMac = WiFi.macAddress();
-        String normalizedTarget = normalizeMac(targetMac);
-        String normalizedMy = normalizeMac(myMac);
-        Serial.printf("[MQTT] Target MAC: %s, My MAC: %s, Normalized Target: %s, Normalized My: %s\n", targetMac.c_str(), myMac.c_str(), normalizedTarget.c_str(), normalizedMy.c_str());
-        if (normalizedTarget.equalsIgnoreCase(normalizedMy)) {
-          Serial.println("[MQTT] MAC matches");
-          if (targetSecret == String(DEVICE_SECRET)) {
-            Serial.println("[MQTT] Secret matches");
-            int gpio = doc["gpio"];
-            bool state = doc["state"];
-            bool validGpio = false;
-            for (int i = 0; i < NUM_SWITCHES; i++) {
-              if (switchesLocal[i].relayGpio == gpio) { validGpio = true; break; }
-            }
-            if (validGpio) {
-              Serial.printf("[MQTT] Valid GPIO %d, queuing command\n", gpio);
-              queueSwitchCommand(gpio, state);
-              processCommandQueue();
-              Serial.printf("[MQTT] Processed command for this device: GPIO %d -> %s\n", gpio, state ? "ON" : "OFF");
-            } else {
-              Serial.printf("[MQTT] Invalid GPIO %d, ignoring command\n", gpio);
-            }
-          } else {
-            Serial.println("[MQTT] Invalid secret, ignoring command");
-          }
-        } else {
-          Serial.printf("[MQTT] Ignored command for different device: %s (my MAC: %s)\n", targetMac.c_str(), myMac.c_str());
-        }
-      } else {
-        Serial.println("[MQTT] Invalid JSON format or missing required fields");
-      }
-    } else {
+    if (!message.startsWith("{")) {
       int colon = message.indexOf(':');
       if (colon > 0) {
         String relay = message.substring(0, colon);
@@ -568,117 +568,80 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
           processCommandQueue();
         }
       }
-    }
-  } else if (String(topic) == CONFIG_TOPIC) {
-    if (message.startsWith("{")) {
-      DynamicJsonDocument doc(512);
+    } else {
+      DynamicJsonDocument doc(256);
       DeserializationError err = deserializeJson(doc, message);
-      if (!err && doc["mac"].is<const char*>() && doc["secret"].is<const char*>() && doc["switches"].is<JsonArray>()) {
+      if (!err && doc.containsKey("mac") && doc.containsKey("secret") && doc.containsKey("gpio") && doc.containsKey("state")) {
         String targetMac = doc["mac"];
         String targetSecret = doc["secret"];
-        String myMac = WiFi.macAddress();
-        String normalizedTarget = normalizeMac(targetMac);
-        String normalizedMy = normalizeMac(myMac);
-        if (normalizedTarget.equalsIgnoreCase(normalizedMy)) {
-          if (targetSecret == String(DEVICE_SECRET)) {
-            JsonArray switches = doc["switches"].as<JsonArray>();
-            int n = switches.size();
-            if (n > 0 && n <= 6) {
-              Serial.printf("[CONFIG] Processing config for %d switches\n", n);
-              for (int i = 0; i < n; i++) {
-                JsonObject sw = switches[i];
-                relayPins[i] = sw["gpio"] | 0;
-                manualSwitchPins[i] = sw.containsKey("manualGpio") ? (int)sw["manualGpio"] : -1;
-                
-                // ✅ Parse per-switch PIR configuration
-                switchesLocal[i].usePir = sw["usePir"] | false;
-                switchesLocal[i].dontAutoOff = sw["dontAutoOff"] | false;
-                
-                // Handle momentary/maintained mode
-                if (sw.containsKey("manualMode")) {
-                  String mode = sw["manualMode"];
-                  switchesLocal[i].manualMomentary = (mode == "momentary");
-                  Serial.printf("[CONFIG] Switch %d: gpio=%d, manualGpio=%d, manualMode=%s, momentary=%d, usePir=%d, dontAutoOff=%d\n",
-                    i, relayPins[i], manualSwitchPins[i], mode.c_str(), switchesLocal[i].manualMomentary, 
-                    switchesLocal[i].usePir, switchesLocal[i].dontAutoOff);
-                } else {
-                  Serial.printf("[CONFIG] Switch %d: no manualMode field found\n", i);
-                }
-              }
-              prefs.begin("switch_cfg", false);
-              for (int i = 0; i < n; i++) {
-                prefs.putInt(("relay" + String(i)).c_str(), relayPins[i]);
-                prefs.putInt(("manual" + String(i)).c_str(), manualSwitchPins[i]);
-                // Save momentary setting to NVS
-                prefs.putBool(("momentary" + String(i)).c_str(), switchesLocal[i].manualMomentary);
-                // ✅ Save per-switch PIR settings to NVS
-                prefs.putBool(("usePir" + String(i)).c_str(), switchesLocal[i].usePir);
-                prefs.putBool(("dontAutoOff" + String(i)).c_str(), switchesLocal[i].dontAutoOff);
-              }
-              prefs.end();
-              initSwitches();
-              Serial.println("[CONFIG] Pin configuration and switch modes updated from server and applied.");
-            }
-
-            // ========================================
-            // PARSE MOTION SENSOR CONFIGURATION (NESTED STRUCTURE)
-            // ========================================
-            // Parse PIR config from nested motionSensor object
-            bool wasEnabled = motionConfig.enabled;
-            if (doc.containsKey("motionSensor")) {
-              JsonObject motionSensor = doc["motionSensor"];
-              motionConfig.enabled = motionSensor["enabled"] | false;
-              motionConfig.type = motionSensor["type"] | "hc-sr501";
-              motionConfig.primaryGpio = 34;  // Fixed GPIO 34 for PIR
-              motionConfig.autoOffDelay = motionSensor["autoOffDelay"] | 30;
-              // Note: sensitivity and detectionRange are not used in hardware
-              motionConfig.sensitivity = 50;  // Default value (not hardware-controlled)
-              motionConfig.detectionRange = 7;  // Default value (not hardware-controlled)
-
-              // Determine dual mode from sensor type
-              motionConfig.dualMode = (motionConfig.type == "both");
-              motionConfig.secondaryGpio = 35;  // Fixed GPIO 35 for Microwave
-              motionConfig.detectionLogic = motionSensor["detectionLogic"] | "and";
-            } else {
-              // Fallback to flat structure for backward compatibility
-              motionConfig.enabled = doc["pirEnabled"] | false;
-              motionConfig.type = doc["pirSensorType"] | "hc-sr501";
-              motionConfig.primaryGpio = 34;  // Fixed GPIO 34 for PIR
-              motionConfig.autoOffDelay = doc["pirAutoOffDelay"] | 30;
-              motionConfig.sensitivity = 50;  // Default value (not hardware-controlled)
-              motionConfig.detectionRange = 7;  // Default value (not hardware-controlled)
-              motionConfig.dualMode = (motionConfig.type == "both");
-              motionConfig.secondaryGpio = 35;  // Fixed GPIO 35 for Microwave
-              motionConfig.detectionLogic = doc["motionDetectionLogic"] | "and";
-            }
-
-            // Save motion sensor config to NVS
-            prefs.begin("motion_cfg", false);
-            prefs.putBool("enabled", motionConfig.enabled);
-            prefs.putString("type", motionConfig.type);
-            prefs.putInt("gpio", motionConfig.primaryGpio);
-            prefs.putInt("autoOff", motionConfig.autoOffDelay);
-            prefs.putInt("sensitivity", motionConfig.sensitivity);
-            prefs.putInt("range", motionConfig.detectionRange);
-            prefs.putBool("dualMode", motionConfig.dualMode);
-            prefs.putInt("secGpio", motionConfig.secondaryGpio);
-            prefs.putString("logic", motionConfig.detectionLogic);
-            prefs.end();
-
-            // Re-initialize if enabled state changed
-            if (motionConfig.enabled != wasEnabled || motionConfig.enabled) {
-              initMotionSensor();
-            }
-
-            Serial.printf("[CONFIG] Motion sensor config updated: enabled=%d, type=%s, gpio=%d, autoOff=%ds, dualMode=%d, logic=%s\n",
-              motionConfig.enabled, motionConfig.type.c_str(), motionConfig.primaryGpio, motionConfig.autoOffDelay,
-              motionConfig.dualMode, motionConfig.detectionLogic.c_str());
-
-          } else {
-            Serial.println("[CONFIG] Invalid secret, ignoring config update");
-          }
+        if (normalizeMac(targetMac).equalsIgnoreCase(normalizeMac(WiFi.macAddress())) && targetSecret == String(DEVICE_SECRET)) {
+          int gpio = doc["gpio"];
+          bool state = doc["state"];
+          queueSwitchCommand(gpio, state);
+          processCommandQueue();
         }
       }
+    }
+  }
+
+  // Handle CONFIG_TOPIC
+  if (String(topic) == CONFIG_TOPIC) {
+    if (!message.startsWith("{")) return;
+    DynamicJsonDocument doc(512);
+    DeserializationError err = deserializeJson(doc, message);
+    if (err) return;
+    if (!doc.containsKey("mac") || !doc.containsKey("secret")) return;
+    String targetMac = doc["mac"];
+    String targetSecret = doc["secret"];
+    if (!normalizeMac(targetMac).equalsIgnoreCase(normalizeMac(WiFi.macAddress()))) return;
+    if (targetSecret != String(DEVICE_SECRET)) return;
+
+    if (doc.containsKey("switches")) {
+      JsonArray switches = doc["switches"].as<JsonArray>();
+      int n = switches.size();
+      if (n > 0 && n <= NUM_SWITCHES) {
+        for (int i = 0; i < n; i++) {
+          JsonObject sw = switches[i];
+          if (sw.containsKey("gpio")) relayPins[i] = (int)sw["gpio"];
+          if (sw.containsKey("manualGpio")) manualSwitchPins[i] = (int)sw["manualGpio"];
+          if (sw.containsKey("usePir")) switchesLocal[i].usePir = (bool)sw["usePir"];
+          if (sw.containsKey("dontAutoOff")) switchesLocal[i].dontAutoOff = (bool)sw["dontAutoOff"];
+          if (sw.containsKey("manualMode")) {
+            String mode = String((const char*)sw["manualMode"]);
+            switchesLocal[i].manualMomentary = (mode == "momentary");
+          }
+        }
+        prefs.begin("switch_cfg", false);
+        for (int i = 0; i < n; i++) {
+          prefs.putInt(("relay" + String(i)).c_str(), relayPins[i]);
+          prefs.putInt(("manual" + String(i)).c_str(), manualSwitchPins[i]);
+          prefs.putBool(("momentary" + String(i)).c_str(), switchesLocal[i].manualMomentary);
+          prefs.putBool(("usePir" + String(i)).c_str(), switchesLocal[i].usePir);
+          prefs.putBool(("dontAutoOff" + String(i)).c_str(), switchesLocal[i].dontAutoOff);
+        }
+        prefs.end();
+        initSwitches();
+        Serial.println("[CONFIG] Switch config updated from server");
+      }
+    }
+
+    if (doc.containsKey("motionSensor")) {
+      JsonObject ms = doc["motionSensor"];
+      bool wasEnabled = motionConfig.enabled;
+      if (ms.containsKey("enabled")) motionConfig.enabled = (bool)ms["enabled"];
+      if (ms.containsKey("type")) motionConfig.type = String((const char*)ms["type"]);
+      if (ms.containsKey("autoOffDelay")) motionConfig.autoOffDelay = (int)ms["autoOffDelay"];
+      motionConfig.dualMode = (String(motionConfig.type) == "both");
+      if (ms.containsKey("detectionLogic")) motionConfig.detectionLogic = String((const char*)ms["detectionLogic"]);
+      prefs.begin("motion_cfg", false);
+      prefs.putBool("enabled", motionConfig.enabled);
+      prefs.putString("type", motionConfig.type);
+      prefs.putInt("autoOff", motionConfig.autoOffDelay);
+      prefs.putBool("dualMode", motionConfig.dualMode);
+      prefs.putString("logic", motionConfig.detectionLogic);
+      prefs.end();
+      if (motionConfig.enabled != wasEnabled || motionConfig.enabled) initMotionSensor();
+      Serial.println("[CONFIG] Motion config updated from server");
     }
   }
 }
@@ -698,8 +661,10 @@ void publishState() {
   char buf[512];  // Reduced buffer size to match document
   size_t n = serializeJson(doc, buf, sizeof(buf));
   if (n > 0 && n < sizeof(buf)) {
-    mqttClient.publish(STATE_TOPIC, buf, n);
-    Serial.println("[MQTT] Published state update");
+    if (mqttClient.connected()) {
+      mqttClient.publish(STATE_TOPIC, STATUS_QOS, false, buf, n);
+      Serial.println("[MQTT] Published state update");
+    }
   } else {
     Serial.println("[MQTT] Failed to serialize state update - buffer too small");
   }
@@ -726,7 +691,7 @@ void publishManualSwitchEvent(int gpio, bool state, int physicalPin) {
   char buf[128];
   size_t n = serializeJson(doc, buf, sizeof(buf));
   if (n > 0 && n < sizeof(buf) && mqttClient.connected()) {
-    mqttClient.publish(TELEMETRY_TOPIC, buf, n);
+    mqttClient.publish(TELEMETRY_TOPIC, STATUS_QOS, false, buf, n);
     Serial.printf("[MQTT] Published manual switch event: GPIO %d (physical pin %d) -> %s\n", gpio, physicalPin, state ? "ON" : "OFF");
   } else {
     Serial.println("[MQTT] Failed to publish manual switch event");
@@ -971,7 +936,7 @@ void publishMotionEvent(bool detected) {
   char buf[256];
   size_t n = serializeJson(doc, buf, sizeof(buf));
   if (n > 0 && n < sizeof(buf) && mqttClient.connected()) {
-    mqttClient.publish(TELEMETRY_TOPIC, buf, n);
+    mqttClient.publish(TELEMETRY_TOPIC, STATUS_QOS, false, buf, n);
     Serial.printf("[MOTION] Published motion event: %s\n", detected ? "DETECTED" : "STOPPED");
   }
 }
@@ -989,13 +954,14 @@ void setup() {
     delay(1000); // Give serial time to flush
   }
 
-  // Initialize watchdog with 10 second timeout
+  // Initialize watchdog with 15 second timeout (increased from 10s for stability)
   esp_task_wdt_config_t wdt_config = {
-    .timeout_ms = 10000,  // 10 seconds
+    .timeout_ms = 15000,  // 15 seconds (increased from 10s)
     .trigger_panic = true
   };
   esp_task_wdt_init(&wdt_config);
   esp_task_wdt_add(NULL);
+  Serial.println("[WDT] Watchdog initialized with 15s timeout");
 
   initSwitches();
   
@@ -1012,39 +978,54 @@ void setup() {
   motionConfig.detectionLogic = prefs.getString("logic", "and");
   prefs.end();
   
-  // Initialize motion sensor if enabled
+  // Always initialize motion sensor (even if disabled, to configure GPIOs properly)
   initMotionSensor();
+  Serial.printf("[SETUP] Motion sensor initialization: %s, Primary GPIO: %d\n", 
+    motionConfig.enabled ? "ENABLED" : "DISABLED", 
+    motionConfig.primaryGpio);
   
   // No offline event loading: do not persist manual switch events
   setup_wifi();
   Serial.println("WiFi setup complete, initializing MQTT...");
   mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
-  mqttClient.setBufferSize(512);
-  mqttClient.setCallback(mqttCallback);
-  mqttClient.subscribe(CONFIG_TOPIC);
+  mqttClient.onConnect(onMqttConnect);
+  mqttClient.onDisconnect(onMqttDisconnect);
+  mqttClient.onMessage(onMqttMessage);
+  mqttClient.onPublish(onMqttPublish);
 }
 
 void loop() {
   static unsigned long loopStartTime = 0;
   loopStartTime = millis();
 
-  esp_task_wdt_reset();
+  esp_task_wdt_reset();  // Reset at start
   unsigned long now = millis();
+  
   handleManualSwitches();
+  esp_task_wdt_reset();  // Reset after manual switches
+  
   handleMotionSensor();  // ✅ HANDLE MOTION DETECTION
+  esp_task_wdt_reset();  // Reset after motion sensor
+  
   updateConnectionStatus();
+  
   if (millis() - lastStateSend > 30000) {
     sendStateUpdate(true);
     lastStateSend = millis();
   }
+  
   if (WiFi.status() == WL_CONNECTED) {
-    if (!mqttClient.connected()) reconnect_mqtt();
+    if (!mqttClient.connected()) {
+      reconnect_mqtt();
+      esp_task_wdt_reset();  // Reset after MQTT reconnect
+    }
     if (mqttClient.connected()) {
-      mqttClient.loop();
+      // AsyncMqttClient handles network in background; just process queued commands
       processCommandQueue();
     }
     sendHeartbeat();
   }
+  
   blinkStatus();
   if (pendingState) sendStateUpdate(false);
   checkSystemHealth();

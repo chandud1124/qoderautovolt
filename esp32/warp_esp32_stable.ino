@@ -515,103 +515,8 @@ void publishState() {
   }
 }
 
-// MQTT message handler: process CONFIG and SWITCH topics
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  if (length == 0 || ESP.getFreeHeap() < 2000) return;
-
-  String message = "";
-  for (unsigned int i = 0; i < length && i < 1024; i++) {
-    message += (char)payload[i];
-  }
-
-  Serial.printf("[MQTT] %s: %s\n", topic, message.c_str());
-
-  if (String(topic) == SWITCH_TOPIC) {
-    DynamicJsonDocument doc(256);
-    if (deserializeJson(doc, message) == DeserializationError::Ok) {
-      String targetMac = doc["mac"];
-      String targetSecret = doc["secret"];
-      String myMac = WiFi.macAddress();
-
-      if (normalizeMac(targetMac).equalsIgnoreCase(normalizeMac(myMac)) && 
-          targetSecret == String(DEVICE_SECRET)) {
-        int gpio = doc["gpio"];
-        bool state = doc["state"];
-        queueSwitchCommand(gpio, state);
-        processCommandQueue();
-      }
-    }
-  }
-
-  if (String(topic) == CONFIG_TOPIC) {
-    DynamicJsonDocument doc(512);
-    if (deserializeJson(doc, message) == DeserializationError::Ok) {
-      String targetMac = doc["mac"];
-      String targetSecret = doc["secret"];
-      String myMac = WiFi.macAddress();
-
-      if (normalizeMac(targetMac).equalsIgnoreCase(normalizeMac(myMac)) && 
-          targetSecret == String(DEVICE_SECRET)) {
-        // Update switch config
-        if (doc.containsKey("switches")) {
-          JsonArray sws = doc["switches"];
-          int n = sws.size();
-          if (n > 0 && n <= NUM_SWITCHES) {
-            for (int i = 0; i < n; i++) {
-              JsonObject sw = sws[i];
-              relayPins[i] = sw["gpio"] | relayPins[i];
-              manualSwitchPins[i] = sw.containsKey("manualGpio") ? (int)sw["manualGpio"] : manualSwitchPins[i];
-              // Support per-switch PIR assignment and dontAutoOff
-              if (sw.containsKey("usePir")) switchesLocal[i].usePir = sw["usePir"] | false;
-              if (sw.containsKey("dontAutoOff")) switchesLocal[i].dontAutoOff = sw["dontAutoOff"] | false;
-              if (sw.containsKey("manualMode")) {
-                const char* mode_c = sw["manualMode"] | "";
-                String mode = String(mode_c);
-                switchesLocal[i].manualMomentary = (mode == "momentary");
-              }
-            }
-
-            // Persist to NVS
-            prefs.begin("switch_cfg", false);
-            for (int i = 0; i < n; i++) {
-              prefs.putInt(("relay" + String(i)).c_str(), relayPins[i]);
-              prefs.putInt(("manual" + String(i)).c_str(), manualSwitchPins[i]);
-              prefs.putBool(("momentary" + String(i)).c_str(), switchesLocal[i].manualMomentary);
-              prefs.putBool(("usePir" + String(i)).c_str(), switchesLocal[i].usePir);
-              prefs.putBool(("dontAutoOff" + String(i)).c_str(), switchesLocal[i].dontAutoOff);
-            }
-            prefs.end();
-
-            initSwitches();
-            Serial.println("[CONFIG] Switch config updated from server");
-          }
-        }
-
-        // Motion sensor config (optional nested object)
-        if (doc.containsKey("motionSensor")) {
-          JsonObject ms = doc["motionSensor"];
-          bool wasEnabled = motionConfig.enabled;
-          motionConfig.enabled = ms["enabled"] | motionConfig.enabled;
-          motionConfig.type = ms["type"] | motionConfig.type;
-          motionConfig.autoOffDelay = ms["autoOffDelay"] | motionConfig.autoOffDelay;
-          motionConfig.dualMode = (String(motionConfig.type) == "both");
-          motionConfig.detectionLogic = ms["detectionLogic"] | motionConfig.detectionLogic;
-
-          prefs.begin("motion_cfg", false);
-          prefs.putBool("enabled", motionConfig.enabled);
-          prefs.putString("type", motionConfig.type);
-          prefs.putInt("autoOff", motionConfig.autoOffDelay);
-          prefs.putBool("dualMode", motionConfig.dualMode);
-          prefs.putString("logic", motionConfig.detectionLogic);
-          prefs.end();
-
-          if (motionConfig.enabled != wasEnabled || motionConfig.enabled) initMotionSensor();
-          Serial.println("[CONFIG] Motion config updated from server");
-        }
-      }
-    }
-  }
-}
+// Note: older PubSubClient-style mqttCallback removed. AsyncMqttClient
+// handling is implemented in onMqttMessage() below.
 
 void publishManualSwitchEvent(int gpio, bool state, int physicalPin) {
   if (ESP.getFreeHeap() < 1000) return;
@@ -807,19 +712,27 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
           JsonArray sws = doc["switches"];
           int n = sws.size();
           if (n > 0 && n <= NUM_SWITCHES) {
-            for (int i = 0; i < n; i++) {
-              JsonObject sw = sws[i];
-              relayPins[i] = sw["gpio"] | relayPins[i];
-              manualSwitchPins[i] = sw.containsKey("manualGpio") ? (int)sw["manualGpio"] : manualSwitchPins[i];
-              // Support per-switch PIR assignment and dontAutoOff
-              if (sw.containsKey("usePir")) switchesLocal[i].usePir = sw["usePir"] | false;
-              if (sw.containsKey("dontAutoOff")) switchesLocal[i].dontAutoOff = sw["dontAutoOff"] | false;
-              if (sw.containsKey("manualMode")) {
-                const char* mode_c = sw["manualMode"] | "";
-                String mode = String(mode_c);
-                switchesLocal[i].manualMomentary = (mode == "momentary");
-              }
-            }
+                for (int i = 0; i < n; i++) {
+                  JsonObject sw = sws[i];
+                  if (sw.containsKey("gpio")) {
+                    relayPins[i] = (int)sw["gpio"];
+                  }
+                  if (sw.containsKey("manualGpio")) {
+                    manualSwitchPins[i] = (int)sw["manualGpio"];
+                  }
+                  // Support per-switch PIR assignment and dontAutoOff
+                  if (sw.containsKey("usePir")) {
+                    switchesLocal[i].usePir = (bool)sw["usePir"];
+                  }
+                  if (sw.containsKey("dontAutoOff")) {
+                    switchesLocal[i].dontAutoOff = (bool)sw["dontAutoOff"];
+                  }
+                  if (sw.containsKey("manualMode")) {
+                    const char* mode_c = sw["manualMode"] | "";
+                    String mode = String(mode_c);
+                    switchesLocal[i].manualMomentary = (mode == "momentary");
+                  }
+                }
 
             // Persist to NVS
             prefs.begin("switch_cfg", false);
@@ -841,11 +754,11 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
         if (doc.containsKey("motionSensor")) {
           JsonObject ms = doc["motionSensor"];
           bool wasEnabled = motionConfig.enabled;
-          motionConfig.enabled = ms["enabled"] | motionConfig.enabled;
-          motionConfig.type = ms["type"] | motionConfig.type;
-          motionConfig.autoOffDelay = ms["autoOffDelay"] | motionConfig.autoOffDelay;
+          if (ms.containsKey("enabled")) motionConfig.enabled = (bool)ms["enabled"];
+          if (ms.containsKey("type")) motionConfig.type = String((const char*)ms["type"]);
+          if (ms.containsKey("autoOffDelay")) motionConfig.autoOffDelay = (int)ms["autoOffDelay"];
           motionConfig.dualMode = (String(motionConfig.type) == "both");
-          motionConfig.detectionLogic = ms["detectionLogic"] | motionConfig.detectionLogic;
+          if (ms.containsKey("detectionLogic")) motionConfig.detectionLogic = String((const char*)ms["detectionLogic"]);
 
           prefs.begin("motion_cfg", false);
           prefs.putBool("enabled", motionConfig.enabled);
