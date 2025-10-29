@@ -855,6 +855,16 @@ const connectDB = async (retries = 5) => {
     } catch (metricsError) {
       logger.error('Metrics service initialization error:', metricsError);
     }
+    
+    // Initialize power consumption tracker after DB connection
+    logger.info('[DEBUG] About to initialize power tracker...');
+    try {
+      const powerTracker = require('./services/powerConsumptionTracker');
+      await powerTracker.initialize();
+      logger.info('[DEBUG] Power tracker initialization completed');
+    } catch (powerTrackerError) {
+      logger.error('Power tracker initialization error:', powerTrackerError);
+    }
 
     // Initialize RSS service after DB connection
     logger.info('[DEBUG] About to initialize RSS service...');
@@ -1340,6 +1350,7 @@ apiRouter.use('/role-permissions', apiLimiter, require('./routes/rolePermissions
 apiRouter.use('/power-analytics', apiLimiter, require('./routes/powerAnalytics'));
 apiRouter.use('/power-settings', apiLimiter, require('./routes/powerSettings'));
 apiRouter.use('/device-analytics', apiLimiter, require('./routes/deviceAnalytics'));
+apiRouter.use('/energy-consumption', apiLimiter, require('./routes/energyConsumption')); // Real-time energy tracking API
 // apiRouter.use('/notices', apiLimiter, require('./routes/notices')); // DISABLED - notice board functionality removed
 // apiRouter.use('/content', apiLimiter, require('./routes/contentScheduler')); // DISABLED - board functionality removed
 // apiRouter.use('/integrations', apiLimiter, require('./routes/integrations')); // DISABLED - integrations route not yet implemented

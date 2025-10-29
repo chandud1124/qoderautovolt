@@ -1184,31 +1184,31 @@ function getBasePowerConsumption(switchName, switchType) {
   const name = switchName.toLowerCase();
   const type = switchType.toLowerCase();
 
-  // Enhanced power consumption lookup table
+  // Enhanced power consumption lookup table - USES VALUES FROM powerSettings.json
   const powerTable = {
     // Lighting devices
-    'light': 20, 'bulb': 20, 'lamp': 25, 'led': 15, 'tube': 18, 'fluorescent': 22,
+    'light': 40, 'bulb': 40, 'lamp': 40, 'led': 40, 'tube': 40, 'fluorescent': 40,
 
     // Fans and ventilation
-    'fan': 75, 'ceiling': 80, 'exhaust': 60, 'ventilation': 50,
+    'fan': 75, 'ceiling': 75, 'exhaust': 75, 'ventilation': 75,
 
     // Display devices
-    'projector': 250, 'display': 150, 'monitor': 30, 'screen': 40, 'tv': 100,
+    'projector': 200, 'display': 200, 'monitor': 200, 'screen': 200, 'tv': 200,
 
     // Climate control
-    'ac': 1200, 'air': 1200, 'conditioner': 1200, 'heater': 1500, 'cooler': 800,
+    'ac': 1500, 'air': 1500, 'conditioner': 1500, 'heater': 1500, 'cooler': 800,
 
     // Audio devices
-    'speaker': 30, 'audio': 25, 'sound': 35, 'amplifier': 50,
+    'speaker': 50, 'audio': 50, 'sound': 50, 'amplifier': 50,
 
     // Interactive devices
-    'whiteboard': 100, 'board': 100, 'interactive': 120, 'smartboard': 150,
+    'whiteboard': 100, 'board': 100, 'interactive': 100, 'smartboard': 100,
 
     // Power outlets and general
-    'outlet': 100, 'socket': 100, 'plug': 100, 'extension': 50,
+    'outlet': 100, 'socket': 100, 'plug': 100, 'extension': 100, 'relay': 50,
 
     // Laboratory equipment
-    'microscope': 20, 'centrifuge': 200, 'incubator': 300, 'oven': 800,
+    'microscope': 50, 'centrifuge': 200, 'incubator': 300, 'oven': 800,
     'fridge': 150, 'freezer': 250, 'analyzer': 500,
 
     // Computer equipment
@@ -1220,34 +1220,16 @@ function getBasePowerConsumption(switchName, switchType) {
     'refrigerator': 150, 'water': 100
   };
 
-  // Check for exact type matches first
+  // Check for exact type matches first (highest priority)
   if (powerTable[type]) return powerTable[type];
 
   // Check for name matches
   for (const [key, value] of Object.entries(powerTable)) {
-    if (name.includes(key)) return value;
+    if (name.includes(key) || type.includes(key)) return value;
   }
 
-  // Use dynamically loaded device power settings
-  // Map common types to power settings
-  const typeMapping = {
-    'relay': devicePowerSettings['relay'],
-    'light': devicePowerSettings['light'],
-    'lighting': devicePowerSettings['light'],
-    'fan': devicePowerSettings['fan'],
-    'hvac': devicePowerSettings['fan'],
-    'climate': devicePowerSettings['fan'],
-    'outlet': devicePowerSettings['outlet'],
-    'socket': devicePowerSettings['outlet'],
-    'plug': devicePowerSettings['outlet'],
-    'projector': devicePowerSettings['projector'],
-    'display': devicePowerSettings['projector'],
-    'ac': devicePowerSettings['ac'],
-    'air_conditioner': devicePowerSettings['ac'],
-    'air': devicePowerSettings['ac']
-  };
-
-  return typeMapping[type] || devicePowerSettings['relay'] || 50; // Default: 50 watts (relay)
+  // Default: 50 watts (relay)
+  return 50;
 }
 
 // Calculate power consumption for a device based on its switches

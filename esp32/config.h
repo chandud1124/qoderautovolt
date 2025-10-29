@@ -57,6 +57,14 @@ static int manualSwitchPins[NUM_SWITCHES] = {25, 26, 27, 32, 33, 23};
 #define RELAY_ACTIVE_HIGH false  // Set to true if relays are active HIGH, false if active LOW
 #define MANUAL_ACTIVE_LOW true  // Set to true if manual switches are active LOW (pulled up), false if active HIGH
 
+// If your manual switches use external pull-down resistors or need INPUT_PULLDOWN
+// instead of the default INPUT_PULLUP, set this to true. Default false uses
+// INPUT_PULLUP which is common for switches wired to ground (active low).
+#define MANUAL_USE_INPUT_PULLDOWN false
+
+// Enable verbose manual-switch diagnostics. Set to true only for debugging
+// (will increase serial output). Default: false
+#define DEBUG_MANUAL false
 // Motion Sensor Configuration (Dual Sensor Support)
 // Using INPUT-ONLY GPIO pins (34-39) - NO conflict with relays or manual switches!
 // NOTE: These are DEFAULT values. Actual configuration is set via web application

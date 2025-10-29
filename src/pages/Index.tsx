@@ -55,13 +55,12 @@ const Index = () => {
   });
 
   // Monthly power consumption and cost data
-  const [monthlyPowerData, setMonthlyPowerData] = useState<Array<{
-    day: string;
-    consumption: number;
-    cost: number;
-  }>>([]);
   const [loadingPowerData, setLoadingPowerData] = useState(false);
   const [monthlyTotals, setMonthlyTotals] = useState({
+    totalConsumption: 0,
+    totalCost: 0
+  });
+  const [dailyTotals, setDailyTotals] = useState({
     totalConsumption: 0,
     totalCost: 0
   });
@@ -114,45 +113,36 @@ const Index = () => {
     };
   }, [getStats, devices]);
 
-  // Fetch monthly power consumption and cost data
+  // Fetch energy summary data (daily and monthly)
   useEffect(() => {
-    const fetchMonthlyPowerData = async () => {
+    const fetchEnergySummary = async () => {
       setLoadingPowerData(true);
       try {
-        const now = new Date();
-        const year = now.getFullYear();
-        const month = now.getMonth() + 1; // 1-12
-        
-        // Fetch calendar data for chart
-        const calendarResponse = await apiService.get(`/analytics/energy-calendar/${year}/${month}`);
-        
-        if (calendarResponse.data && calendarResponse.data.days) {
-          const formattedData = calendarResponse.data.days.map((day: any) => ({
-            day: new Date(day.date).getDate().toString(),
-            consumption: day.consumption || 0,
-            cost: day.cost || 0
-          }));
-          setMonthlyPowerData(formattedData);
-        }
-        
-        // Fetch energy summary for totals (same as Analytics Energy section)
         const summaryResponse = await apiService.get('/analytics/energy-summary');
-        if (summaryResponse.data && summaryResponse.data.monthly) {
-          setMonthlyTotals({
-            totalConsumption: summaryResponse.data.monthly.consumption || 0,
-            totalCost: summaryResponse.data.monthly.cost || 0
-          });
+        if (summaryResponse.data) {
+          if (summaryResponse.data.daily) {
+            setDailyTotals({
+              totalConsumption: summaryResponse.data.daily.consumption || 0,
+              totalCost: summaryResponse.data.daily.cost || 0
+            });
+          }
+          if (summaryResponse.data.monthly) {
+            setMonthlyTotals({
+              totalConsumption: summaryResponse.data.monthly.consumption || 0,
+              totalCost: summaryResponse.data.monthly.cost || 0
+            });
+          }
         }
       } catch (error) {
-        console.error('Error fetching monthly power data:', error);
-        setMonthlyPowerData([]);
+        console.error('Error fetching energy summary:', error);
+        setDailyTotals({ totalConsumption: 0, totalCost: 0 });
         setMonthlyTotals({ totalConsumption: 0, totalCost: 0 });
       } finally {
         setLoadingPowerData(false);
       }
     };
 
-    fetchMonthlyPowerData();
+    fetchEnergySummary();
   }, []);
 
   const addActivity = (
@@ -546,17 +536,14 @@ const Index = () => {
         />
       </div>
 
-      {/* Monthly Power Consumption & Cost Waveform */}
+      {/* Power Consumption Summary - Clean Simple Cards */}
       <Card>
         <CardHeader>
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-            <div className="flex-1">
-              <CardTitle className="flex items-center gap-2 text-lg md:text-xl">
-                <TrendingUp className="h-5 w-5 text-primary flex-shrink-0" />
-                <span>Monthly Power Usage & Cost</span>
-              </CardTitle>
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+            <div>
+              <CardTitle className="text-lg md:text-xl">Power Consumption</CardTitle>
               <CardDescription className="text-xs md:text-sm mt-1">
-                Current month's power consumption (orange) and cost (green) trends
+                Real-time energy usage and cost tracking
               </CardDescription>
             </div>
             <Badge variant="outline" className="text-xs self-start md:self-auto whitespace-nowrap">
@@ -566,143 +553,51 @@ const Index = () => {
         </CardHeader>
         <CardContent className="pt-4">
           {loadingPowerData ? (
-            <div className="flex items-center justify-center h-64">
+            <div className="flex items-center justify-center h-48">
               <Activity className="w-8 h-8 animate-spin text-primary" />
             </div>
-          ) : monthlyPowerData.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
-              <Zap className="w-12 h-12 mb-3 opacity-50" />
-              <p className="text-sm">No power consumption data available for this month</p>
-            </div>
           ) : (
-            <div className="w-full overflow-x-auto">
-              <ResponsiveContainer width="100%" height={300} minWidth={300}>
-                <AreaChart
-                  data={monthlyPowerData}
-                  margin={{ top: 10, right: 10, left: -20, bottom: 5 }}
-                >
-                  <defs>
-                    <linearGradient id="colorConsumption" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#f97316" stopOpacity={0.8}/>
-                      <stop offset="95%" stopColor="#f97316" stopOpacity={0.1}/>
-                    </linearGradient>
-                    <linearGradient id="colorCost" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.8}/>
-                      <stop offset="95%" stopColor="#10b981" stopOpacity={0.1}/>
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
-                  <XAxis 
-                    dataKey="day" 
-                    tick={{ fontSize: 10 }}
-                    interval="preserveStartEnd"
-                  />
-                  <YAxis 
-                    yAxisId="left"
-                    tick={{ fontSize: 10 }}
-                    width={40}
-                  />
-                  <YAxis 
-                    yAxisId="right" 
-                    orientation="right"
-                    tick={{ fontSize: 10 }}
-                    width={40}
-                  />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                    border: 'none',
-                    borderRadius: '8px',
-                    color: '#fff'
-                  }}
-                  formatter={(value: number, name: string) => {
-                    if (name === 'consumption') {
-                      return [`${value.toFixed(3)} kWh`, 'Power Consumption'];
-                    }
-                    return [`₹${value.toFixed(2)}`, 'Cost'];
-                  }}
-                  labelFormatter={(label) => `Day ${label}`}
-                />
-                <Legend 
-                  verticalAlign="top" 
-                  height={36}
-                  iconType="line"
-                  formatter={(value) => {
-                    if (value === 'consumption') return 'Power Consumption (kWh)';
-                    if (value === 'cost') return 'Cost (₹)';
-                    return value;
-                  }}
-                />
-                <Area
-                  yAxisId="left"
-                  type="monotone"
-                  dataKey="consumption"
-                  stroke="#f97316"
-                  strokeWidth={2}
-                  fillOpacity={1}
-                  fill="url(#colorConsumption)"
-                  name="consumption"
-                />
-                <Area
-                  yAxisId="right"
-                  type="monotone"
-                  dataKey="cost"
-                  stroke="#10b981"
-                  strokeWidth={2}
-                  fillOpacity={1}
-                  fill="url(#colorCost)"
-                  name="cost"
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-            </div>
-          )}
-          
-          {/* Monthly Totals Summary */}
-          {!loadingPowerData && monthlyPowerData.length > 0 && (
-            <div className="mt-4 md:mt-6 grid grid-cols-1 sm:grid-cols-3 gap-3 md:gap-4 p-3 md:p-4 bg-muted/50 rounded-lg border">
-              <div className="flex flex-col items-center justify-center p-3 md:p-4 bg-background rounded-lg shadow-sm">
-                <div className="flex items-center gap-2 mb-2">
-                  <Zap className="h-4 w-4 md:h-5 md:w-5 text-orange-500 flex-shrink-0" />
-                  <span className="text-xs md:text-sm font-medium text-muted-foreground text-center">Total Power Used</span>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {/* Today's Usage */}
+              <div className="flex flex-col items-center justify-center p-4 bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-950 dark:to-blue-900 rounded-lg shadow-sm border border-blue-200">
+                <div className="flex items-center gap-2 mb-3">
+                  <Zap className="h-5 w-5 text-blue-600 flex-shrink-0" />
+                  <span className="text-sm font-semibold text-blue-900 dark:text-blue-100">Today's Usage</span>
                 </div>
-                <div className="text-2xl md:text-3xl font-bold text-orange-600">
-                  {(monthlyTotals.totalConsumption * 1000).toFixed(0)}
+                <div className="text-3xl font-bold text-blue-600 mb-1">
+                  {dailyTotals.totalConsumption.toFixed(3)} kWh
                 </div>
-                <div className="text-xs text-muted-foreground mt-1">
-                  Wh ({monthlyTotals.totalConsumption.toFixed(3)} kWh)
+                <div className="text-sm text-blue-700 dark:text-blue-300">
+                  Cost: ₹{dailyTotals.totalCost.toFixed(2)}
                 </div>
               </div>
               
-              <div className="flex flex-col items-center justify-center p-3 md:p-4 bg-background rounded-lg shadow-sm">
-                <div className="flex items-center gap-2 mb-2">
-                  <TrendingUp className="h-4 w-4 md:h-5 md:w-5 text-green-500 flex-shrink-0" />
-                  <span className="text-xs md:text-sm font-medium text-muted-foreground text-center">Total Cost</span>
+              {/* This Month */}
+              <div className="flex flex-col items-center justify-center p-4 bg-gradient-to-br from-orange-50 to-orange-100 dark:from-orange-950 dark:to-orange-900 rounded-lg shadow-sm border border-orange-200">
+                <div className="flex items-center gap-2 mb-3">
+                  <TrendingUp className="h-5 w-5 text-orange-600 flex-shrink-0" />
+                  <span className="text-sm font-semibold text-orange-900 dark:text-orange-100">This Month</span>
                 </div>
-                <div className="text-2xl md:text-3xl font-bold text-green-600">
+                <div className="text-3xl font-bold text-orange-600 mb-1">
+                  {monthlyTotals.totalConsumption.toFixed(3)} kWh
+                </div>
+                <div className="text-sm text-orange-700 dark:text-orange-300">
+                  Cost: ₹{monthlyTotals.totalCost.toFixed(2)}
+                </div>
+              </div>
+              
+              {/* Bill This Month */}
+              <div className="flex flex-col items-center justify-center p-4 bg-gradient-to-br from-green-50 to-green-100 dark:from-green-950 dark:to-green-900 rounded-lg shadow-sm border border-green-200">
+                <div className="flex items-center gap-2 mb-3">
+                  <Activity className="h-5 w-5 text-green-600 flex-shrink-0" />
+                  <span className="text-sm font-semibold text-green-900 dark:text-green-100">Bill This Month</span>
+                </div>
+                <div className="text-3xl font-bold text-green-600 mb-1">
                   ₹{monthlyTotals.totalCost.toFixed(2)}
                 </div>
-                <div className="text-xs text-muted-foreground mt-1">
-                  This Month
-                </div>
-              </div>
-              
-              <div className="flex flex-col items-center justify-center p-3 md:p-4 bg-background rounded-lg shadow-sm">
-                <div className="flex items-center gap-2 mb-2">
-                  <Activity className="h-4 w-4 md:h-5 md:w-5 text-blue-500 flex-shrink-0" />
-                  <span className="text-xs md:text-sm font-medium text-muted-foreground text-center">Average Daily</span>
-                </div>
-                <div className="text-xl md:text-2xl font-bold text-blue-600">
-                  {monthlyPowerData.length > 0 
-                    ? (monthlyTotals.totalConsumption / monthlyPowerData.length * 1000).toFixed(0)
-                    : '0'
-                  } Wh
-                </div>
-                <div className="text-xs text-muted-foreground mt-1">
-                  ₹{monthlyPowerData.length > 0 
-                    ? (monthlyTotals.totalCost / monthlyPowerData.length).toFixed(2)
-                    : '0.00'
-                  } per day
+                <div className="text-xs text-green-700 dark:text-green-300 text-center">
+                  Rate: ₹7.00/kWh<br/>
+                  {(monthlyTotals.totalCost / new Date().getDate()).toFixed(2)} ₹/day avg
                 </div>
               </div>
             </div>

@@ -14,7 +14,9 @@
     "test:permission": "jest permission.test.js",
     "test:integration": "jest --testPathPattern=integration",
     "test:unit": "jest --testPathPattern=unit",
-    "test:ci": "jest --coverage --watchAll=false --passWithNoTests"
+    "test:ci": "jest --coverage --watchAll=false --passWithNoTests",
+    "db:indexes": "node scripts/createIndexes.js",
+    "db:migrate": "node scripts/createIndexes.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",

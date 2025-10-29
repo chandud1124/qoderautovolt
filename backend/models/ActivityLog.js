@@ -41,7 +41,9 @@ const activityLogSchema = new mongoose.Schema({
   ip: String,
   userAgent: String,
   duration: Number,
-  powerConsumption: Number,
+  powerConsumption: Number, // Power rating in Watts at the time of action
+  switchType: String, // Type of switch (light, fan, ac, etc.)
+  macAddress: String, // ESP32 MAC address for tracking by device
   conflictResolution: {
     hasConflict: { type: Boolean, default: false },
     conflictType: String,
@@ -87,5 +89,14 @@ activityLogSchema.index({ deviceId: 1, switchId: 1, timestamp: -1 });
 
 // Index for conflict detection queries
 activityLogSchema.index({ 'conflictResolution.hasConflict': 1, timestamp: -1 });
+
+// Composite index for energy consumption calculation queries (CRITICAL for performance)
+activityLogSchema.index({ deviceId: 1, action: 1, timestamp: -1 });
+
+// Index for classroom-wise consumption aggregation
+activityLogSchema.index({ classroom: 1, action: 1, timestamp: -1 });
+
+// Index for ESP32 device tracking
+activityLogSchema.index({ macAddress: 1, timestamp: -1 });
 
 module.exports = mongoose.model('ActivityLog', activityLogSchema);

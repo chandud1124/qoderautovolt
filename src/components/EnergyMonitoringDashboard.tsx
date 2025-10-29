@@ -109,7 +109,9 @@ const EnergyMonitoringDashboard: React.FC = () => {
     try {
       const year = date.getFullYear();
       const month = date.getMonth();
+      console.log('[Calendar] Fetching data for:', year, month + 1, '| Date object:', date);
       const response = await apiService.get(`/analytics/energy-calendar/${year}/${month + 1}`);
+      console.log('[Calendar] Received data:', response.data);
       setCalendarData(response.data);
     } catch (error) {
       console.error('Error fetching calendar data:', error);
@@ -268,6 +270,10 @@ const EnergyMonitoringDashboard: React.FC = () => {
           fetchElectricityPrice();
           fetchSummaryData();
           fetchChartData();
+          // Refresh calendar if it's open
+          if (showCalendar) {
+            fetchCalendarData(currentDate);
+          }
         }} 
       />
 
@@ -427,18 +433,27 @@ const EnergyMonitoringDashboard: React.FC = () => {
                       {calendarData.month} {calendarData.year}
                     </CardTitle>
                     <div className="flex gap-1">
-                      <Button variant="outline" size="sm" onClick={() => navigateMonth('prev')}>
+                      <Button variant="outline" size="sm" onClick={() => navigateMonth('prev')} title="Previous Month">
                         <ChevronLeft className="h-4 w-4" />
                       </Button>
-                      <Button variant="outline" size="sm" onClick={() => navigateMonth('next')}>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={() => setCurrentDate(new Date())} 
+                        title="Go to Current Month"
+                        className="text-xs px-2"
+                      >
+                        Today
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => navigateMonth('next')} title="Next Month">
                         <ChevronRight className="h-4 w-4" />
                       </Button>
-                      <Button variant="outline" size="sm" onClick={() => setShowCalendar(false)}>
+                      <Button variant="outline" size="sm" onClick={() => setShowCalendar(false)} title="Close Calendar">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                       </Button>
                     </div>
                   </div>
-                  <CardDescription className="text-xs">Daily energy consumption for the selected month</CardDescription>
+                  <CardDescription className="text-xs">Daily energy consumption from power tracking system</CardDescription>
                 </CardHeader>
                 <CardContent className="pt-0">
             {/* Calendar Legend */}

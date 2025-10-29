@@ -381,22 +381,44 @@ deviceSchema.pre('save', function(next) {
 });
 
 // ============================================
-// Database Indexes for Performance
+// Database Indexes for Performance Optimization
 // ============================================
 // Unique index on macAddress for fast device lookups
 deviceSchema.index({ macAddress: 1 }, { unique: true });
 
+// Unique index on ipAddress
+deviceSchema.index({ ipAddress: 1 }, { unique: true });
+
 // Compound index for status and lastSeen queries (e.g., finding offline devices)
 deviceSchema.index({ status: 1, lastSeen: -1 });
 
-// Index for classroom-based queries
+// Index for classroom-based queries (frequently used in access control)
 deviceSchema.index({ classroom: 1 });
 
-// Index for device type queries
-deviceSchema.index({ type: 1 });
+// Index for location-based queries
+deviceSchema.index({ location: 1 });
 
-// Compound index for location-based queries
-deviceSchema.index({ building: 1, floor: 1, room: 1 });
+// Index for device type queries
+deviceSchema.index({ deviceType: 1 });
+
+// Index for blocked device queries
+deviceSchema.index({ blocked: 1 });
+
+// Index for assigned users (for permission checks)
+deviceSchema.index({ assignedUsers: 1 });
+
+// Compound index for location-based filtering
+deviceSchema.index({ location: 1, status: 1 });
+
+// Compound index for classroom and status
+deviceSchema.index({ classroom: 1, status: 1 });
+
+// Text index for search functionality
+deviceSchema.index({ 
+  name: 'text', 
+  location: 'text', 
+  classroom: 'text' 
+});
 
 // Index for switch state queries (finding devices with switches on/off)
 deviceSchema.index({ 'switches.state': 1 });

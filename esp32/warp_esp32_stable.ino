@@ -25,6 +25,21 @@
 #include "config.h"
 #include "blink_status.h"
 
+// When many switches are toggled at once (motion or bulk config), staggering
+// the physical relay transitions reduces inrush current and audible/electrical
+// disturbance. If RELAY_SWITCH_STAGGER_MS is defined in config.h it will be
+// used, otherwise fall back to this sensible default.
+#ifndef RELAY_SWITCH_STAGGER_MS
+#define RELAY_SWITCH_STAGGER_MS 150
+#endif
+
+// Minimum time allowed between physical toggles of the same relay. This
+// prevents audible/electrical chattering by ignoring rapid contradictory
+// commands targeting the same GPIO. Can be overridden in config.h.
+#ifndef RELAY_MIN_TOGGLE_MS
+#define RELAY_MIN_TOGGLE_MS 300
+#endif
+
 // ========================================
 // CONFIGURATION
 // ========================================
@@ -72,6 +87,7 @@ struct Command {
   bool state;
   bool valid;
   unsigned long timestamp;
+  uint8_t source; // CMD_SRC_*
 };
 Command commandQueue[MAX_COMMAND_QUEUE];
 int commandQueueHead = 0;
@@ -119,9 +135,23 @@ bool reportedOffline = false;
 // Track the last heartbeat message id so we can mark success on PUBACK
 uint16_t lastHeartbeatMsgId = 0;
 
+// Track last physical toggle per switch to enforce RELAY_MIN_TOGGLE_MS
+unsigned long lastToggleAt[NUM_SWITCHES] = {0};
+
 // ========================================
 // UTILITY FUNCTIONS
 // ========================================
+// Command sources
+#define CMD_SRC_BACKEND 0
+#define CMD_SRC_MOTION  1
+#define CMD_SRC_MANUAL  2
+
+const char* cmdSourceName(uint8_t s) {
+  if (s == CMD_SRC_MOTION) return "motion";
+  if (s == CMD_SRC_MANUAL) return "manual";
+  return "backend";
+}
+
 String normalizeMac(String mac) {
   String normalized = "";
   for (char c : mac) {
@@ -199,46 +229,173 @@ void initSwitches() {
     digitalWrite(switchesLocal[i].relayGpio, 
       switchesLocal[i].state ? (RELAY_ACTIVE_HIGH ? HIGH : LOW) : (RELAY_ACTIVE_HIGH ? LOW : HIGH));
     pinSetup[i] = false;
+    lastToggleAt[i] = millis();
   }
 }
 
 // ========================================
 // COMMAND QUEUE
 // ========================================
-void queueSwitchCommand(int gpio, bool state) {
+void queueSwitchCommand(int gpio, bool state, uint8_t source = CMD_SRC_BACKEND) {
   int nextTail = (commandQueueTail + 1) % MAX_COMMAND_QUEUE;
   if (nextTail == commandQueueHead) {
     Serial.println("[CMD] Queue full, dropping command");
     return;
   }
-  commandQueue[commandQueueTail] = {gpio, state, true, millis()};
+  // Deduplicate/merge: if a command for this gpio already exists in the
+  // queue, update it instead of adding a second entry. If the device is
+  // already in the desired state and no queued opposite command exists,
+  // skip enqueueing to avoid unnecessary toggles.
+  int i = commandQueueHead;
+  while (i != commandQueueTail) {
+    if (commandQueue[i].gpio == gpio) {
+      if (commandQueue[i].state == state) {
+        Serial.printf("[CMD] Skip enqueue - already queued same state for GPIO %d\n", gpio);
+        return;
+      } else {
+        // Update existing queued command to the new desired state
+        commandQueue[i].state = state;
+        commandQueue[i].timestamp = millis();
+        commandQueue[i].source = source;
+        Serial.printf("[CMD] Updated queued command for GPIO %d -> %s\n", gpio, state ? "ON" : "OFF");
+        return;
+      }
+    }
+    i = (i + 1) % MAX_COMMAND_QUEUE;
+  }
+
+  // If current physical state already matches desired and there is no
+  // queued command for this gpio, nothing to do.
+  for (int s = 0; s < NUM_SWITCHES; s++) {
+    if (switchesLocal[s].relayGpio == gpio) {
+      if (switchesLocal[s].state == state) {
+        Serial.printf("[CMD] Skip enqueue - GPIO %d already in desired state\n", gpio);
+        return;
+      }
+      break;
+    }
+  }
+
+  // Append new command
+  commandQueue[commandQueueTail] = {gpio, state, true, millis(), source};
   commandQueueTail = nextTail;
   Serial.printf("[CMD] Queued: GPIO %d -> %s\n", gpio, state ? "ON" : "OFF");
 }
 
 void processCommandQueue() {
+  // We only process a command every RELAY_SWITCH_STAGGER_MS to avoid
+  // switching many relays at the same instant. This reduces electrical
+  // and audible disturbance when bulk updates happen (motion, config, etc.).
   static unsigned long lastProcess = 0;
+  static unsigned long lastSwitchApply = 0;
   unsigned long now = millis();
   if (now - lastProcess < 10) return;
   lastProcess = now;
 
+  // Nothing to do
+  if (commandQueueHead == commandQueueTail) return;
+
+  // Calculate how many stagger slots have passed since last apply. This
+  // allows bulk processing to advance multiple commands sequentially
+  // without blocking the loop — each command is still spaced by
+  // RELAY_SWITCH_STAGGER_MS logically.
+  unsigned long elapsed = now - lastSwitchApply;
+  unsigned int availableSlots = (elapsed / RELAY_SWITCH_STAGGER_MS);
+  if (availableSlots == 0) return;
+
+  // Bound the number of commands we apply in one invocation to avoid
+  // starving other loop tasks. Tweak MAX_BULK_PER_CALL as needed.
+  const int MAX_BULK_PER_CALL = 6;
+  int toProcess = min((int)availableSlots, MAX_BULK_PER_CALL);
+
   int processed = 0;
-  while (commandQueueHead != commandQueueTail && processed < 5) {
-    Command &cmd = commandQueue[commandQueueHead];
-    for (int i = 0; i < NUM_SWITCHES; i++) {
-      if (switchesLocal[i].relayGpio == cmd.gpio) {
-        switchesLocal[i].state = cmd.state;
-        switchesLocal[i].manualOverride = false;
-        digitalWrite(switchesLocal[i].relayGpio, 
-          cmd.state ? (RELAY_ACTIVE_HIGH ? HIGH : LOW) : (RELAY_ACTIVE_HIGH ? LOW : HIGH));
-        switchesLocal[i].gpio = switchesLocal[i].relayGpio;
-        saveSwitchConfigToNVS();
-        Serial.printf("[CMD] Applied: GPIO %d -> %s\n", cmd.gpio, cmd.state ? "ON" : "OFF");
+  while (commandQueueHead != commandQueueTail && processed < toProcess) {
+    Command cmd = commandQueue[commandQueueHead];
+
+    // If a later command for the same gpio exists in the queue, skip this
+    // earlier one and let the later command decide the final state. This
+    // collapses flip-flop sequences like ON->OFF->ON to only the final intent.
+    int scan = (commandQueueHead + 1) % MAX_COMMAND_QUEUE;
+    bool laterFound = false;
+    while (scan != commandQueueTail) {
+      if (commandQueue[scan].gpio == cmd.gpio) {
+        laterFound = true;
         break;
       }
+      scan = (scan + 1) % MAX_COMMAND_QUEUE;
     }
+    if (laterFound) {
+      // drop this earlier command
+      commandQueueHead = (commandQueueHead + 1) % MAX_COMMAND_QUEUE;
+      continue;
+    }
+
+    // Find switch index for this gpio
+    int si = -1;
+    for (int i = 0; i < NUM_SWITCHES; i++) {
+      if (switchesLocal[i].relayGpio == cmd.gpio) { si = i; break; }
+    }
+    if (si == -1) {
+      // Unknown gpio; drop command
+      Serial.printf("[CMD] Unknown GPIO %d - dropping\n", cmd.gpio);
+      commandQueueHead = (commandQueueHead + 1) % MAX_COMMAND_QUEUE;
+      continue;
+    }
+
+    // Enforce per-switch cooldown to avoid rapid re-toggling
+    unsigned long nowApply = millis();
+    if (nowApply - lastToggleAt[si] < RELAY_MIN_TOGGLE_MS) {
+      // Try to postpone by re-adding to tail (if space). If queue is full,
+      // drop this command. Stop bulk processing this tick to let time advance.
+      int nextTail = (commandQueueTail + 1) % MAX_COMMAND_QUEUE;
+      if (nextTail != commandQueueHead) {
+        commandQueue[commandQueueTail] = cmd;
+        commandQueueTail = nextTail;
+        Serial.printf("[CMD] Postponed (cooldown) GPIO %d -> %s\n", cmd.gpio, cmd.state ? "ON" : "OFF");
+      } else {
+        Serial.printf("[CMD] Drop (cooldown & queue full) GPIO %d -> %s\n", cmd.gpio, cmd.state ? "ON" : "OFF");
+      }
+      // remove current head and pause bulk processing
+      commandQueueHead = (commandQueueHead + 1) % MAX_COMMAND_QUEUE;
+      break;
+    }
+
+    // Apply the command (but avoid unnecessary writes)
+    bool cur = switchesLocal[si].state;
+    if (cur == cmd.state) {
+      Serial.printf("[CMD] No-op: GPIO %d already %s\n", cmd.gpio, cmd.state ? "ON" : "OFF");
+    } else {
+      switchesLocal[si].state = cmd.state;
+      switchesLocal[si].manualOverride = false;
+      digitalWrite(switchesLocal[si].relayGpio, cmd.state ? (RELAY_ACTIVE_HIGH ? HIGH : LOW) : (RELAY_ACTIVE_HIGH ? LOW : HIGH));
+      switchesLocal[si].gpio = switchesLocal[si].relayGpio;
+      saveSwitchConfigToNVS();
+      Serial.printf("[CMD] Applied: GPIO %d -> %s\n", cmd.gpio, cmd.state ? "ON" : "OFF");
+      // record physical toggle time to enforce cooldown
+      lastToggleAt[si] = nowApply;
+      // publish event so backend can mark active logs with source
+      DynamicJsonDocument ev(192);
+      ev["mac"] = WiFi.macAddress();
+      ev["secret"] = DEVICE_SECRET;
+      ev["type"] = "switch_event";
+      ev["gpio"] = cmd.gpio;
+      ev["state"] = cmd.state;
+      ev["source"] = cmdSourceName(cmd.source);
+      ev["timestamp"] = millis();
+      char evbuf[192];
+      size_t evn = serializeJson(ev, evbuf);
+      if (evn > 0 && mqttClient.connected()) {
+        mqttClient.publish(TELEMETRY_TOPIC, STATUS_QOS, false, evbuf, evn);
+        Serial.printf("[TELEM] Published switch_event gpio=%d source=%s\n", cmd.gpio, cmdSourceName(cmd.source));
+      }
+    }
+
+    // advance the queue and account for the slot we consumed
     commandQueueHead = (commandQueueHead + 1) % MAX_COMMAND_QUEUE;
     processed++;
+    // Move the lastSwitchApply forward by one slot so subsequent loops
+    // maintain consistent spacing even if we processed multiple now.
+    lastSwitchApply += RELAY_SWITCH_STAGGER_MS;
   }
 }
 
@@ -251,19 +408,27 @@ void handleManualSwitches() {
     SwitchState &sw = switchesLocal[i];
     if (!sw.manualEnabled || sw.manualGpio < 0 || sw.manualGpio > 39) continue;
 
-    // Setup pinMode first time
+    // Setup pinMode first time. Use configured pull mode (some boards/wires
+    // require INPUT_PULLDOWN instead of INPUT_PULLUP). Also print initial
+    // state when DEBUG_MANUAL is enabled to help diagnose wiring/mode issues.
     if (!pinSetup[i]) {
-      pinMode(sw.manualGpio, INPUT_PULLUP);
+      pinMode(sw.manualGpio, MANUAL_USE_INPUT_PULLDOWN ? INPUT_PULLDOWN : INPUT_PULLUP);
       pinMode(sw.relayGpio, OUTPUT);
       digitalWrite(sw.relayGpio, 
         sw.state ? (RELAY_ACTIVE_HIGH ? HIGH : LOW) : (RELAY_ACTIVE_HIGH ? LOW : HIGH));
-      
+
       int initialLevel = digitalRead(sw.manualGpio);
       sw.lastManualLevel = initialLevel;
       sw.stableManualLevel = initialLevel;
       sw.lastManualActive = sw.manualActiveLow ? (initialLevel == LOW) : (initialLevel == HIGH);
       sw.lastManualChangeMs = now;
       pinSetup[i] = true;
+
+#if DEBUG_MANUAL
+      Serial.printf("[MANUAL-DBG] Switch %d manualPin=%d initialLevel=%d active=%s pulldown=%s\n",
+        i, sw.manualGpio, initialLevel, sw.lastManualActive ? "YES" : "NO",
+        MANUAL_USE_INPUT_PULLDOWN ? "true" : "false");
+#endif
     }
 
     int rawLevel = digitalRead(sw.manualGpio);
@@ -273,6 +438,9 @@ void handleManualSwitches() {
     if (rawLevel != sw.lastManualLevel) {
       sw.lastManualChangeMs = now;
       sw.lastManualLevel = rawLevel;
+#if DEBUG_MANUAL
+      Serial.printf("[MANUAL-DBG] Switch %d raw change -> raw=%d active=%d\n", i, rawLevel, sw.manualActiveLow ? (rawLevel==LOW) : (rawLevel==HIGH));
+#endif
     }
     
     // Debounce
@@ -288,6 +456,8 @@ void handleManualSwitches() {
             sw.manualOverride = true;
             digitalWrite(sw.relayGpio, 
               sw.state ? (RELAY_ACTIVE_HIGH ? HIGH : LOW) : (RELAY_ACTIVE_HIGH ? LOW : HIGH));
+            // record manual physical toggle time to enforce cooldown
+            lastToggleAt[i] = millis();
             saveSwitchConfigToNVS();
             Serial.printf("[MANUAL] Momentary press: GPIO %d -> %s\n", 
               sw.relayGpio, sw.state ? "ON" : "OFF");
@@ -301,6 +471,8 @@ void handleManualSwitches() {
             sw.manualOverride = true;
             digitalWrite(sw.relayGpio, 
               sw.state ? (RELAY_ACTIVE_HIGH ? HIGH : LOW) : (RELAY_ACTIVE_HIGH ? LOW : HIGH));
+            // record manual physical toggle time to enforce cooldown
+            lastToggleAt[i] = millis();
             saveSwitchConfigToNVS();
             Serial.printf("[MANUAL] Maintained: GPIO %d -> %s\n", 
               sw.relayGpio, sw.state ? "ON" : "OFF");
@@ -443,12 +615,13 @@ void handleMotionSensor() {
     // Turn ON switches with usePir enabled
     for (int i = 0; i < NUM_SWITCHES; i++) {
       if (!switchesLocal[i].usePir || switchesLocal[i].manualOverride) continue;
-      
+      // Queue the switch command rather than toggling immediately. This
+      // avoids toggling many relays at once and lets processCommandQueue
+      // stagger the actual physical actuations.
       if (!switchesLocal[i].state) {
-        switchesLocal[i].state = true;
-        digitalWrite(switchesLocal[i].relayGpio, RELAY_ACTIVE_HIGH ? HIGH : LOW);
-        affectedSwitches[i] = 1;
-        Serial.printf("[MOTION] Switch %d (GPIO %d) ON\n", i, switchesLocal[i].relayGpio);
+        queueSwitchCommand(switchesLocal[i].relayGpio, true, CMD_SRC_MOTION);
+        affectedSwitches[i] = 1; // mark affected immediately for auto-off logic
+        Serial.printf("[MOTION] Queued ON for Switch %d (GPIO %d)\n", i, switchesLocal[i].relayGpio);
       }
     }
     
@@ -474,12 +647,11 @@ void handleMotionSensor() {
       // Turn OFF switches (except dontAutoOff ones)
       for (int i = 0; i < NUM_SWITCHES; i++) {
         if (switchesLocal[i].dontAutoOff || switchesLocal[i].manualOverride) continue;
-        
+        // Queue OFF commands so switching is staggered and non-disruptive
         if (affectedSwitches[i] == 1 && switchesLocal[i].state) {
-          switchesLocal[i].state = false;
-          digitalWrite(switchesLocal[i].relayGpio, RELAY_ACTIVE_HIGH ? LOW : HIGH);
+          queueSwitchCommand(switchesLocal[i].relayGpio, false, CMD_SRC_MOTION);
           affectedSwitches[i] = -1;
-          Serial.printf("[MOTION] Switch %d (GPIO %d) OFF\n", i, switchesLocal[i].relayGpio);
+          Serial.printf("[MOTION] Queued OFF for Switch %d (GPIO %d)\n", i, switchesLocal[i].relayGpio);
         }
       }
       
@@ -689,11 +861,42 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
       String targetSecret = doc["secret"];
       String myMac = WiFi.macAddress();
 
-      if (normalizeMac(targetMac).equalsIgnoreCase(normalizeMac(myMac)) && targetSecret == String(DEVICE_SECRET)) {
-        int gpio = doc["gpio"];
-        bool state = doc["state"];
-        queueSwitchCommand(gpio, state);
-        processCommandQueue();
+      bool macMatches = normalizeMac(targetMac).equalsIgnoreCase(normalizeMac(myMac));
+      bool secretMatches = (targetSecret == String(DEVICE_SECRET));
+      if (macMatches && secretMatches) {
+        // Accept multiple possible field names for GPIO and state for compatibility
+        int gpio = -1;
+        if (doc.containsKey("gpio")) {
+          gpio = (int)doc["gpio"];
+        } else if (doc.containsKey("relayGpio")) {
+          gpio = (int)doc["relayGpio"];
+        } else if (doc.containsKey("index")) {
+          int idx = (int)doc["index"];
+          if (idx >= 0 && idx < NUM_SWITCHES) gpio = switchesLocal[idx].relayGpio;
+        }
+
+        bool state = false;
+        if (doc.containsKey("state")) state = (bool)doc["state"];
+        else if (doc.containsKey("value")) state = (bool)doc["value"];
+
+        if (gpio >= 0) {
+          Serial.printf("[MQTT] SWITCH accepted -> gpio=%d state=%d\n", gpio, state ? 1 : 0);
+          queueSwitchCommand(gpio, state, CMD_SRC_BACKEND);
+          processCommandQueue();
+        } else {
+          Serial.println("[MQTT] SWITCH accepted but no gpio/index/relayGpio found in payload");
+        }
+      } else {
+        // Helpful debug output when a SWITCH command is ignored so user can trace
+        // backend vs. device secret/MAC mismatches without revealing secrets.
+        Serial.printf("[MQTT] SWITCH msg ignored - macMatch=%s secretMatch=%s targetMac=%s myMac=%s\n",
+          macMatches ? "YES" : "NO",
+          secretMatches ? "YES" : "NO",
+          targetMac.c_str(), myMac.c_str());
+        // If mac matches but secret doesn't, hint to check DEVICE_SECRET in secrets.h
+        if (macMatches && !secretMatches) {
+          Serial.println("[MQTT] Secret mismatch for this device - ensure DEVICE_SECRET in esp32/secrets.h matches the device secret in backend DB");
+        }
       }
     }
   }

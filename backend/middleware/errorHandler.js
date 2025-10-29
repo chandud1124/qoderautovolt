@@ -1,5 +1,69 @@
 const { logger } = require('./logger');
 
+// Custom error classes
+class AppError extends Error {
+  constructor(message, statusCode = 500, isOperational = true) {
+    super(message);
+    this.statusCode = statusCode;
+    this.isOperational = isOperational;
+    this.timestamp = new Date().toISOString();
+    Error.captureStackTrace(this, this.constructor);
+  }
+}
+
+class ValidationError extends AppError {
+  constructor(message, details = null) {
+    super(message, 400);
+    this.details = details;
+  }
+}
+
+class DatabaseError extends AppError {
+  constructor(message, originalError = null) {
+    super(message, 500);
+    this.originalError = originalError;
+  }
+}
+
+class MQTTError extends AppError {
+  constructor(message, originalError = null) {
+    super(message, 503);
+    this.originalError = originalError;
+  }
+}
+
+class AuthenticationError extends AppError {
+  constructor(message = 'Authentication failed') {
+    super(message, 401);
+  }
+}
+
+class AuthorizationError extends AppError {
+  constructor(message = 'Access denied') {
+    super(message, 403);
+  }
+}
+
+class NotFoundError extends AppError {
+  constructor(resource = 'Resource') {
+    super(`${resource} not found`, 404);
+  }
+}
+
+class DeviceNotIdentifiedError extends AppError {
+  constructor(message = 'Device is not identified/connected') {
+    super(message, 409);
+    this.name = 'DeviceNotIdentifiedError';
+  }
+}
+
+class DeviceOfflineError extends AppError {
+  constructor(message = 'Device is currently offline') {
+    super(message, 409);
+    this.name = 'DeviceOfflineError';
+  }
+}
+
 const errorTypes = {
     DEVICE_NOT_IDENTIFIED: {
         code: 'device_not_identified',
@@ -81,9 +145,48 @@ const errorHandler = (err, req, res, next) => {
         });
     }
 
-    // Default error
-    res.status(err.status || 500).json({
-        error: err.message || 'Internal Server Error',
-        code: err.code || 'UNKNOWN_ERROR'
+    // Handle custom AppErrors
+    if (err instanceof AppError) {
+        return res.status(err.statusCode).json({
+            success: false,
+            error: err.message,
+            code: err.code || 'APP_ERROR',
+            ...(err.details && { details: err.details }),
+            ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+        });
+    }
+
+    // Default error - don't expose internal errors in production
+    const statusCode = err.status || err.statusCode || 500;
+    const message = err.isOperational ? err.message : 'Internal Server Error';
+    
+    res.status(statusCode).json({
+        success: false,
+        error: message,
+        code: err.code || 'UNKNOWN_ERROR',
+        ...(process.env.NODE_ENV === 'development' && { 
+            stack: err.stack,
+            details: err.message 
+        })
     });
+};
+
+// Async error wrapper to catch async errors
+const asyncHandler = (fn) => (req, res, next) => {
+  Promise.resolve(fn(req, res, next)).catch(next);
+};
+
+module.exports = {
+    errorHandler,
+    asyncHandler,
+    errorTypes,
+    AppError,
+    ValidationError,
+    DatabaseError,
+    MQTTError,
+    AuthenticationError,
+    AuthorizationError,
+    NotFoundError,
+    DeviceNotIdentifiedError,
+    DeviceOfflineError
 };

@@ -120,6 +120,17 @@ class DeviceMonitoringService {
       if (previousStatus !== newStatus) {
         console.log(`[MONITORING] Device ${device.name} status changed: ${previousStatus} -> ${newStatus}`);
         
+        // Handle power tracking when device goes offline
+        if (newStatus === 'offline') {
+          try {
+            const powerTracker = require('./powerConsumptionTracker');
+            await powerTracker.handleDeviceOffline(device._id, device.macAddress);
+            console.log(`[MONITORING] Power tracker notified of offline: ${device.name}`);
+          } catch (trackError) {
+            console.error('[MONITORING] Power tracker offline handling error:', trackError);
+          }
+        }
+        
         // Send real-time notification
         if (global.io) {
           global.io.emit('device_state_changed', {

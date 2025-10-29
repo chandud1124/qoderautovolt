@@ -57,6 +57,7 @@ const AnalyticsPanel: React.FC = () => {
   const [energyData, setEnergyData] = useState<any[]>([]);
   const [forecastData, setForecastData] = useState<any>(null);
   const [anomalyData, setAnomalyData] = useState<any>(null);
+  const [energySummary, setEnergySummary] = useState<any>(null); // NEW: Store energy summary
   const [energyTimeframe, setEnergyTimeframe] = useState('24h');
   const [selectedDevices, setSelectedDevices] = useState<string[]>([]);
   const [selectedClassrooms, setSelectedClassrooms] = useState<string[]>([]);
@@ -79,6 +80,7 @@ const AnalyticsPanel: React.FC = () => {
       // Fetch additional data for enhanced tabs
       await Promise.all([
         fetchEnergyData(energyTimeframe),
+        fetchEnergySummary(), // NEW: Fetch energy summary
         fetchForecastData('energy', energyTimeframe),
         fetchAnomalyData('7d')
       ]);
@@ -99,11 +101,54 @@ const AnalyticsPanel: React.FC = () => {
   const fetchEnergyData = async (timeframe: string = '24h') => {
     try {
       const response = await apiService.get(`/analytics/energy/${timeframe}`);
-      setEnergyData(response.data);
+      
+      // Aggregate hourly data based on timeframe for consistency with Energy Monitoring Dashboard
+      let aggregatedData = response.data;
+      
+      if (timeframe === '30d' || timeframe === '7d') {
+        // Aggregate hourly data into daily data
+        const dailyMap = new Map();
+        
+        response.data.forEach((item: any) => {
+          const date = new Date(item.timestamp);
+          const dayKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+          
+          if (!dailyMap.has(dayKey)) {
+            dailyMap.set(dayKey, {
+              timestamp: new Date(date.getFullYear(), date.getMonth(), date.getDate()).toISOString(),
+              totalConsumption: 0,
+              totalCostINR: 0,
+              byClassroom: {},
+              byDeviceType: {}
+            });
+          }
+          
+          const dayData = dailyMap.get(dayKey);
+          dayData.totalConsumption += item.totalConsumption || 0;
+          dayData.totalCostINR += item.totalCostINR || 0;
+        });
+        
+        aggregatedData = Array.from(dailyMap.values()).sort((a, b) => 
+          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+        );
+      }
+      
+      setEnergyData(aggregatedData);
     } catch (err) {
       console.error('Error fetching energy data:', err);
       // Don't set mock data - let the UI show empty state
       setEnergyData([]);
+    }
+  };
+
+  // NEW: Fetch energy summary (monthly and daily consumption)
+  const fetchEnergySummary = async () => {
+    try {
+      const response = await apiService.get('/analytics/energy-summary');
+      setEnergySummary(response.data);
+    } catch (err) {
+      console.error('Error fetching energy summary:', err);
+      setEnergySummary(null);
     }
   };
 
@@ -226,9 +271,14 @@ const AnalyticsPanel: React.FC = () => {
             <Zap className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-xl sm:text-2xl font-bold break-words">{analyticsData.summary?.totalPowerConsumption?.toFixed(2) ?? 0}W</div>
+            <div className="text-xl sm:text-2xl font-bold break-words">
+              {energySummary?.monthly?.consumption?.toFixed(2) ?? 0} kWh
+            </div>
             <p className="text-xs text-muted-foreground">
-              Current total usage
+              Month's consumption
+            </p>
+            <p className="text-[10px] text-muted-foreground mt-1">
+              Today: {energySummary?.daily?.consumption?.toFixed(2) ?? 0} kWh
             </p>
           </CardContent>
         </Card>
@@ -584,10 +634,51 @@ const AnalyticsPanel: React.FC = () => {
           {/* Energy Consumption Trend */}
           <Card>
             <CardHeader>
-              <CardTitle>Energy Usage Over Time</CardTitle>
-              <CardDescription>Power consumption trends for the selected period</CardDescription>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle>Energy Usage Over Time</CardTitle>
+                  <CardDescription>
+                    {energyTimeframe === '24h' && 'Hourly breakdown of power consumption for the last 24 hours'}
+                    {energyTimeframe === '7d' && 'Daily breakdown of power consumption for the last 7 days'}
+                    {energyTimeframe === '30d' && 'Daily breakdown of power consumption for the last 30 days'}
+                  </CardDescription>
+                </div>
+                <Badge variant="outline" className="text-xs">
+                  {energyTimeframe === '24h' && 'Per Hour'}
+                  {energyTimeframe === '7d' && 'Per Day'}
+                  {energyTimeframe === '30d' && 'Per Day'}
+                </Badge>
+              </div>
             </CardHeader>
             <CardContent>
+              {/* Total Consumption Summary - MOVED TO TOP */}
+              <div className="mb-4 p-4 bg-gradient-to-r from-blue-50 to-blue-100 dark:from-blue-950/30 dark:to-blue-900/30 border-2 border-blue-300 rounded-lg shadow-sm">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-medium text-blue-700 dark:text-blue-300 uppercase tracking-wide">TOTAL CONSUMPTION</p>
+                    <p className="text-3xl font-bold text-blue-600 mt-1">
+                      {energyData?.reduce((sum, item) => sum + (item.totalConsumption || 0), 0).toFixed(2) || 0} kWh
+                    </p>
+                    <p className="text-xs text-blue-700 dark:text-blue-300 mt-1">
+                      {energyTimeframe === '24h' ? 'Last 24 hours' : energyTimeframe === '7d' ? 'Last 7 days' : 'Last 30 days'}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs font-medium text-blue-700 dark:text-blue-300 uppercase tracking-wide">TOTAL COST</p>
+                    <p className="text-3xl font-bold text-blue-600 mt-1">
+                      ₹{energyData?.reduce((sum, item) => sum + (item.totalCostINR || 0), 0).toFixed(2) || 0}
+                    </p>
+                    <p className="text-xs text-blue-700 dark:text-blue-300 mt-1">
+                      @ ₹7.00/kWh
+                    </p>
+                  </div>
+                </div>
+              </div>
+              
+              <p className="text-xs text-muted-foreground mb-2 italic">
+                📈 Chart below shows breakdown by {energyTimeframe === '24h' ? 'hour' : 'day'}. Total is displayed above.
+              </p>
+              
               <ResponsiveContainer width="100%" height={300}>
                 <AreaChart data={energyData?.map((item: any) => ({
                   ...item,
@@ -605,7 +696,7 @@ const AnalyticsPanel: React.FC = () => {
                         date.toLocaleDateString([], { month: 'short', day: 'numeric' });
                     }}
                   />
-                  <YAxis />
+                  <YAxis label={{ value: 'kWh per period', angle: -90, position: 'insideLeft', style: { fontSize: 12 } }} />
                   <Tooltip
                     labelFormatter={(value) => new Date(value).toLocaleString()}
                     formatter={(value: any) => [`${value?.toFixed(2) || 0} kWh`, 'Consumption']}
@@ -620,6 +711,7 @@ const AnalyticsPanel: React.FC = () => {
                   />
                 </AreaChart>
               </ResponsiveContainer>
+              
               {energyData?.every((item: any) => item.totalConsumption === 0) && (
                 <div className="text-center mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
                   <p className="text-sm text-amber-800">
@@ -659,7 +751,7 @@ const AnalyticsPanel: React.FC = () => {
                         date.toLocaleDateString([], { month: 'short', day: 'numeric' });
                     }}
                   />
-                  <YAxis />
+                  <YAxis label={{ value: '₹ per period', angle: -90, position: 'insideLeft', style: { fontSize: 12 } }} />
                   <Tooltip
                     labelFormatter={(value) => new Date(value).toLocaleString()}
                     formatter={(value: any) => [`₹${value?.toFixed(2) || 0}`, 'Cost']}
@@ -674,6 +766,25 @@ const AnalyticsPanel: React.FC = () => {
                   />
                 </LineChart>
               </ResponsiveContainer>
+              
+              {/* Total Cost Summary */}
+              <div className="mt-4 p-3 bg-red-50 dark:bg-red-950/20 border border-red-200 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-red-900 dark:text-red-100">Total Cost for Period</p>
+                    <p className="text-xs text-red-700 dark:text-red-300">Sum of all costs shown above</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-2xl font-bold text-red-600">
+                      ₹{energyData?.reduce((sum, item) => sum + (item.totalCostINR || 0), 0).toFixed(2) || 0}
+                    </p>
+                    <p className="text-xs text-red-700 dark:text-red-300">
+                      {energyTimeframe === '24h' ? 'Last 24 hours' : energyTimeframe === '7d' ? 'Last 7 days' : 'Last 30 days'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              
               {energyData?.every((item: any) => item.totalCostINR === 0) && (
                 <div className="text-center mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
                   💰 No energy costs incurred during this period - no switches were active.

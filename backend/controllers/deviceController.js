@@ -2,6 +2,7 @@
 const Device = require('../models/Device');
 const gpioUtils = require('../utils/gpioUtils');
 const { logger } = require('../middleware/logger');
+const powerTracker = require('../services/powerConsumptionTracker'); // Power tracking service
 // Per-device command sequence for strict ordering to devices
 const _cmdSeqMap = new Map(); // mac -> last seq
 function nextCmdSeq(mac) {
@@ -750,9 +751,39 @@ const toggleSwitch = async (req, res) => {
       location: updated.location,
       ip: logIp,
       userAgent: logUserAgent,
-      powerConsumption: switchPowerConsumption // Store power at event time
+      powerConsumption: switchPowerConsumption, // Store power at event time
+      switchType: updatedSwitch?.type || 'other',
+      macAddress: updated.macAddress
     });
     const activityLogTime = Date.now() - activityLogStart;
+    
+    // Track power consumption in real-time
+    try {
+      const trackingData = {
+        deviceId: updated._id,
+        deviceName: updated.name,
+        macAddress: updated.macAddress,
+        switchId: switchId,
+        switchName: updatedSwitch?.name,
+        switchType: updatedSwitch?.type || 'other',
+        classroom: updated.classroom,
+        location: updated.location,
+        userId: logUserId,
+        userName: logUserName,
+        triggeredBy: logTriggeredBy
+      };
+      
+      if (desiredState) {
+        // Switch turned ON - start tracking
+        await powerTracker.trackSwitchOn(trackingData);
+      } else {
+        // Switch turned OFF - stop tracking and record consumption
+        await powerTracker.trackSwitchOff(trackingData);
+      }
+    } catch (trackingError) {
+      logger.error('[toggleSwitch] Power tracking error:', trackingError);
+      // Don't fail the request if tracking fails
+    }
 
     // Do not broadcast device_state_changed immediately to avoid UI desync if hardware fails.
     // Instead, emit a lightweight intent event; authoritative updates will come from switch_result/state_update.
