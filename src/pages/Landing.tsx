@@ -1,4 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Suspense } from 'react';
+import { Canvas, useFrame } from '@react-three/fiber';
+import { PerspectiveCamera, OrbitControls, Float } from '@react-three/drei';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -39,6 +41,179 @@ import {
   Zap
 } from 'lucide-react';
 import '../styles/landing.css';
+
+// ----------------- 3D Components -----------------
+
+const ESP32Board = ({ scrollProgress }) => {
+  const ref = useRef();
+  useFrame(() => {
+    if (ref.current) {
+      ref.current.rotation.y = scrollProgress * 0.05;
+    }
+  });
+
+  const gpioPinMaterial = (
+    <meshStandardMaterial
+      color="#fbbf24"
+      emissive="#fbbf24"
+      emissiveIntensity={Math.max(0, (scrollProgress - 20) / 20)}
+      toneMapped={false}
+    />
+  );
+
+  return (
+    <group ref={ref}>
+      {/* Mainboard */}
+      <mesh>
+        <boxGeometry args={[1.5, 2.8, 0.2]} />
+        <meshStandardMaterial color="#1e293b" metalness={0.8} roughness={0.3} />
+      </mesh>
+      {/* Chip */}
+      <mesh position={[0, 0, 0.11]}>
+        <boxGeometry args={[0.8, 0.8, 0.1]} />
+        <meshStandardMaterial color="#334155" metalness={0.9} roughness={0.2} />
+      </mesh>
+      {/* USB Port */}
+      <mesh position={[0, 1.2, 0.11]}>
+        <boxGeometry args={[0.4, 0.2, 0.1]} />
+        <meshStandardMaterial color="#a0a0a0" metalness={1.0} roughness={0.1} />
+      </mesh>
+      {/* GPIO Pins */}
+      {[...Array(19)].map((_, i) => (
+        <mesh key={`left-pin-${i}`} position={[-0.65, -1.2 + i * 0.13, 0.1]}>
+          <boxGeometry args={[0.1, 0.05, 0.1]} />
+          {gpioPinMaterial}
+        </mesh>
+      ))}
+      {[...Array(19)].map((_, i) => (
+        <mesh key={`right-pin-${i}`} position={[0.65, -1.2 + i * 0.13, 0.1]}>
+          <boxGeometry args={[0.1, 0.05, 0.1]} />
+          {gpioPinMaterial}
+        </mesh>
+      ))}
+    </group>
+  );
+};
+
+const RelayModule = ({ scrollProgress }) => {
+  const ref = useRef();
+  useFrame(() => {
+    if (ref.current) {
+      ref.current.rotation.y = -scrollProgress * 0.05;
+    }
+  });
+
+  const RelayUnit = ({ position }) => (
+    <group position={position}>
+      <mesh>
+        <boxGeometry args={[0.6, 0.6, 0.4]} />
+        <meshStandardMaterial color="#1e40af" />
+      </mesh>
+      <mesh position={[0, 0.3, 0]}>
+        <boxGeometry args={[0.4, 0.1, 0.4]} />
+        <meshStandardMaterial color="#334155" />
+      </mesh>
+    </group>
+  );
+
+  return (
+    <group ref={ref}>
+      {/* Base */}
+      <mesh>
+        <boxGeometry args={[2.0, 1.5, 0.1]} />
+        <meshStandardMaterial color="#064e3b" />
+      </mesh>
+      {/* Relay Units */}
+      <RelayUnit position={[-0.6, -0.4, 0.25]} />
+      <RelayUnit position={[0.6, -0.4, 0.25]} />
+      <RelayUnit position={[-0.6, 0.4, 0.25]} />
+      <RelayUnit position={[0.6, 0.4, 0.25]} />
+    </group>
+  );
+};
+
+const ConnectionLines = ({ scrollProgress }) => {
+  const ref = useRef();
+  useFrame(() => {
+    if (ref.current) {
+      ref.current.material.opacity = Math.max(0, (scrollProgress - 25) / 10);
+    }
+  });
+
+  return (
+    <mesh ref={ref}>
+      <cylinderGeometry args={[0.02, 0.02, 6, 32]} />
+      <meshBasicMaterial color="#06b6d4" transparent />
+    </mesh>
+  );
+};
+
+const Particles = ({ count = 200 }) => {
+  const ref = useRef();
+  const positions = React.useMemo(() => {
+    const points = [];
+    for (let i = 0; i < count; i++) {
+      points.push((Math.random() - 0.5) * 10);
+      points.push((Math.random() - 0.5) * 10);
+      points.push((Math.random() - 0.5) * 10);
+    }
+    return new Float32Array(points);
+  }, [count]);
+
+  useFrame((_, delta) => {
+    if (ref.current) {
+      ref.current.rotation.x += delta / 10;
+      ref.current.rotation.y += delta / 15;
+    }
+  });
+
+  return (
+    <points ref={ref}>
+      <bufferGeometry>
+        <bufferAttribute
+          attach="attributes-position"
+          array={positions}
+          count={positions.length / 3}
+          itemSize={3}
+        />
+      </bufferGeometry>
+      <pointsMaterial size={0.02} color="#06b6d4" />
+    </points>
+  );
+};
+
+const Hardware3DScene = ({ scrollProgress }) => {
+  return (
+    <Canvas>
+      <Suspense fallback={null}>
+        <PerspectiveCamera makeDefault position={[0, 2, 8]} fov={50} />
+        <OrbitControls enableZoom={true} enablePan={true} />
+        <ambientLight intensity={0.8} />
+        <directionalLight
+          position={[10, 15, 10]}
+          intensity={1.5}
+          castShadow
+          shadow-mapSize-width={2048}
+          shadow-mapSize-height={2048}
+        />
+        <pointLight position={[-5, 5, -5]} intensity={0.5} color="#00ffff" />
+        <pointLight position={[5, -5, 5]} intensity={0.5} color="#a855f7" />
+
+        <Float speed={1.5} rotationIntensity={0.5} floatIntensity={1.2}>
+          <group position={[-3, 0, 0]}>
+            <ESP32Board scrollProgress={scrollProgress} />
+          </group>
+          <group position={[3, 0, 0]}>
+            <RelayModule scrollProgress={scrollProgress} />
+          </group>
+        </Float>
+
+        <ConnectionLines scrollProgress={scrollProgress} />
+        <Particles />
+      </Suspense>
+    </Canvas>
+  );
+};
 
 
 const Landing: React.FC = () => {
@@ -650,58 +825,8 @@ const Landing: React.FC = () => {
             </p>
           </div>
 
-          {/* Features Grid - Now at top */}
-          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mt-16 max-w-6xl mx-auto">
-            {[
-              {
-                icon: <Zap className="h-8 w-8" />,
-                title: "Real-time Control",
-                description: "Instant device switching with <50ms latency",
-                gradient: "from-blue-600 to-cyan-600"
-              },
-              {
-                icon: <Wifi className="h-8 w-8" />,
-                title: "Cloud Integration",
-                description: "MQTT & WebSocket for seamless connectivity",
-                gradient: "from-purple-600 to-pink-600"
-              },
-              {
-                icon: <Brain className="h-8 w-8" />,
-                title: "Smart Automation",
-                description: "PIR-based occupancy detection & scheduling",
-                gradient: "from-teal-600 to-emerald-600"
-              },
-              {
-                icon: <Shield className="h-8 w-8" />,
-                title: "Secure by Design",
-                description: "End-to-end encryption & role-based access",
-                gradient: "from-indigo-600 to-blue-600"
-              }
-            ].map((feature, index) => (
-              <div
-                key={index}
-                className={`group relative transition-all duration-1000 ${
-                  hardwareVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'
-                }`}
-                style={{ transitionDelay: `${500 + index * 100}ms` }}
-              >
-                {/* Glow Effect */}
-                <div className={`absolute -inset-0.5 bg-gradient-to-r ${feature.gradient} rounded-2xl blur-lg opacity-0 group-hover:opacity-75 transition-opacity duration-500`} />
-                
-                {/* Card */}
-                <div className="relative bg-slate-900/90 backdrop-blur-xl rounded-2xl p-6 border border-white/10 h-full">
-                  <div className={`inline-flex p-3 rounded-xl bg-gradient-to-r ${feature.gradient} mb-4 group-hover:scale-110 transition-transform duration-300`}>
-                    {feature.icon}
-                  </div>
-                  <h3 className="text-xl font-bold text-white mb-2 group-hover:text-cyan-400 transition-colors">
-                    {feature.title}
-                  </h3>
-                  <p className="text-blue-200/70 text-sm leading-relaxed">
-                    {feature.description}
-                  </p>
-                </div>
-              </div>
-            ))}
+          <div className="relative h-[500px] sm:h-[600px] my-16">
+            <Hardware3DScene scrollProgress={scrollProgress} />
           </div>
 
           {/* Bottom Info */}
