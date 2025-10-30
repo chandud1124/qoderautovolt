@@ -1,4 +1,4 @@
-# AutoVolt - Intelligent IoT Classroom Automation System
+# AutoVolt - Intelligent IoT Classroom Automation System "" landing page is not working errors" and it is deleted from the server""
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)](https://nodejs.org/)
