@@ -1,4 +1,73 @@
+// Mock mongoose before any other imports to prevent real DB connections
+jest.mock('mongoose', () => {
+  const originalMongoose = jest.requireActual('mongoose');
+  return {
+    ...originalMongoose,
+    connect: jest.fn().mockResolvedValue(undefined),
+    disconnect: jest.fn().mockResolvedValue(undefined),
+    connection: {
+      ...originalMongoose.connection,
+      readyState: 1,
+      on: jest.fn(),
+      once: jest.fn(),
+      close: jest.fn().mockResolvedValue(undefined),
+    },
+  };
+});
+
+// Mock the MQTT client before any other imports
+const mockMqttClient = {
+  on: jest.fn(),
+  subscribe: jest.fn(),
+  publish: jest.fn(),
+  end: jest.fn(),
+};
+
+jest.mock('mqtt', () => ({
+  connect: jest.fn().mockImplementation(() => mockMqttClient),
+}));
+
+// Mock TelegramService to prevent it from starting polling and holding tests open
+jest.mock('../services/telegramService', () => ({
+  initialize: jest.fn().mockResolvedValue(undefined),
+  sendMessage: jest.fn().mockResolvedValue(undefined),
+  sendAlert: jest.fn().mockResolvedValue(undefined),
+}));
+
+// Mock SmartNotificationService to prevent it from starting intervals and holding tests open
+jest.mock('../services/smartNotificationService', () => ({
+  start: jest.fn().mockResolvedValue(undefined),
+  stop: jest.fn().mockResolvedValue(undefined),
+  setTelegramService: jest.fn(),
+}));
+
+// Mock other services that might have timers
+jest.mock('../services/powerConsumptionTracker', () => ({
+  initialize: jest.fn().mockResolvedValue(undefined),
+}));
+jest.mock('../services/eveningLightsMonitor', () => ({
+  start: jest.fn().mockResolvedValue(undefined),
+}));
+jest.mock('../services/afterHoursLightsMonitor', () => ({
+  start: jest.fn().mockResolvedValue(undefined),
+}));
+jest.mock('../services/esp32CrashMonitor', () => {
+  return jest.fn().mockImplementation(() => {
+    return {
+      start: jest.fn().mockResolvedValue(undefined),
+    };
+  });
+});
+jest.mock('../services/scheduleService', () => ({
+  initialize: jest.fn().mockResolvedValue(undefined),
+}));
+jest.mock('../services/deviceMonitoringService', () => ({
+  initialize: jest.fn().mockResolvedValue(undefined),
+}));
+
 // Enhanced test setup for backend
+global.setInterval = jest.fn();
+global.clearInterval = jest.fn();
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret-for-testing-only';
 process.env.MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/autovolt-test';

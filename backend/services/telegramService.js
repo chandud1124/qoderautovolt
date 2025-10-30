@@ -1535,4 +1535,5 @@ class TelegramService {
   }
 }
 
-module.exports = new TelegramService();
+const telegramService = new TelegramService();
+module.exports = telegramService;

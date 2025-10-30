@@ -2488,13 +2488,7 @@ async function getDeviceUsageData(timeframe = '24h') {
     const data = [];
 
     // Get real devices from database
-    const devices = await Device.find({}, {
-      name: 1,
-      classroom: 1,
-      switches: 1,
-      status: 1,
-      _id: 1
-    }).lean();
+    const devices = await Device.find({}).lean();
 
     if (!devices || devices.length === 0) {
       return [];

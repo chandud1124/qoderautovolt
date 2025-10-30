@@ -4,6 +4,7 @@
 const express = require('express');
 const router = express.Router();
 const metricsService = require('../metricsService');
+const unifiedAnalyticsService = require('../services/unifiedAnalyticsService');
 const { handleValidationErrors } = require('../middleware/validationHandler');
 const { param } = require('express-validator');
 
@@ -15,6 +16,22 @@ router.get('/metrics', async (req, res) => {
   } catch (error) {
     console.error('Error getting metrics:', error);
     res.status(500).json({ error: 'Failed to get metrics' });
+  }
+});
+
+// Get unified daily analytics for a device
+router.get('/unified/daily/:deviceId',
+  param('deviceId').isMongoId().withMessage('Invalid device ID'),
+  handleValidationErrors,
+  async (req, res) => {
+  try {
+    const { deviceId } = req.params;
+    const { startDate, endDate } = req.query;
+    const data = await unifiedAnalyticsService.getUnifiedDailyConsumption(deviceId, new Date(startDate), new Date(endDate));
+    res.json(data);
+  } catch (error) {
+    console.error('Error getting unified daily analytics:', error);
+    res.status(500).json({ error: 'Failed to get unified daily analytics' });
   }
 });
 

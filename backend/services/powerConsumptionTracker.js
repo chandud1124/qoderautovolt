@@ -128,20 +128,19 @@ class PowerConsumptionTracker {
         return null;
       }
       
+      const powerWatts = this.getPowerConsumption(switchName, switchType);
+
       if (device.status !== 'online') {
-        logger.warn('[PowerTracker] Device offline, not tracking:', deviceName);
+        logger.warn('[PowerTracker] Device offline, not tracking but logging activity:', deviceName);
         // Still create activity log but mark as offline
         await this.createActivityLog({
           ...data,
           action: switchType === 'manual' ? 'manual_on' : 'on',
-          powerConsumption: 0,
+          powerConsumption: powerWatts,
           deviceStatus: { isOnline: false }
         });
         return null;
       }
-      
-      // Get power consumption for this switch
-      const powerWatts = this.getPowerConsumption(switchName, switchType);
       
       // Record start time and power
       const trackingData = {
@@ -210,11 +209,12 @@ class PowerConsumptionTracker {
       
       if (!trackingData) {
         logger.warn('[PowerTracker] Switch was not being tracked:', switchName);
+        const powerWatts = this.getPowerConsumption(switchName, switchType);
         // Still create activity log
         await this.createActivityLog({
           ...data,
           action: triggeredBy === 'manual_switch' ? 'manual_off' : 'off',
-          powerConsumption: 0
+          powerConsumption: powerWatts
         });
         return null;
       }

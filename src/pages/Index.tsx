@@ -118,21 +118,40 @@ const Index = () => {
     const fetchEnergySummary = async () => {
       setLoadingPowerData(true);
       try {
-        const summaryResponse = await apiService.get('/analytics/energy-summary');
-        if (summaryResponse.data) {
-          if (summaryResponse.data.daily) {
-            setDailyTotals({
-              totalConsumption: summaryResponse.data.daily.consumption || 0,
-              totalCost: summaryResponse.data.daily.cost || 0
-            });
-          }
-          if (summaryResponse.data.monthly) {
-            setMonthlyTotals({
-              totalConsumption: summaryResponse.data.monthly.consumption || 0,
-              totalCost: summaryResponse.data.monthly.cost || 0
-            });
-          }
+        const devicesResponse = await apiService.get('/devices');
+        const devices = devicesResponse.data;
+
+        let dailyConsumption = 0;
+        let dailyCost = 0;
+        let monthlyConsumption = 0;
+        let monthlyCost = 0;
+
+        for (const device of devices) {
+          const today = new Date();
+          const thirtyDaysAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+          const response = await apiService.get(`/analytics/unified/daily/${device.id}?startDate=${thirtyDaysAgo.toISOString()}&endDate=${today.toISOString()}`);
+          const data = response.data;
+
+          data.forEach(item => {
+            const itemDate = new Date(item.date);
+            if (itemDate.toDateString() === today.toDateString()) {
+              dailyConsumption += item.totalEnergyKwh;
+              dailyCost += item.totalCost;
+            }
+            monthlyConsumption += item.totalEnergyKwh;
+            monthlyCost += item.totalCost;
+          });
         }
+
+        setDailyTotals({
+          totalConsumption: dailyConsumption,
+          totalCost: dailyCost
+        });
+        setMonthlyTotals({
+          totalConsumption: monthlyConsumption,
+          totalCost: monthlyCost
+        });
+
       } catch (error) {
         console.error('Error fetching energy summary:', error);
         setDailyTotals({ totalConsumption: 0, totalCost: 0 });

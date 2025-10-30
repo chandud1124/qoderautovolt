@@ -72,35 +72,58 @@ const EnergyMonitoringDashboard: React.FC = () => {
     }
   };
 
-  // Fetch summary data
-  const fetchSummaryData = async () => {
+  const fetchUnifiedData = async () => {
+    setLoading(true);
     try {
-      const response = await apiService.get('/analytics/energy-summary');
-      setTodayData(response.data.daily);
-      setMonthData(response.data.monthly);
-    } catch (error) {
-      console.error('Error fetching summary:', error);
-    }
-  };
+      const devicesResponse = await apiService.get('/devices');
+      const devices = devicesResponse.data;
 
-  // Fetch chart data based on view mode
-  const fetchChartData = async () => {
-    try {
-      let timeframe = '24h';
-      if (viewMode === 'month') timeframe = '30d';
-      if (viewMode === 'year') timeframe = '90d'; // Changed from 365d to 90d (supported by backend)
+      const today = new Date();
+      const yearAgo = new Date(today.getTime() - 365 * 24 * 60 * 60 * 1000);
+
+      let allData = [];
+
+      for (const device of devices) {
+        if (selectedDevice === 'all' || selectedDevice === device.id) {
+          const response = await apiService.get(`/analytics/unified/daily/${device.id}?startDate=${yearAgo.toISOString()}&endDate=${today.toISOString()}`);
+          allData.push(...response.data);
+        }
+      }
+
+      // Aggregate data for summary cards
+      let dailyConsumption = 0;
+      let dailyCost = 0;
+      let monthlyConsumption = 0;
+      let monthlyCost = 0;
+
+      allData.forEach(item => {
+        const itemDate = new Date(item.date);
+        if (itemDate.toDateString() === today.toDateString()) {
+          dailyConsumption += item.totalEnergyKwh;
+          dailyCost += item.totalCost;
+        }
+        if (itemDate.getMonth() === today.getMonth() && itemDate.getFullYear() === today.getFullYear()) {
+          monthlyConsumption += item.totalEnergyKwh;
+          monthlyCost += item.totalCost;
+        }
+      });
+
+      setTodayData({ consumption: dailyConsumption, cost: dailyCost });
+      setMonthData({ consumption: monthlyConsumption, cost: monthlyCost });
       
-      const response = await apiService.get(`/analytics/energy/${timeframe}`);
-      const formattedData = response.data.map((item: any) => ({
-        timestamp: item.timestamp,
-        consumption: item.totalConsumption || 0,
-        cost: item.totalCostINR || 0,
-        runtime: item.runtime || 0
+      // Format data for charts
+      const formattedData = allData.map(item => ({
+        timestamp: new Date(item.date).toISOString(),
+        consumption: item.totalEnergyKwh,
+        cost: item.totalCost,
+        runtime: 0 // This will need to be calculated if required
       }));
       setChartData(formattedData);
+
     } catch (error) {
-      console.error('Error fetching chart data:', error);
-      setChartData([]);
+      console.error('Error fetching unified data:', error);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -133,21 +156,9 @@ const EnergyMonitoringDashboard: React.FC = () => {
   };
 
   useEffect(() => {
-    const loadData = async () => {
-      setLoading(true);
-      await Promise.all([
-        fetchElectricityPrice(),
-        fetchSummaryData(),
-        fetchChartData(),
-        fetchDevicesAndClassrooms()
-      ]);
-      setLoading(false);
-    };
-    loadData();
-  }, []);
-
-  useEffect(() => {
-    fetchChartData();
+    fetchUnifiedData();
+    fetchDevicesAndClassrooms();
+    fetchElectricityPrice();
   }, [viewMode, selectedDevice, selectedClassroom]);
 
   useEffect(() => {

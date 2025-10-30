@@ -79,8 +79,7 @@ const AnalyticsPanel: React.FC = () => {
 
       // Fetch additional data for enhanced tabs
       await Promise.all([
-        fetchEnergyData(energyTimeframe),
-        fetchEnergySummary(), // NEW: Fetch energy summary
+        fetchUnifiedData(energyTimeframe),
         fetchForecastData('energy', energyTimeframe),
         fetchAnomalyData('7d')
       ]);
@@ -97,57 +96,55 @@ const AnalyticsPanel: React.FC = () => {
     fetchAnalyticsData();
   }, []);
 
-  // Fetch energy data
-  const fetchEnergyData = async (timeframe: string = '24h') => {
+  const fetchUnifiedData = async (timeframe: string = '24h') => {
     try {
-      const response = await apiService.get(`/analytics/energy/${timeframe}`);
-      
-      // Aggregate hourly data based on timeframe for consistency with Energy Monitoring Dashboard
-      let aggregatedData = response.data;
-      
-      if (timeframe === '30d' || timeframe === '7d') {
-        // Aggregate hourly data into daily data
-        const dailyMap = new Map();
-        
-        response.data.forEach((item: any) => {
-          const date = new Date(item.timestamp);
-          const dayKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-          
-          if (!dailyMap.has(dayKey)) {
-            dailyMap.set(dayKey, {
-              timestamp: new Date(date.getFullYear(), date.getMonth(), date.getDate()).toISOString(),
-              totalConsumption: 0,
-              totalCostINR: 0,
-              byClassroom: {},
-              byDeviceType: {}
-            });
-          }
-          
-          const dayData = dailyMap.get(dayKey);
-          dayData.totalConsumption += item.totalConsumption || 0;
-          dayData.totalCostINR += item.totalCostINR || 0;
-        });
-        
-        aggregatedData = Array.from(dailyMap.values()).sort((a, b) => 
-          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-        );
-      }
-      
-      setEnergyData(aggregatedData);
-    } catch (err) {
-      console.error('Error fetching energy data:', err);
-      // Don't set mock data - let the UI show empty state
-      setEnergyData([]);
-    }
-  };
+      const devicesResponse = await apiService.get('/devices');
+      const devices = devicesResponse.data;
 
-  // NEW: Fetch energy summary (monthly and daily consumption)
-  const fetchEnergySummary = async () => {
-    try {
-      const response = await apiService.get('/analytics/energy-summary');
-      setEnergySummary(response.data);
+      const today = new Date();
+      const startDate = new Date(today);
+      if (timeframe === '7d') {
+        startDate.setDate(today.getDate() - 7);
+      } else if (timeframe === '30d') {
+        startDate.setMonth(today.getMonth() - 1);
+      } else {
+        startDate.setDate(today.getDate() - 1);
+      }
+
+      let allData = [];
+
+      for (const device of devices) {
+        if (selectedDevices.length === 0 || selectedDevices.includes(device.id)) {
+           if (selectedClassrooms.length === 0 || selectedClassrooms.includes(device.classroom)) {
+              const response = await apiService.get(`/analytics/unified/daily/${device.id}?startDate=${startDate.toISOString()}&endDate=${today.toISOString()}`);
+              allData.push(...response.data);
+           }
+        }
+      }
+
+      setEnergyData(allData);
+
+      let dailyConsumption = 0;
+      let monthlyConsumption = 0;
+
+      allData.forEach(item => {
+        const itemDate = new Date(item.date);
+        if (itemDate.toDateString() === today.toDateString()) {
+          dailyConsumption += item.totalEnergyKwh;
+        }
+        if (itemDate.getMonth() === today.getMonth() && itemDate.getFullYear() === today.getFullYear()) {
+          monthlyConsumption += item.totalEnergyKwh;
+        }
+      });
+
+      setEnergySummary({
+        daily: { consumption: dailyConsumption },
+        monthly: { consumption: monthlyConsumption }
+      });
+
     } catch (err) {
-      console.error('Error fetching energy summary:', err);
+      console.error('Error fetching unified energy data:', err);
+      setEnergyData([]);
       setEnergySummary(null);
     }
   };
